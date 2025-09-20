@@ -1,0 +1,20 @@
+{
+  "name": "ai-parlay-virtuoso",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@sentry/node": "^10.12.0",
+    "@supabase/supabase-js": "^2.57.4",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.2",
+    "express": "^5.1.0",
+    "node-telegram-bot-api": "^0.63.0"
+  }
+}
