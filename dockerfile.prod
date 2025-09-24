@@ -1,0 +1,59 @@
+# Dockerfile.prod - PRODUCTION DOCKERFILE WITH MULTI-STAGE BUILD
+FROM node:18-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    git
+
+# Create app directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+COPY .npmrc ./
+
+# Install dependencies
+RUN npm ci --only=production && npm cache clean --force
+
+# Copy source code
+COPY . .
+
+# Build the application
+RUN npm run build
+
+# Production stage
+FROM node:18-alpine AS production
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    curl \
+    tzdata
+
+# Create non-root user
+RUN addgroup -g 1001 -S nodejs
+RUN adduser -S parlay-bot -u 1001
+
+# Set timezone
+ENV TZ=America/New_York
+
+# Create app directory
+WORKDIR /app
+
+# Copy built application from builder stage
+COPY --from=builder --chown=parlay-bot:nodejs /app .
+
+# Switch to non-root user
+USER parlay-bot
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:3000/health/liveness || exit 1
+
+# Expose port
+EXPOSE 3000
+
+# Start the application
+CMD ["npm", "start"]
