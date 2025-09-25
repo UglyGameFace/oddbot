@@ -1,4 +1,4 @@
-// src/bot.js - Final, Stable, and Complete Version
+// src/bot.js - Final, Stable, and Complete Version (Fixed: Removed Missing Handlers Import)
 
 import TelegramBot from 'node-telegram-bot-api';
 import express from 'express';
@@ -10,7 +10,6 @@ import AIService from './services/aiService.js';
 import OddsService from './services/oddsService.js';
 import redis from './services/redisService.js';
 import HealthService from './services/healthService.js';
-import { initializeHandlers } from './handlers/index.js';
 
 const httpsAgent = new https.Agent({
   keepAlive: true,
@@ -96,8 +95,6 @@ class UltimateParlayBot {
       this.initializeBot();
       this.setupCommandHandlers();
       this.setupErrorHandling();
-
-      initializeHandlers(this.bot, this.services);
 
       this.setupGracefulShutdown();
 
