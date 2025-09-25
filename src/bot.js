@@ -1,4 +1,4 @@
-// src/bot.js - Fixed with Webhooks to Resolve Polling Conflict (No More 409 Errors)
+// src/bot.js – Full Working Script for Telegram Webhooks on Railway
 
 import TelegramBot from 'node-telegram-bot-api';
 import express from 'express';
@@ -11,15 +11,11 @@ import OddsService from './services/oddsService.js';
 import redis from './services/redisService.js';
 import HealthService from './services/healthService.js';
 
-const httpsAgent = new https.Agent({
-  keepAlive: true,
-  maxSockets: 100
-});
-
-// Single global Express app
+// Make the global Express app and ensure JSON parsing is enabled
 const app = express();
+app.use(express.json()); // REQUIRED FOR TELEGRAM WEBHOOKS!
 
-// Add health endpoints to the global app
+// Example health endpoints (leave these as is if already working)
 app.get('/health/liveness', (_req, res) => res.status(200).json({ status: 'alive' }));
 app.get('/health/readiness', async (_req, res) => {
   try {
@@ -43,20 +39,30 @@ class UltimateParlayBot {
   }
 
   initializeServer() {
-    // Return the existing global app (no new app or listen here)
+    // Just return the global app
     return app;
   }
 
   initializeBot() {
-    this.bot = new TelegramBot(env.TELEGRAM_BOT_TOKEN, { webhook: true });
+    this.bot = new TelegramBot(env.TELEGRAM_BOT_TOKEN, { webhook: true, request: { agent: new https.Agent({ keepAlive: true, maxSockets: 100 }) } });
 
-    // Set webhook URL (use your app's public URL, e.g., from Railway)
+    // Set the Telegram webhook to your public Railway app URL
     this.bot.setWebHook(`${env.APP_URL}/bot${env.TELEGRAM_BOT_TOKEN}`);
 
-    // Handle incoming webhook updates via Express
+    // Correct and safe webhook route handler
     app.post(`/bot${env.TELEGRAM_BOT_TOKEN}`, (req, res) => {
-      this.bot.processUpdate(req.body);
-      res.sendStatus(200);
+      if (!req.body || Object.keys(req.body).length === 0) {
+        // Prevent crashing on empty payload
+        return res.status(400).send('Bad Request: empty body');
+      }
+      try {
+        this.bot.processUpdate(req.body); // Pass the parsed JSON to telegram-bot-api
+        res.sendStatus(200);
+      } catch (err) {
+        console.error('Webhook Handling Error:', err.message);
+        sentryService.captureError(err, { component: 'telegram_webhook' });
+        res.sendStatus(500);
+      }
     });
 
     this.bot.on('webhook_error', (error) => {
@@ -86,22 +92,15 @@ class UltimateParlayBot {
   async start() {
     try {
       console.log('Starting Ultimate Parlay Bot...');
-
       this.initializeCoreServices();
       const serverApp = this.initializeServer();
-
       this.services.healthService = new HealthService(serverApp);
       this.services.healthService.initializeHealthCheckEndpoints();
-
       this.initializeBot();
       this.setupCommandHandlers();
       this.setupErrorHandling();
-
       this.setupGracefulShutdown();
-
       console.log('Bot is now running and connected to Telegram.');
-
-      // Single listen call at the end
       this.server = app.listen(env.PORT, env.HOST || '0.0.0.0', () => {
         console.log('Server is live on port ' + env.PORT);
       });
