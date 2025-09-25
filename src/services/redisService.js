@@ -9,26 +9,22 @@ let isConnecting = false;
 const connectToRedis = () => {
   if (redis || isConnecting) return;
   isConnecting = true;
-
   try {
     const client = new Redis(env.REDIS_URL, {
       maxRetriesPerRequest: 3,
       connectTimeout: 10000,
-      lazyConnect: true, // Important for graceful handling
+      lazyConnect: true, // Graceful reconnects
     });
-
     client.on('connect', () => console.log('✅ Redis client connected.'));
     client.on('ready', () => console.log(' Redis client ready.'));
-    client.on('error', (err) => {
+    client.on('error', err => {
       console.error('❌ Redis client error:', err.message);
       sentryService.captureError(err, { component: 'redis_service' });
     });
     client.on('close', () => console.warn(' Redis connection closed.'));
     client.on('reconnecting', () => console.log(' Redis client reconnecting...'));
-    
     redis = client;
     isConnecting = false;
-    
   } catch (error) {
     console.error('❌ Failed to initialize Redis client.', { error: error.message });
     isConnecting = false;
@@ -38,5 +34,4 @@ const connectToRedis = () => {
 // Initial connection attempt
 connectToRedis();
 
-// Export the client instance directly for use in other services
 export default redis;
