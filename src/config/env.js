@@ -1,4 +1,5 @@
-// src/config/env.js - ENTERPRISE ENVIRONMENT MANAGEMENT WITH SENTRY INTEGRATION
+// src/config/env.js - ENTERPRISE ENVIRONMENT MANAGEMENT WITH SENTRY INTEGRATION (Updated with APP_URL Validation)
+
 import dotenv from 'dotenv';
 import { cleanEnv, str, num, url, bool, json } from 'envalid';
 import * as Sentry from '@sentry/node';
@@ -49,6 +50,7 @@ const env = cleanEnv(process.env, {
   MAX_EVENT_LOOP_DELAY: num({ default: 1000 }),
   LOG_LEVEL: str({ choices: ['error', 'warn', 'info', 'debug', 'trace'], default: 'info' }),
   TIMEZONE: str({ default: 'America/New_York' }),
+  APP_URL: url({ desc: 'Public URL of the deployed app (required for webhooks)' })  // Added this line
 }, {
   strict: true,
   dotEnvPath: '.env',
