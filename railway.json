@@ -1,0 +1,34 @@
+{
+  "//": "railway.json - ENTERPRISE DEPLOYMENT CONFIGURATION FOR RAILWAY",
+  "build": {
+    "builder": "nixpacks",
+    "buildCommand": "npm install && npm run build"
+  },
+  "deploy": {
+    "startCommand": "npm start",
+    "healthcheckPath": "/health/readiness",
+    "healthcheckTimeout": 300,
+    "restartPolicy": {
+      "type": "on-failure",
+      "maximumRetryCount": 3
+    }
+  },
+  "environment": {
+    "NODE_ENV": "production",
+    "LOG_LEVEL": "info"
+  },
+  "checks": {
+    "liveness": {
+      "path": "/health/liveness",
+      "interval": 30,
+      "timeout": 10,
+      "initialDelay": 15
+    },
+    "readiness": {
+      "path": "/health/readiness",
+      "interval": 30,
+      "timeout": 10,
+      "initialDelay": 30
+    }
+  }
+}
