@@ -1,4 +1,5 @@
 // src/services/aiService.js - PROVEN AI INTEGRATION FOR ALL SPORTS
+
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import axios from 'axios';
 import env from '../config/env.js';
@@ -7,13 +8,12 @@ import sentryService from './sentryService.js';
 class ProvenAIService {
   constructor() {
     this.gemini = new GoogleGenerativeAI(env.GOOGLE_GEMINI_API_KEY);
-    this.geminiModel = this.gemini.getGenerativeModel({ 
+    this.geminiModel = this.gemini.getGenerativeModel({
       model: 'gemini-2.5-flash',
     });
-    console.log('✅ Proven AI Service Initialized (Gemini + Perplexity).');
+    console.log('✅ Proven AI Service Initialized (Gemini 2.5 + Perplexity Sonar-Pro).');
   }
-  
-  // --- NEW FUNCTION for AI-Driven Correlation ---
+
   /**
    * Uses AI to determine a narrative or contextual correlation between two games.
    * @param {object} gameA - The first game object.
@@ -35,7 +35,6 @@ class ProvenAIService {
         "reasoning": "A brief, expert justification for your score."
       }
     `;
-    
     try {
       const result = await this.geminiModel.generateContent(prompt);
       const responseText = result.response.text();
@@ -43,30 +42,9 @@ class ProvenAIService {
       if (!jsonMatch) return { correlation: 0, reasoning: "AI failed to produce valid JSON." };
       return JSON.parse(jsonMatch[0]);
     } catch (error) {
-        sentryService.captureError(error, { component: 'ai_correlation' });
-        console.error('AI correlation analysis failed:', error.message);
-        return { correlation: 0, reasoning: "AI service request failed." };
-    }
-  }
-
-  async generateParlayAnalysis(userContext, gamesData, strategy = 'balanced') {
-    const prompt = this.buildComprehensiveParlayPrompt(userContext, gamesData, strategy);
-    try {
-      let analysisText;
-      try {
-        console.log('Attempting to generate analysis with Gemini...');
-        const result = await this.geminiModel.generateContent(prompt);
-        analysisText = result.response.text();
-      } catch (geminiError) {
-        console.warn(`Gemini generation failed: ${geminiError.message}. Falling back to Perplexity.`);
-        sentryService.captureError(geminiError, { component: 'ai_service', model: 'gemini', fallback: true });
-        analysisText = await this.generateWithPerplexity(prompt);
-      }
-      return this.parseAIResponse(analysisText);
-    } catch (error) {
-      sentryService.captureError(error, { component: 'ai_service' });
-      console.error('FATAL: All AI providers failed.');
-      throw new Error('AI analysis is currently unavailable.');
+      sentryService.captureError(error, { component: 'ai_correlation' });
+      console.error('AI correlation analysis failed:', error.message);
+      return { correlation: 0, reasoning: "AI service request failed." };
     }
   }
 
@@ -87,7 +65,7 @@ class ProvenAIService {
     );
     return response.data.choices[0].message.content;
   }
-  
+
   parseAIResponse(responseText) {
     try {
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);
@@ -100,7 +78,7 @@ class ProvenAIService {
   }
 
   buildComprehensiveParlayPrompt(userContext, gamesData, strategy) {
-    const gameInfo = gamesData.slice(0, 25).map(g => `${g.sport_title}: ${g.home_team} vs ${g.away_team}`).join('; ');
+    const gameInfo = gamesData.slice(0, 25).map(g => `${g.sport_title}: ${g.home_team} vs ${g.away_team} (${g.commence_time})`).join('; ');
     return `
       Analyze the provided games and construct a 3-leg parlay based on the user's profile and the specified strategy.
 
@@ -119,8 +97,8 @@ class ProvenAIService {
       {
         "parlay": {
           "legs": [
-            { "sport": "NFL", "teams": "Team A vs Team B", "selection": "Team A -3.5", "odds": -110, "reasoning": "Brief justification." },
-            { "sport": "NBA", "teams": "Team C vs Team D", "selection": "Over 220.5", "odds": -110, "reasoning": "Brief justification." }
+            { "sport": "NFL", "teams": "Team A vs Team B", "selection": "Team A -3.5", "odds": -110, "commence_time": "2023-09-28T19:00:00Z", "reasoning": "Brief justification." },
+            { "sport": "NBA", "teams": "Team C vs Team D", "selection": "Over 220.5", "odds": -110, "commence_time": "2023-09-28T21:00:00Z", "reasoning": "Brief justification." }
           ],
           "total_odds": 264,
           "risk_assessment": "Medium"
@@ -131,6 +109,27 @@ class ProvenAIService {
         }
       }
     `;
+  }
+
+  async generateParlayAnalysis(userContext, gamesData, strategy = 'balanced') {
+    const prompt = this.buildComprehensiveParlayPrompt(userContext, gamesData, strategy);
+    try {
+      let analysisText;
+      try {
+        console.log('Attempting to generate analysis with Gemini...');
+        const result = await this.geminiModel.generateContent(prompt);
+        analysisText = result.response.text();
+      } catch (geminiError) {
+        console.warn(`Gemini generation failed: ${geminiError.message}. Falling back to Perplexity.`);
+        sentryService.captureError(geminiError, { component: 'ai_service', model: 'gemini-2.5-flash', fallback: true });
+        analysisText = await this.generateWithPerplexity(prompt);
+      }
+      return this.parseAIResponse(analysisText);
+    } catch (error) {
+      sentryService.captureError(error, { component: 'ai_service' });
+      console.error('FATAL: All AI providers failed.');
+      throw new Error('AI analysis is currently unavailable.');
+    }
   }
 }
 
