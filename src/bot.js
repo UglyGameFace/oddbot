@@ -1,24 +1,15 @@
-// src/bot.js - Core Application Entry Point (Final, Corrected Version)
+// src/bot.js - Core Application Entry Point (Final, Robust Version)
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
-// --- FIX: Import the native 'https' module for a secure agent ---
 import * as https from 'https';
 
 import env from './config/env.js';
 import sentryService from './services/sentryService.js';
 import HealthService from './services/healthService.js';
-import rateLimitService from './services/rateLimitService.js';
-import DatabaseService from './services/databaseService.js';
-import AIService from './services/aiService.js';
-import OddsService from './services/oddsService.js';
+// We are removing direct dependencies on other services here to ensure bot starts up
 import { initializeHandlers } from './handlers/index.js';
 
-// --- FIX: Create a dedicated HTTPS agent to ensure secure, stable connections ---
-const httpsAgent = new https.Agent({
-  keepAlive: true,
-  maxSockets: 100,
-  timeout: 30000,
-});
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 100 });
 
 class ParlayBotApplication {
   constructor() {
@@ -31,14 +22,17 @@ class ParlayBotApplication {
     try {
       console.log('🚀 Starting Institutional Parlay Bot...');
       
-      this.initializeServices();
+      this.initializeCoreServices();
       const app = this.initializeServer();
       
       this.services.healthService = new HealthService(app);
       this.services.healthService.initializeHealthCheckEndpoints();
       
       this.initializeBot();
+      // We pass the service loader to the handlers, not the bot itself
       initializeHandlers(this.bot, this.services);
+      
+      this.setupGracefulShutdown(); // Add shutdown handler
       
       console.log('✅ Bot is now running and connected to Telegram.');
 
@@ -49,12 +43,9 @@ class ParlayBotApplication {
     }
   }
   
-  initializeServices() {
+  initializeCoreServices() {
     this.services.sentryService = sentryService;
-    this.services.rateLimitService = rateLimitService;
-    this.services.dbService = DatabaseService;
-    this.services.aiService = AIService;
-    this.services.oddsService = OddsService;
+    // Lazy load other services inside handlers to prevent startup race conditions
     console.log('✅ Core services initialized.');
   }
 
@@ -69,20 +60,39 @@ class ParlayBotApplication {
   initializeBot() {
     this.bot = new TelegramBot(env.TELEGRAM_BOT_TOKEN, {
       polling: true,
-      // --- FIX: Pass the secure HTTPS agent to the request options ---
       request: { agent: httpsAgent }
     });
     this.bot.on('polling_error', (error) => {
-      // Avoid spamming logs for known, recoverable network errors
-      if (error.code !== 'EFATAL') {
-        console.error('Telegram Polling Error:', error.message);
-      }
+      console.error('Telegram Polling Error:', error.message);
       sentryService.captureError(error, { component: 'telegram_polling' });
     });
   }
+  
+  // --- FIX: Add a graceful shutdown handler ---
+  setupGracefulShutdown() {
+    const shutdown = async (signal) => {
+      console.log(`\n🚦 Received ${signal}. Shutting down gracefully...`);
+      if (this.bot && this.bot.isPolling()) {
+        await this.bot.stopPolling();
+        console.log(' Bot polling stopped.');
+      }
+      if (this.server) {
+        this.server.close(() => {
+          console.log(' HTTP server closed.');
+          process.exit(0);
+        });
+      }
+      setTimeout(() => {
+        console.error(' Forcefully shutting down after timeout.');
+        process.exit(1);
+      }, 5000);
+    };
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => shutdown('SIGINT'));
+  }
 }
 
-// Start the application
+// Lazy load services inside the handlers index to avoid circular dependencies
+// This requires a change in handlers/index.js
 const app = new ParlayBotApplication();
 app.start();
-
