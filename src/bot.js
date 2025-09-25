@@ -1,4 +1,4 @@
-// src/bot.js - Final, Stable, and Complete Version (Fixed: Removed Missing Handlers Import)
+// src/bot.js - Fixed Port Conflict (Single Express Server)
 
 import TelegramBot from 'node-telegram-bot-api';
 import express from 'express';
@@ -16,7 +16,10 @@ const httpsAgent = new https.Agent({
   maxSockets: 100
 });
 
+// Single global Express app
 const app = express();
+
+// Add health endpoints to the global app
 app.get('/health/liveness', (_req, res) => res.status(200).json({ status: 'alive' }));
 app.get('/health/readiness', async (_req, res) => {
   try {
@@ -28,7 +31,6 @@ app.get('/health/readiness', async (_req, res) => {
     res.status(503).json({ status: 'not_ready', error: error.message });
   }
 });
-app.listen(env.PORT, () => console.log('Health endpoints live on port ' + env.PORT));
 
 class UltimateParlayBot {
   constructor() {
@@ -41,10 +43,7 @@ class UltimateParlayBot {
   }
 
   initializeServer() {
-    const app = express();
-    this.server = app.listen(env.PORT, env.HOST, () => {
-      console.log('Server is live at http://' + env.HOST + ':' + env.PORT);
-    });
+    // Return the existing global app (no new app or listen here)
     return app;
   }
 
@@ -99,6 +98,11 @@ class UltimateParlayBot {
       this.setupGracefulShutdown();
 
       console.log('Bot is now running and connected to Telegram.');
+
+      // Single listen call at the end
+      this.server = app.listen(env.PORT, env.HOST || '0.0.0.0', () => {
+        console.log('Server is live on port ' + env.PORT);
+      });
     } catch (error) {
       console.error('Failed to start the application.', error);
       sentryService.captureError(error, { component: 'application_startup' });
