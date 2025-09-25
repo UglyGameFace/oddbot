@@ -1,10 +1,17 @@
+<<<<<<< HEAD
 // src/bot.js - Final, Stable, and Complete Version
 import TelegramBot from 'node-telegram-bot-api';
 import express from 'express';
+=======
+// src/bot.js - Core Application Entry Point (Final, Robust Version)
+import express from 'express';
+import TelegramBot from 'node-telegram-bot-api';
+>>>>>>> 2b5cac90c34e2386d8fda21964d40901acbf9f3b
 import * as https from 'https';
 
 import env from './config/env.js';
 import sentryService from './services/sentryService.js';
+<<<<<<< HEAD
 import DatabaseService from './services/databaseService.js';
 import AIService from './services/aiService.js';
 import OddsService from './services/oddsService.js';
@@ -15,6 +22,13 @@ const httpsAgent = new https.Agent({
   keepAlive: true,
   maxSockets: 100,
 });
+=======
+import HealthService from './services/healthService.js';
+// We are removing direct dependencies on other services here to ensure bot starts up
+import { initializeHandlers } from './handlers/index.js';
+
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 100 });
+>>>>>>> 2b5cac90c34e2386d8fda21964d40901acbf9f3b
 
 // --- STABILITY FIX: Express App for Health Checks ---
 const app = express();
@@ -48,6 +62,7 @@ class UltimateParlayBot {
     this.setupCommandHandlers();
   }
 
+<<<<<<< HEAD
   setupErrorHandling() {
     this.bot.on('polling_error', (error) => {
         console.error('POLLING ERROR:', error.message);
@@ -56,6 +71,29 @@ class UltimateParlayBot {
     process.on('uncaughtException', (error) => {
       console.error('UNCAUGHT EXCEPTION:', error);
       sentryService.captureError(error);
+=======
+  async start() {
+    try {
+      console.log('🚀 Starting Institutional Parlay Bot...');
+      
+      this.initializeCoreServices();
+      const app = this.initializeServer();
+      
+      this.services.healthService = new HealthService(app);
+      this.services.healthService.initializeHealthCheckEndpoints();
+      
+      this.initializeBot();
+      // We pass the service loader to the handlers, not the bot itself
+      initializeHandlers(this.bot, this.services);
+      
+      this.setupGracefulShutdown(); // Add shutdown handler
+      
+      console.log('✅ Bot is now running and connected to Telegram.');
+
+    } catch (error) {
+      console.error('❌ CRITICAL: Failed to start the application.', error);
+      sentryService.captureError(error, { component: 'application_startup' });
+>>>>>>> 2b5cac90c34e2386d8fda21964d40901acbf9f3b
       process.exit(1);
     });
   }
@@ -105,6 +143,7 @@ class UltimateParlayBot {
     }
   }
   
+<<<<<<< HEAD
   formatParlayMessage(analysis) {
     if (!analysis || !analysis.parlay || !analysis.parlay.legs) {
         throw new Error('AI returned an invalid analysis format.');
@@ -122,9 +161,58 @@ class UltimateParlayBot {
   sendErrorMessage(chatId, context, error) {
       console.error(`ERROR [${context}]:`, error.message);
       sentryService.captureError(error, { extra: { context, chatId } });
+=======
+  initializeCoreServices() {
+    this.services.sentryService = sentryService;
+    // Lazy load other services inside handlers to prevent startup race conditions
+    console.log('✅ Core services initialized.');
+  }
+
+  initializeServer() {
+    const app = express();
+    this.server = app.listen(env.PORT, env.HOST, () => {
+      console.log(`🌐 Server is live at http://${env.HOST}:${env.PORT}`);
+    });
+    return app;
+  }
+
+  initializeBot() {
+    this.bot = new TelegramBot(env.TELEGRAM_BOT_TOKEN, {
+      polling: true,
+      request: { agent: httpsAgent }
+    });
+    this.bot.on('polling_error', (error) => {
+      console.error('Telegram Polling Error:', error.message);
+      sentryService.captureError(error, { component: 'telegram_polling' });
+    });
+>>>>>>> 2b5cac90c34e2386d8fda21964d40901acbf9f3b
+  }
+  
+  // --- FIX: Add a graceful shutdown handler ---
+  setupGracefulShutdown() {
+    const shutdown = async (signal) => {
+      console.log(`\n🚦 Received ${signal}. Shutting down gracefully...`);
+      if (this.bot && this.bot.isPolling()) {
+        await this.bot.stopPolling();
+        console.log(' Bot polling stopped.');
+      }
+      if (this.server) {
+        this.server.close(() => {
+          console.log(' HTTP server closed.');
+          process.exit(0);
+        });
+      }
+      setTimeout(() => {
+        console.error(' Forcefully shutting down after timeout.');
+        process.exit(1);
+      }, 5000);
+    };
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => shutdown('SIGINT'));
   }
 }
 
+<<<<<<< HEAD
 // --- STABILITY FIX: Graceful shutdown to prevent 409 Conflict error ---
 const shutdown = (signal) => {
     console.log(`\n🚦 Received ${signal}. Shutting down...`);
@@ -152,3 +240,9 @@ try {
     sentryService.captureError(error, { component: 'bot_initialization' });
     process.exit(1);
 }
+=======
+// Lazy load services inside the handlers index to avoid circular dependencies
+// This requires a change in handlers/index.js
+const app = new ParlayBotApplication();
+app.start();
+>>>>>>> 2b5cac90c34e2386d8fda21964d40901acbf9f3b
