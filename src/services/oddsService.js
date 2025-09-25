@@ -79,7 +79,7 @@ class ProvenOddsService {
               bookmakers: g.bookmakers
             }));
             // Cache and return on successful fetch
-            await redis.set(cacheKey, JSON.stringify(games), 300);
+            await redis.set(cacheKey, JSON.stringify(games), 'EX', 300); // 300 seconds expiry
             return games;
           }
         } else if (provider.name === 'sportradar') {
