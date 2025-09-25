@@ -1,4 +1,4 @@
-// src/bot.js - Fixed Port Conflict (Single Express Server)
+// src/bot.js - Fixed with Webhooks to Resolve Polling Conflict (No More 409 Errors)
 
 import TelegramBot from 'node-telegram-bot-api';
 import express from 'express';
@@ -48,18 +48,20 @@ class UltimateParlayBot {
   }
 
   initializeBot() {
-    this.bot = new TelegramBot(env.TELEGRAM_BOT_TOKEN, {
-      polling: {
-        interval: 300,
-        autoStart: true,
-        params: { timeout: 10 }
-      },
-      request: { agent: httpsAgent }
+    this.bot = new TelegramBot(env.TELEGRAM_BOT_TOKEN, { webhook: true });
+
+    // Set webhook URL (use your app's public URL, e.g., from Railway)
+    this.bot.setWebHook(`${env.APP_URL}/bot${env.TELEGRAM_BOT_TOKEN}`);
+
+    // Handle incoming webhook updates via Express
+    app.post(`/bot${env.TELEGRAM_BOT_TOKEN}`, (req, res) => {
+      this.bot.processUpdate(req.body);
+      res.sendStatus(200);
     });
 
-    this.bot.on('polling_error', (error) => {
-      console.error('Telegram Polling Error:', error.message);
-      sentryService.captureError(error, { component: 'telegram_polling' });
+    this.bot.on('webhook_error', (error) => {
+      console.error('Webhook Error:', error.message);
+      sentryService.captureError(error, { component: 'telegram_webhook' });
     });
   }
 
@@ -171,9 +173,9 @@ class UltimateParlayBot {
   setupGracefulShutdown() {
     const shutdown = async (signal) => {
       console.log('\nReceived ' + signal + '. Shutting down gracefully...');
-      if (this.bot && this.bot.isPolling()) {
-        await this.bot.stopPolling();
-        console.log('Bot polling stopped.');
+      if (this.bot) {
+        await this.bot.deleteWebHook();  // Clean up webhook on shutdown
+        console.log('Webhook removed.');
       }
       if (this.server) {
         this.server.close(() => {
