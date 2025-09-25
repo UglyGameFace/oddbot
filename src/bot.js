@@ -1,7 +1,8 @@
-// src/bot.js - Core Application Entry Point (Corrected)
+// src/bot.js - Core Application Entry Point (Final, Corrected Version)
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
-import * as http from 'http';
+// --- FIX: Import the native 'https' module for a secure agent ---
+import * as https from 'https';
 
 import env from './config/env.js';
 import sentryService from './services/sentryService.js';
@@ -12,7 +13,12 @@ import AIService from './services/aiService.js';
 import OddsService from './services/oddsService.js';
 import { initializeHandlers } from './handlers/index.js';
 
-const agent = new http.Agent({ keepAlive: true, maxSockets: 50, timeout: 30000 });
+// --- FIX: Create a dedicated HTTPS agent to ensure secure, stable connections ---
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 100,
+  timeout: 30000,
+});
 
 class ParlayBotApplication {
   constructor() {
@@ -26,9 +32,8 @@ class ParlayBotApplication {
       console.log('🚀 Starting Institutional Parlay Bot...');
       
       this.initializeServices();
-      const app = this.initializeServer(); // This now returns the express app
+      const app = this.initializeServer();
       
-      // --- FIX: Initialize HealthService AFTER the server is ready ---
       this.services.healthService = new HealthService(app);
       this.services.healthService.initializeHealthCheckEndpoints();
       
@@ -58,20 +63,26 @@ class ParlayBotApplication {
     this.server = app.listen(env.PORT, env.HOST, () => {
       console.log(`🌐 Server is live at http://${env.HOST}:${env.PORT}`);
     });
-    return app; // Return the app instance
+    return app;
   }
 
   initializeBot() {
     this.bot = new TelegramBot(env.TELEGRAM_BOT_TOKEN, {
       polling: true,
-      request: { agent }
+      // --- FIX: Pass the secure HTTPS agent to the request options ---
+      request: { agent: httpsAgent }
     });
     this.bot.on('polling_error', (error) => {
-      console.error('Telegram Polling Error:', error.message);
+      // Avoid spamming logs for known, recoverable network errors
+      if (error.code !== 'EFATAL') {
+        console.error('Telegram Polling Error:', error.message);
+      }
       sentryService.captureError(error, { component: 'telegram_polling' });
     });
   }
 }
 
+// Start the application
 const app = new ParlayBotApplication();
 app.start();
+
