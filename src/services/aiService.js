@@ -8,7 +8,7 @@ class ProvenAIService {
   constructor() {
     this.gemini = new GoogleGenerativeAI(env.GOOGLE_GEMINI_API_KEY);
     this.geminiModel = this.gemini.getGenerativeModel({ 
-      model: 'gemini-1.5-flash-latest',
+      model: 'gemini-2.5-flash',
     });
     console.log('✅ Proven AI Service Initialized (Gemini + Perplexity).');
   }
@@ -74,7 +74,7 @@ class ProvenAIService {
     const response = await axios.post(
       'https://api.perplexity.ai/chat/completions',
       {
-        model: 'llama-3-sonar-large-32k-online',
+        model: 'sonar-pro',
         messages: [
           { role: 'system', content: 'You are an expert sports betting analyst. Your response must be only a single, valid JSON object.' },
           { role: 'user', content: prompt },
