@@ -1,14 +1,8 @@
 // src/bot/handlers/ai.js
 import env from '../../config/env.js';
 import AIService from '../../services/aiService.js';
-import {
-  getAIConfig, setAIConfig,
-  getBuilderConfig,
-} from '../state.js';
-import {
-  getAvailableSportsCached,
-  getGamesForSportCached,
-} from '../../services/oddsService.js';
+import { getAIConfig, setAIConfig, getBuilderConfig } from '../state.js';
+import { getAvailableSportsCached, getGamesForSportCached } from '../../services/oddsCacheAdapters.js';
 
 const tz = env.TIMEZONE || 'America/New_York';
 const formatGameTimeTZ = (iso) => new Date(iso).toLocaleString('en-US', {
@@ -34,15 +28,13 @@ function applyFilters(games, { cutoffHours, excludedTeams }) {
 }
 
 export function registerAI(bot) {
-  bot.onText(/\/parlay/, async (msg) => {
-    return sendAIConfigurationMenu(bot, msg.chat.id);
-  });
+  bot.onText(/\/parlay/, async (msg) => sendAIConfigurationMenu(bot, msg.chat.id));
 }
 
 export function registerAICallbacks(bot) {
   bot.on('callback_query', async (cbq) => {
-    const { data, message } = cbq;
-    if (!data) return;
+    const { data, message } = cbq || {};
+    if (!data || !message) return;
     const chatId = message.chat.id;
 
     try { await bot.answerCallbackQuery(cbq.id); } catch {}
@@ -125,21 +117,6 @@ async function sendAISportsMenu(bot, chatId, messageId) {
   }
   rows.push([{ text: 'All Sports', callback_data: 'cfgsp_all' }]);
   rows.push([{ text: '« Back', callback_data: 'cfg_main' }]);
-
-  // Inline listener for sport toggles lives here to avoid cross-module tokening
-  bot.once('callback_query', async (cbq) => {
-    if (!cbq.data?.startsWith('cfgsp_toggle_')) return;
-    try { await bot.answerCallbackQuery(cbq.id); } catch {}
-    const sportKey = cbq.data.replace('cfgsp_toggle_', '');
-    const cfg2 = await getAIConfig(chatId);
-    const set = new Set(cfg2.sports || []);
-    if (set.has(sportKey)) set.delete(sportKey);
-    else set.add(sportKey);
-    cfg2.sports = Array.from(set);
-    await setAIConfig(chatId, cfg2);
-    return sendAISportsMenu(bot, chatId, messageId);
-  });
-
   await bot.editMessageText('*Select sports (toggle):*', { parse_mode: 'Markdown', chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: rows } });
 }
 
@@ -147,13 +124,14 @@ const AI_BUILD_MIN_INTERVAL_MS = 60000;
 
 async function handleAIBuild(bot, chatId, cfg, messageId) {
   const limKey = `rl:ai:${chatId}`;
-  const last = Number(await (await import('../../services/redisService.js')).default.get(limKey));
+  const { default: r } = await import('../../services/redisService.js');
+  const last = Number(await r.get(limKey));
   const now = Date.now();
   if (last && now - last < AI_BUILD_MIN_INTERVAL_MS) {
     await bot.sendMessage(chatId, '⏳ Please wait before requesting another AI build.');
     return;
   }
-  (await import('../../services/redisService.js')).then(({ default: r }) => r.set(limKey, now, 'EX', Math.ceil(AI_BUILD_MIN_INTERVAL_MS / 1000)));
+  await r.set(limKey, now, 'EX', Math.ceil(AI_BUILD_MIN_INTERVAL_MS / 1000));
 
   try {
     await bot.editMessageText('🤖 Accessing current market data and running deep quantitative analysis...', { chat_id: chatId, message_id: messageId, reply_markup: null });
@@ -162,7 +140,6 @@ async function handleAIBuild(bot, chatId, cfg, messageId) {
   try {
     const allSports = await getAvailableSportsCached();
     const sportKeys = cfg.sports?.length ? cfg.sports : allSports.map((s) => s.sport_key);
-
     const perSport = await Promise.all(sportKeys.map((k) => getGamesForSportCached(k)));
     let pooled = perSport.flat();
 
@@ -182,7 +159,6 @@ async function handleAIBuild(bot, chatId, cfg, messageId) {
     const totAm = Math.round(toAmericanFromDecimal(totDec));
     parlay.total_odds = totAm;
 
-    // Group by game; time once per game
     const byGame = {};
     parlay.legs.forEach((leg) => {
       if (!byGame[leg.game]) byGame[leg.game] = { legs: [], commence_time: leg.commence_time, sport: leg.sport };
