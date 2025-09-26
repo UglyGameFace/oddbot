@@ -1,39 +1,68 @@
 // src/bot/main.js
-import { bot, initWebhook, startServer } from './setup.js';
-import { registerRouter } from './router.js';
-import { registerAI } from './handlers/ai.js';
-import { registerCustom } from './handlers/custom.js';
-import { registerPlayer } from './handlers/player.js';
-import { registerQuant } from './handlers/quant.js';
-import { registerTools } from './handlers/tools.js';
-import { registerSettings } from './handlers/settings.js';
-import { registerSystem } from './handlers/system.js';
-import redis from '../services/redisService.js';
+// Registers all handlers, tolerating optional/missing modules without crashing.
 
-// System/meta commands
-registerSystem(bot);
+export async function wireUp(bot) {
+  const tryImport = async (path) => {
+    try { return await import(path); } catch { return null; }
+  };
 
-// Attach feature handlers
-registerAI(bot);
-registerCustom(bot);
-registerPlayer(bot);
-registerQuant(bot);
-registerTools(bot);
-registerSettings(bot);
+  const mods = await Promise.all([
+    tryImport('./handlers/system.js'),
+    tryImport('./handlers/settings.js'),
+    tryImport('./handlers/custom.js'),
+    tryImport('./handlers/tools.js'),
+    tryImport('./handlers/ai.js'),
+    tryImport('./handlers/quant.js'),
+    tryImport('./handlers/player.js'),
+  ]);
 
-// Central callback router
-registerRouter(bot);
+  // Register command handlers (presence-checked)
+  const [
+    system,
+    settings,
+    custom,
+    tools,
+    ai,
+    quant,
+    player,
+  ] = mods;
 
-// Boot webhook/polling + HTTP server
-export async function start() {
-  await initWebhook();
-  await startServer(async () => {
-    try {
-      if (redis?.quit) await redis.quit();
-      else if (redis?.disconnect) await redis.disconnect();
-      console.log('✅ Redis connection closed.');
-    } catch (e) {
-      console.error('Redis close error:', e?.message);
-    }
-  });
+  // System/basic commands
+  if (system?.registerSystem) system.registerSystem(bot);
+  if (system?.registerSystemCallbacks) system.registerSystemCallbacks(bot);
+
+  // Settings/config
+  if (settings?.registerSettings) settings.registerSettings(bot);
+  if (settings?.registerSettingsCallbacks) settings.registerSettingsCallbacks(bot);
+
+  // Manual/custom builder
+  if (custom?.registerCustom) custom.registerCustom(bot);
+  if (custom?.registerCustomCallbacks) custom.registerCustomCallbacks(bot);
+  if (custom?.registerSlipCallbacks) custom.registerSlipCallbacks(bot);
+
+  // Tools (/calc, /kelly, /stake)
+  if (tools?.registerTools) tools.registerTools(bot);
+  if (tools?.registerCommonCallbacks) tools.registerCommonCallbacks(bot);
+
+  // AI parlay
+  if (ai?.registerAI) ai.registerAI(bot);
+  if (ai?.registerAICallbacks) ai.registerAICallbacks(bot);
+
+  // Quant pick
+  if (quant?.registerQuant) quant.registerQuant(bot);
+
+  // Player props, if present
+  if (player?.registerPlayer) player.registerPlayer(bot);
+  if (player?.registerPlayerCallbacks) player.registerPlayerCallbacks(bot);
+
+  // Optional: advertise available commands if system module not present
+  try {
+    await bot.setMyCommands([
+      { command: 'custom', description: 'Manual parlay builder' },
+      { command: 'parlay', description: 'AI analyst parlay' },
+      { command: 'quant', description: 'Quant pick' },
+      { command: 'calc', description: 'Combine odds' },
+      { command: 'kelly', description: 'Kelly criterion' },
+    ]);
+  } catch {}
 }
