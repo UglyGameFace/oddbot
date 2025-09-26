@@ -6,19 +6,25 @@ import { registerCustom } from './handlers/custom.js';
 import { registerPlayer } from './handlers/player.js';
 import { registerQuant } from './handlers/quant.js';
 import { registerTools } from './handlers/tools.js';
+import { registerSettings } from './handlers/settings.js';
+import { registerSystem } from './handlers/system.js';
 import redis from '../services/redisService.js';
 
-// Attach command handlers
+// System/meta commands
+registerSystem(bot);
+
+// Attach feature handlers
 registerAI(bot);
 registerCustom(bot);
 registerPlayer(bot);
 registerQuant(bot);
 registerTools(bot);
+registerSettings(bot);
 
-// Attach central router for callbacks
+// Central callback router
 registerRouter(bot);
 
-// Start HTTP and webhook/polling
+// Boot webhook/polling + HTTP server
 export async function start() {
   await initWebhook();
   await startServer(async () => {
