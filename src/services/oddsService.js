@@ -1,9 +1,12 @@
-// src/services/oddsService.js - PROVEN ODDS SERVICE WITH DYNAMIC SPORT SUPPORT
+// src/services/oddsService.js - PROVEN ODDS SERVICE WITH DYNAMIC SPORT SUPPORT + ESM named exports
 
 import axios from 'axios';
 import env from '../config/env.js';
 import redis from './redisService.js';
 import sentryService from './sentryService.js';
+
+// Secondary index TTL for game-by-id lookups used by handlers (seconds)
+const GAMEIDX_TTL = 120;
 
 class ProvenOddsService {
   constructor() {
@@ -26,12 +29,12 @@ class ProvenOddsService {
   }
 
   /**
-   * NEW: Fetches a list of all available sports from the provider and caches it for 24 hours.
-   * @returns {Promise<Array<{key: string, title: string}>>} A list of supported sports.
+   * Fetches a list of all available sports from provider and caches for 24 hours.
+   * Returns [{ key, title }]
    */
   async getSupportedSports() {
     const cacheKey = 'supported_sports_list';
-    const CACHE_TTL = 86400; // Cache for 24 hours
+    const CACHE_TTL = 86400; // 24h
 
     try {
       const cachedData = await redis.get(cacheKey);
@@ -47,17 +50,12 @@ class ProvenOddsService {
     }
 
     try {
-      const response = await axios.get(provider.url, {
-        params: { apiKey: provider.apiKey }
-      });
+      const response = await axios.get(provider.url, { params: { apiKey: provider.apiKey } });
 
       if (response.data && Array.isArray(response.data)) {
         const sports = response.data
-          .filter(sport => sport.active === true) // Only include active sports
-          .map(sport => ({
-            key: sport.key,
-            title: sport.title
-          }));
+          .filter(sport => sport.active === true) // in-season sports
+          .map(sport => ({ key: sport.key, title: sport.title }));
 
         await redis.set(cacheKey, JSON.stringify(sports), 'EX', CACHE_TTL);
         return sports;
@@ -71,7 +69,8 @@ class ProvenOddsService {
   }
 
   /**
-   * Returns the best provider's odds for the sportKey, or falls back to alternatives as needed.
+   * Returns the best provider's odds for the sportKey, with caching/fallbacks.
+   * Normalized fields: id, home_team, away_team, commence_time, sport_key, sport_title, bookmakers
    */
   async getSportOdds(sportKey) {
     const cacheKey = `odds_${sportKey}`;
@@ -86,17 +85,14 @@ class ProvenOddsService {
       try {
         let games = [];
         if (provider.name === 'the-odds-api') {
-          const res = await axios.get(
-            `${provider.url}/${sportKey}/odds`,
-            {
-              params: {
-                apiKey: provider.apiKey,
-                regions: 'us',
-                markets: 'h2h,spreads,totals',
-                oddsFormat: 'american'
-              }
+          const res = await axios.get(`${provider.url}/${sportKey}/odds`, {
+            params: {
+              apiKey: provider.apiKey,
+              regions: 'us',
+              markets: 'h2h,spreads,totals',
+              oddsFormat: 'american'
             }
-          );
+          });
           if (Array.isArray(res.data) && res.data.length) {
             games = res.data.map(g => ({
               id: g.id,
@@ -107,11 +103,11 @@ class ProvenOddsService {
               sport_title: g.sport_title,
               bookmakers: g.bookmakers
             }));
-            await redis.set(cacheKey, JSON.stringify(games), 'EX', 300); // 5-minute expiry for odds
+            await redis.set(cacheKey, JSON.stringify(games), 'EX', 300); // 5 minutes
             return games;
           }
         } else if (provider.name === 'sportradar') {
-          // This is an example endpoint; you'd need to adapt it for Sportradar's specific structure.
+          // Example stub; adapt to your Sportradar package/feeds if used
           const endpoint = `${provider.url}/odds/${sportKey}/live.json?api_key=${provider.apiKey}`;
           const res = await axios.get(endpoint);
           if (res.data && Array.isArray(res.data.games) && res.data.games.length) {
@@ -133,37 +129,31 @@ class ProvenOddsService {
         console.warn(`Odds fetch failed for provider ${provider.name} sportKey ${sportKey}: ${err?.message || 'Unknown error'}`);
       }
     }
-    await redis.set(cacheKey, '[]', 'EX', 60); // Cache empty result for 1 minute
+    await redis.set(cacheKey, '[]', 'EX', 60); // Cache empty for 1 minute to avoid thrash
     return [];
   }
 
   /**
-   * Returns a flat, deduplicated odds list for all popular US sports/leagues.
+   * Aggregates/normalizes across sports and deduplicates by game identity.
    */
   async getAllSportsOdds() {
     const sports = await this.getSupportedSports();
     const allSupportedKeys = sports.map(s => s.key);
-    
-    const promises = allSupportedKeys.map(sportKey => this.getSportOdds(sportKey));
-    const results = await Promise.allSettled(promises);
+
+    const results = await Promise.allSettled(allSupportedKeys.map(k => this.getSportOdds(k)));
 
     const allOdds = results
-      .filter(res => res.status === 'fulfilled' && res.value?.length > 0)
+      .filter(res => res.status === 'fulfilled' && Array.isArray(res.value) && res.value.length > 0)
       .flatMap(res => res.value);
-      
+
     return this.processAndDeduplicateOdds(allOdds);
   }
 
-  /**
-   * Deduplicates games based on a composite key and sorts them by start time.
-   */
   processAndDeduplicateOdds(games) {
     const deduped = new Map();
     for (const g of games) {
       const key = `${g.home_team}_${g.away_team}_${g.commence_time}`;
-      if (!deduped.has(key)) {
-        deduped.set(key, g);
-      }
+      if (!deduped.has(key)) deduped.set(key, g);
     }
     const uniqueGames = Array.from(deduped.values());
     uniqueGames.sort((a, b) => new Date(a.commence_time) - new Date(b.commence_time));
@@ -171,4 +161,38 @@ class ProvenOddsService {
   }
 }
 
-export default new ProvenOddsService();
+// Instantiate and export default (keeps your existing API)
+const provenService = new ProvenOddsService();
+export default provenService;
+
+// ===== Named exports expected by handlers (ESM strict) =====
+// Expose sports list as { sport_key, sport_title } to match handler imports
+export async function getAvailableSportsCached() {
+  // The Odds API v4 sports endpoint returns active (in-season) sports used in downstream odds endpoints
+  // This maps to handler-expected names and keeps cache behavior centralized in the service methods
+  const sports = await provenService.getSupportedSports();
+  return (sports || []).map(s => ({
+    sport_key: s.key,
+    sport_title: s.title || s.key,
+  }));
+}
+
+// Expose per-sport games and build a secondary Redis index by game id for detail lookups
+export async function getGamesForSportCached(sportKey) {
+  // v4 per-sport odds (with US region and featured markets) is what handlers expect to iterate
+  const games = await provenService.getSportOdds(sportKey);
+  for (const g of games || []) {
+    if (g?.id) {
+      await redis.set(`odds:game:${g.id}`, JSON.stringify(g), 'EX', GAMEIDX_TTL);
+    }
+  }
+  return games || [];
+}
+
+// Expose latest game details by id via the secondary index; returns null if not seen recently
+export async function getGameDetailsCached(gameId) {
+  if (!gameId) return null;
+  const raw = await redis.get(`odds:game:${gameId}`);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
