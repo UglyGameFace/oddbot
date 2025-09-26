@@ -38,7 +38,7 @@ class AdvancedAIService {
       const response = await axios.post(
         this.PPLX_API_URL,
         {
-          model: 'sonar-pro',
+          model: 'sonar',
           messages: [
             { role: 'system', content: 'You are a world-class sports betting analyst. Your response MUST be ONLY a single, valid JSON object.' },
             { role: 'user', content: prompt },
