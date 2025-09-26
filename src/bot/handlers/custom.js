@@ -10,14 +10,14 @@ import {
   getAvailableSportsCached,
   getGamesForSportCached,
   getGameDetailsCached,
-} from '../../services/oddsService.js';
+} from '../../services/oddsCacheAdapters.js';
 import redis from '../../services/redisService.js';
 import {
   formatGameTimeTZ,
   toDecimalFromAmerican,
   toAmerican as toAmericanFromDecimal,
   impliedProbability,
-} from '../../utils/enterpriseAdapters.js';
+} from '../../utils/enterpriseUtilities.js';
 
 const tz = env.TIMEZONE || 'America/New_York';
 const getSportEmoji = (key) => (key.includes('americanfootball') ? '🏈' : key.includes('basketball') ? '🏀' : key.includes('baseball') ? '⚾' : key.includes('icehockey') ? '🏒' : key.includes('soccer') ? '⚽' : '🏆');
@@ -298,9 +298,7 @@ export async function renderParlaySlip(bot, chatId) {
   Object.entries(groups).forEach(([game, info]) => {
     const timeStr = info.commence_time ? formatGameTimeTZ(info.commence_time) : '';
     text += `*${game}*${timeStr ? ` — ${timeStr}` : ''}\n`;
-    info.picks.forEach((p) => {
-      text += `• ${p.selection} (${p.odds > 0 ? '+' : ''}${p.odds})\n`;
-    });
+    info.picks.forEach((p) => { text += `• ${p.selection} (${p.odds > 0 ? '+' : ''}${p.odds})\n`; });
     text += `\n`;
   });
 
