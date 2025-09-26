@@ -1,5 +1,5 @@
 // src/bot/handlers/quant.js
-import { getGamesForSportCached } from '../../services/oddsService.js';
+import { getGamesForSportCached } from '../../services/oddsCacheAdapters.js';
 
 export function registerQuant(bot) {
   bot.onText(/\/quant/, async (msg) => {
