@@ -155,7 +155,14 @@ const sendMarketSelection = async (chatId, gameId, messageId) => {
     if (!game || !game.bookmakers || game.bookmakers.length === 0) return bot.editMessageText("Could not find market data.", { chat_id: chatId, message_id: messageId });
     const markets = game.bookmakers[0].markets.map(market => ({ text: market.key.charAt(0).toUpperCase() + market.key.slice(1), callback_data: `cm_${game.id}_${market.key}` }));
     const keyboard = [markets, [{ text: '« Back to Games', callback_data: `cback_games_${game.sport_key}` }]];
-    await bot.editMessageText(`*${game.away_team} @ ${game.home_team}*\n${formatGameTime(game.commence_time)}\n\nSelect a market:`, { parse_mode: 'Markdown', chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: keyboard } });
+    const text = `*${game.away_team} @ ${game.home_team}*\n${formatGameTime(game.commence_time)}\n\nSelect a market:`;
+
+    await bot.editMessageText(text, {
+        parse_mode: 'Markdown',
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: { inline_keyboard: keyboard }
+    });
 };
 const sendPickSelection = async (chatId, gameId, marketKey, messageId) => {
     const game = await GamesDataService.getGameDetails(gameId);
