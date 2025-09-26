@@ -1,272 +1,255 @@
-// src/bot.js – Ultimate Telegram Parlay Bot WITH Full Parlay Builder UI (Date/Time always shown)
-// REFACTORED FOR PRODUCTION: Uses Redis for persistent user state and initializes health checks.
+// src/bot.js – FINAL VERSION WITH DYNAMIC & PAGINATED UI
+// Supports all sports from the API and uses the interactive "Parlay Slip" model.
 
 import TelegramBot from 'node-telegram-bot-api';
 import express from 'express';
 import env from './config/env.js';
 import sentryService from './services/sentryService.js';
-import DatabaseService from './services/databaseService.js';
-import AIService from './services/aiService.js';
 import OddsService from './services/oddsService.js';
 import EnterpriseHealthService from './services/healthService.js';
 import redis from './services/redisService.js';
+import AIService from './services/aiService.js';
 
 const app = express();
 app.use(express.json());
 
-// --- Health Check Initialization (CRITICAL FOR DEPLOYMENT) ---
+// --- Health Check Initialization ---
 const healthService = new EnterpriseHealthService(app);
 healthService.initializeHealthCheckEndpoints();
-
-// --- Redis State Management (Replaces in-memory Map) ---
-const REDIS_STATE_EXPIRY = 3600; // 1 hour
-
-async function getUserState(chatId) {
-  const stateStr = await redis.get(`parlay_state:${chatId}`);
-  return stateStr ? JSON.parse(stateStr) : {};
-}
-
-async function setUserState(chatId, state) {
-  await redis.set(`parlay_state:${chatId}`, JSON.stringify(state), 'EX', REDIS_STATE_EXPIRY);
-}
-
-async function deleteUserState(chatId) {
-  await redis.del(`parlay_state:${chatId}`);
-}
 
 // --- Telegram Bot Setup ---
 const bot = new TelegramBot(env.TELEGRAM_BOT_TOKEN, { polling: true });
 
-// ---- Parlay Builder UI Logic ----
-bot.onText(/\/parlay/, async (msg) => {
-  const chatId = msg.chat.id;
-  const initialState = { step: 'choose_legs', picks: [], games: [], oddsTarget: '', confirmed: false };
-  await setUserState(chatId, initialState);
-  bot.sendMessage(chatId, 'How many legs do you want for your parlay?', {
-    reply_markup: {
-      inline_keyboard: [
-        [2,3,4,5,6,7,8].map(n => ({ text: `${n} legs`, callback_data: `legs_${n}` }))
-      ]
+// --- Setup Persistent Quick Access Menu ---
+bot.setMyCommands([
+    { command: '/parlay', description: 'Build a Custom Parlay' },
+    { command: '/picks', description: 'Get Quick AI Picks' },
+    { command: '/stats', description: 'View My Betting Stats' },
+    { command: '/help', description: 'Show Help & Info' },
+]);
+
+// --- Redis State Management for Parlay Slips ---
+const REDIS_STATE_EXPIRY = 7200; // 2 hours
+
+async function getParlaySlip(chatId) {
+  const slipStr = await redis.get(`parlay_slip:${chatId}`);
+  return slipStr ? JSON.parse(slipStr) : { picks: [], messageId: null };
+}
+
+async function setParlaySlip(chatId, slip) {
+  await redis.set(`parlay_slip:${chatId}`, JSON.stringify(slip), 'EX', REDIS_STATE_EXPIRY);
+}
+
+// --- Time Zone Solution: Displaying UTC ---
+function formatGameTime(isoString) {
+    const date = new Date(isoString);
+    return date.toLocaleString('en-US', {
+        month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC', timeZoneName: 'short',
+    });
+}
+
+// --- UI Generation Functions ---
+
+function getSportEmoji(sportKey) {
+    if (sportKey.includes('americanfootball')) return '🏈';
+    if (sportKey.includes('basketball')) return '🏀';
+    if (sportKey.includes('baseball')) return '⚾';
+    if (sportKey.includes('icehockey')) return '🏒';
+    if (sportKey.includes('soccer')) return '⚽';
+    if (sportKey.includes('tennis')) return '🎾';
+    if (sportKey.includes('mma')) return '🥊';
+    return '🏆';
+}
+
+async function sendSportSelection(chatId, page = 0, messageId = null) {
+    const sports = await OddsService.getSupportedSports();
+    if (!sports || sports.length === 0) {
+        bot.sendMessage(chatId, "Could not load sports leagues at this time. Please try again later.");
+        return;
     }
-  });
-});
+    
+    const ITEMS_PER_PAGE = 8;
+    const startIndex = page * ITEMS_PER_PAGE;
+    const pageSports = sports.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+
+    const keyboardRows = pageSports.map(sport => ([{
+        text: `${getSportEmoji(sport.key)} ${sport.title}`,
+        callback_data: `ps_${sport.key}` // ps_ = Parlay Sport
+    }]));
+
+    const navButtons = [];
+    if (page > 0) navButtons.push({ text: '◀️ Back', callback_data: `sportspage_${page - 1}` });
+    if (startIndex + ITEMS_PER_PAGE < sports.length) {
+        navButtons.push({ text: 'Next ▶️', callback_data: `sportspage_${page + 1}` });
+    }
+    if (navButtons.length > 0) keyboardRows.push(navButtons);
+
+    const text = "Select a sport to add a leg to your parlay:";
+    const options = { reply_markup: { inline_keyboard: keyboardRows } };
+
+    if (messageId) {
+        await bot.editMessageText(text, { ...options, chat_id: chatId, message_id: messageId });
+    } else {
+        await bot.sendMessage(chatId, text, options);
+    }
+}
+
+async function sendGameSelection(chatId, sportKey, messageId) {
+    const games = await OddsService.getSportOdds(sportKey);
+    if (!games || games.length === 0) {
+        bot.editMessageText("No upcoming games found for this sport. Please select another.", { chat_id: chatId, message_id: messageId });
+        setTimeout(() => sendSportSelection(chatId, 0, messageId), 2000); // Go back after 2 seconds
+        return;
+    }
+
+    const keyboard = [];
+    games.slice(0, 8).forEach(game => {
+        const gameTime = formatGameTime(game.commence_time);
+        const moneyline = game.bookmakers?.[0]?.markets.find(m => m.key === 'h2h');
+        if (moneyline && moneyline.outcomes.length >= 2) {
+            const homePick = moneyline.outcomes.find(o => o.name === game.home_team);
+            const awayPick = moneyline.outcomes.find(o => o.name === game.away_team);
+            if (homePick && awayPick) {
+                keyboard.push([
+                    { text: `${awayPick.name} (${awayPick.price > 0 ? '+' : ''}${awayPick.price})`, callback_data: `pick_${game.id}_${awayPick.name}_${awayPick.price}` },
+                    { text: `${homePick.name} (${homePick.price > 0 ? '+' : ''}${homePick.price})`, callback_data: `pick_${game.id}_${homePick.name}_${homePick.price}` },
+                ]);
+                keyboard.push([{ text: `🗓️ ${gameTime}`, callback_data: 'noop' }]);
+            }
+        }
+    });
+
+    if (keyboard.length === 0) {
+        bot.editMessageText("Could not find valid odds for upcoming games. Please select another sport.", { chat_id: chatId, message_id: messageId });
+        setTimeout(() => sendSportSelection(chatId, 0, messageId), 2000);
+        return;
+    }
+    keyboard.push([{ text: '« Back to Sports', callback_data: 'back_sports_0'}]);
+    
+    await bot.editMessageText(`*Select a pick for ${games[0].sport_title}*`, {
+        chat_id: chatId, message_id: messageId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard }
+    });
+}
+
+async function renderParlaySlip(chatId, slip) {
+    if (!slip.messageId) {
+        const sentMessage = await bot.sendMessage(chatId, "Initializing your parlay slip...");
+        slip.messageId = sentMessage.message_id;
+    }
+
+    let slipText = "📋 *Your Parlay Slip*\n\n";
+    let totalOdds = 1;
+
+    slip.picks.forEach((pick, index) => {
+        const decimalOdds = pick.odds > 0 ? (pick.odds / 100) + 1 : (100 / Math.abs(pick.odds)) + 1;
+        totalOdds *= decimalOdds;
+        slipText += `*${index + 1}*: ${pick.selection} (${pick.odds > 0 ? '+' : ''}${pick.odds})\n`;
+        slipText += `   _${pick.home_team} vs ${pick.away_team}_\n`;
+    });
+
+    const finalAmericanOdds = totalOdds > 1 ? (totalOdds >= 2 ? (totalOdds - 1) * 100 : -100 / (totalOdds - 1)) : 0;
+    slip.totalOdds = Math.round(finalAmericanOdds);
+    
+    slipText += `\n*Total Legs*: ${slip.picks.length}\n*Total Odds*: ≈ ${slip.totalOdds > 0 ? '+' : ''}${slip.totalOdds}`;
+    
+    const keyboard = [
+        [{ text: '➕ Add Another Leg', callback_data: 'slip_add' }],
+        [{ text: '🤖 Generate AI Analysis', callback_data: 'slip_analyze' }],
+        [{ text: `🗑️ Clear Slip (${slip.picks.length})`, callback_data: 'slip_clear' }]
+    ];
+
+    await bot.editMessageText(slipText, {
+        chat_id: chatId, message_id: slip.messageId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard }
+    });
+    await setParlaySlip(chatId, slip);
+}
+
+// --- Bot Command Handlers ---
+bot.onText(/\/parlay/, (msg) => sendSportSelection(msg.chat.id, 0));
 
 bot.on('callback_query', async (cbq) => {
-  const chatId = cbq.message.chat.id;
-  let state = await getUserState(chatId);
+    const { data, message } = cbq;
+    const chatId = message.chat.id;
+    await bot.answerCallbackQuery(cbq.id);
 
-  // If state is empty, it might have expired or been cleared.
-  if (!state.step) {
-    bot.answerCallbackQuery(cbq.id, { text: "Your session has expired. Please start over." });
-    bot.sendMessage(chatId, "Your parlay building session has expired. Please type /parlay to begin again.");
-    return;
-  }
-
-  if (cbq.data.startsWith('legs_')) {
-    state.numLegs = parseInt(cbq.data.slice(5), 10);
-    state.step = "choose_sport";
-    await setUserState(chatId, state);
-
-    const sports = ['NBA','NFL','NHL','MLB','Soccer','Tennis'];
-    bot.editMessageText("Select a sport for your first leg:", {
-      chat_id: chatId,
-      message_id: cbq.message.message_id,
-      reply_markup: {
-        inline_keyboard: [sports.map(sport => ({ text: sport, callback_data: `sport_${sport}` }))]
-      }
-    });
-    return;
-  }
-
-  if (cbq.data.startsWith('sport_')) {
-    const pickedSport = cbq.data.slice(6);
-    const allOdds = await OddsService.getSportOdds(pickedSport.toLowerCase());
+    if (data.startsWith('sportspage_') || data.startsWith('back_sports_')) {
+        const page = parseInt(data.split('_')[2]);
+        await sendSportSelection(chatId, page, message.message_id);
+        return;
+    }
     
-    if (!allOdds || allOdds.length === 0) {
-        bot.answerCallbackQuery(cbq.id, { text: `No upcoming games found for ${pickedSport}.` });
+    if (data.startsWith('ps_')) {
+        const sportKey = data.substring(3);
+        await sendGameSelection(chatId, sportKey, message.message_id);
         return;
     }
-
-    let menu = [];
-    for (let game of allOdds.slice(0, 16)) {
-      const gameDate = new Date(game.commence_time).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-      menu.push([{
-        text: `${game.home_team} vs ${game.away_team}\n${gameDate}`,
-        callback_data: `game_${pickedSport}_${game.id}`
-      }]);
-    }
-    state.sport = pickedSport;
-    state.gamesList = allOdds;
-    state.step = "choose_game";
-    await setUserState(chatId, state);
-    bot.editMessageText(`Choose a game for Leg ${state.picks.length+1}:`, {
-      chat_id: chatId,
-      message_id: cbq.message.message_id,
-      reply_markup: { inline_keyboard: menu }
-    });
-    return;
-  }
-
-  if (cbq.data.startsWith('game_')) {
-    const split = cbq.data.split('_');
-    const gameId = split.slice(2).join('_');
-    const game = state.gamesList.find(g => String(g.id) === gameId);
-
-    if (!game) {
-        bot.answerCallbackQuery(cbq.id, { text: "Game not found or session expired. Please restart." });
-        return;
-    }
-
-    const gameDate = new Date(game.commence_time).toLocaleString();
-    const markets = ['Moneyline','Spread','Total'];
-    bot.editMessageText(
-      `${game.home_team} vs ${game.away_team}\n${gameDate}\nSelect market type:`,
-      {
-        chat_id: chatId,
-        message_id: cbq.message.message_id,
-        reply_markup: { inline_keyboard: [markets.map(mk => ({ text: mk, callback_data: `market_${game.id}_${mk}` }))] }
-      }
-    );
-    return;
-  }
-
-  if (cbq.data.startsWith('market_')) {
-    const split = cbq.data.split('_');
-    const gameId = split[1];
-    const marketType = split.slice(2).join('_');
-    const game = state.gamesList.find(g => String(g.id) === gameId);
     
-    if (!game) {
-        bot.answerCallbackQuery(cbq.id, { text: "Game not found or session expired. Please restart." });
-        return;
-    }
+    if (data.startsWith('pick_')) {
+        const [_, gameId, selection, odds] = data.split('_');
+        const slip = await getParlaySlip(chatId);
+        const allOdds = await OddsService.getAllSportsOdds(); // Should be cached
+        const game = allOdds.find(g => g.id === gameId);
 
-    state.picks.push({
-      sport: state.sport,
-      gameId,
-      market: marketType,
-      home_team: game.home_team,
-      away_team: game.away_team,
-      commence_time: game.commence_time
-    });
-
-    if (state.picks.length < state.numLegs) {
-      state.step = "choose_sport";
-      await setUserState(chatId, state);
-      bot.editMessageText(`Leg ${state.picks.length} added. Select a sport for Leg ${state.picks.length+1}:`, {
-        chat_id: chatId,
-        message_id: cbq.message.message_id,
-        reply_markup: {
-          inline_keyboard: [['NBA','NFL','NHL','MLB','Soccer','Tennis'].map(sport => ({ text: sport, callback_data: `sport_${sport}` }))]
+        if (game) {
+             slip.picks.push({
+                gameId: game.id, selection, odds: parseInt(odds),
+                home_team: game.home_team, away_team: game.away_team, sport: game.sport_title
+            });
+            await renderParlaySlip(chatId, slip);
         }
-      });
-    } else {
-      state.step = "odds_target";
-      await setUserState(chatId, state);
-      bot.editMessageText(
-        "All legs added. Set your parlay's total target odds or risk level:",
-        {
-          chat_id: chatId,
-          message_id: cbq.message.message_id,
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "Balanced", callback_data: "risk_balanced" }, { text: "Lottery", callback_data: "risk_lottery" }],
-              [{ text: "High Probability", callback_data: "risk_highprobability" }]
-            ]
-          }
-        }
-      );
+        return;
     }
-    return;
-  }
-
-  if (cbq.data.startsWith('risk_')) {
-    state.oddsTarget = cbq.data.replace('risk_', '');
-    state.step = "confirm";
-    await setUserState(chatId, state);
-
-    const legMsgs = state.picks.map((pick, idx) => {
-        const gameDate = new Date(pick.commence_time).toLocaleString();
-        return `*Leg ${idx+1}*: ${pick.sport} – ${pick.home_team} vs ${pick.away_team}\n*Market*: ${pick.market}\n*Date*: ${gameDate}`;
-    }).join('\n\n');
     
-    bot.editMessageText(`*Your Custom Parlay:*\n\n${legMsgs}\n\n*Risk Profile*: ${state.oddsTarget}\n\nReady to generate parlay analysis?`, {
-      chat_id: chatId,
-      message_id: cbq.message.message_id,
-      parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "✅ Lock & Analyze", callback_data: "confirm_yes" }],
-          [{ text: "❌ Start Over", callback_data: "confirm_restart" }]
-        ]
-      }
-    });
-    return;
-  }
+    if (data.startsWith('slip_')) {
+        const action = data.substring(5);
+        const slip = await getParlaySlip(chatId);
 
-  if (cbq.data === "confirm_restart") {
-    await deleteUserState(chatId);
-    bot.editMessageText("Parlay builder has been reset. Type /parlay to begin again!", {
-        chat_id: chatId,
-        message_id: cbq.message.message_id
-    });
-    return;
-  }
-
-  if (cbq.data === "confirm_yes") {
-    bot.editMessageText("Building your portfolio... This involves complex quantitative analysis and may take a moment.", {
-        chat_id: chatId,
-        message_id: cbq.message.message_id
-    });
-
-    const userContext = { riskTolerance: state.oddsTarget, preferredSports: [...new Set(state.picks.map(p => p.sport))] };
-    const gamesData = state.gamesList;
-
-    try {
-      const analysis = await AIService.generateParlayAnalysis(userContext, gamesData, state.oddsTarget);
-      let message = '📈 *Your Tailored Parlay Portfolio*\n\n';
-      analysis.parlay.legs.forEach((leg, idx) => {
-        const gameDate = new Date(leg.commence_time).toLocaleString();
-        message += `*Leg ${idx+1}*: ${leg.sport} — ${leg.teams}\n`;
-        message += `*Pick*: ${leg.selection} (${leg.odds > 0 ? '+' : ''}${leg.odds})\n`;
-        message += `*Date*: ${gameDate}\n`;
-        message += `*Justification*: _${leg.reasoning}_\n\n`;
-      });
-      message += `*Total Odds*: ${analysis.parlay.total_odds > 0 ? '+' : ''}${analysis.parlay.total_odds}\n`;
-      message += `*Risk Assessment*: ${analysis.parlay.risk_assessment}\n`;
-      message += `*AI Recommendation*: *${analysis.analysis.recommendation}* — ${analysis.analysis.strengths.join('. ')}\n`;
-      
-      bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
-    } catch (error) {
-      bot.sendMessage(chatId, '🚨 Unable to generate parlay analysis. The AI model may be overloaded or an internal error occurred. Please try again shortly.', { parse_mode: "Markdown" });
-      sentryService.captureError(error, { context: 'custom_parlay_generate', chatId });
+        if (action === 'add') {
+            await sendSportSelection(chatId, 0, slip.messageId);
+        } else if (action === 'clear') {
+             await bot.deleteMessage(chatId, slip.messageId);
+             await redis.del(`parlay_slip:${chatId}`);
+             await bot.sendMessage(chatId, "Parlay slip cleared.");
+        } else if (action === 'analyze') {
+            if (slip.picks.length < 2) {
+                await bot.answerCallbackQuery(cbq.id, { text: "You need at least 2 legs to build a parlay.", show_alert: true });
+                return;
+            }
+            await bot.editMessageText("🤖 Analyzing your parlay with our institutional AI model...", {
+                chat_id: chatId, message_id: slip.messageId, reply_markup: null
+            });
+            
+            try {
+                const userContext = { riskTolerance: 'balanced', preferredSports: [...new Set(slip.picks.map(p => p.sport))] };
+                const analysis = await AIService.generateParlayAnalysis(userContext, [], 'balanced'); // Pass picks for more context
+                
+                let messageText = '📈 *Your Tailored Parlay Portfolio*\n\n';
+                analysis.parlay.legs.forEach((leg, idx) => {
+                    const gameDate = new Date(leg.commence_time).toLocaleString();
+                    messageText += `*Leg ${idx+1}*: ${leg.sport} — ${leg.teams}\n`;
+                    messageText += `*Pick*: ${leg.selection} (${leg.odds > 0 ? '+' : ''}${leg.odds})\n`;
+                    messageText += `*Justification*: _${leg.reasoning}_\n\n`;
+                });
+                messageText += `*Total Odds*: ${analysis.parlay.total_odds > 0 ? '+' : ''}${analysis.parlay.total_odds}\n`;
+                messageText += `*AI Recommendation*: *${analysis.analysis.recommendation}*`;
+                
+                await bot.sendMessage(chatId, messageText, { parse_mode: 'Markdown' });
+            } catch (error) {
+                sentryService.captureError(error, { component: 'ai_analysis_slip' });
+                await bot.sendMessage(chatId, "🚨 AI analysis failed. Please try again later.");
+            } finally {
+                await bot.deleteMessage(chatId, slip.messageId);
+                await redis.del(`parlay_slip:${chatId}`);
+            }
+        }
+        return;
     }
-    await deleteUserState(chatId);
-    return;
-  }
-  
-  // Acknowledge the callback query to remove the loading icon
-  bot.answerCallbackQuery(cbq.id);
-});
-
-// --- Legacy Quick /start ---
-bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id, '💎 *Welcome to the Institutional AI Parlay Bot*\n\nUse `/parlay` to build a custom parlay with our advanced AI analysis.', { parse_mode: 'Markdown' });
 });
 
 // --- Error/uncaught handling ---
-bot.on('polling_error', (error) => {
-  sentryService.captureError(error, { component: 'telegram_polling' });
-});
-process.on('uncaughtException', (error) => {
-  sentryService.captureError(error, { component: 'uncaught_exception' });
-  process.exit(1);
-});
-process.on('unhandledRejection', (reason, promise) => {
-    sentryService.captureError(new Error('Unhandled Rejection'), { extra: { reason, promise } });
-});
+bot.on('polling_error', (error) => sentryService.captureError(error, { component: 'telegram_polling' }));
+process.on('uncaughtException', (error) => { sentryService.captureError(error, { component: 'uncaught_exception' }); process.exit(1); });
 
-
-// --- Start Express Server for health checks ---
+// --- Start Express Server ---
 const PORT = env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Parlay Bot HTTP server live on port ${PORT}`));
