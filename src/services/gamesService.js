@@ -1,56 +1,77 @@
-// src/services/gamesService.js - INSTITUTIONAL MARKET DATA ENGINE
-import oddsService from './oddsService.js';
-import advancedOddsModel from './advancedOddsModel.js';
+// src/services/gamesService.js - INTELLIGENT DATA HUB (FINAL VERSION)
+// Prioritizes fetching data from Supabase to respect API rate limits.
+
+import DatabaseService from './databaseService.js';
+import OddsService from './oddsService.js';
 import sentryService from './sentryService.js';
 
-class InstitutionalMarketDataEngine {
+const STALE_ODDS_THRESHOLD_MINUTES = 5;
+
+class GamesDataService {
   constructor() {
-    console.log('✅ Institutional Market Data Engine Initialized.');
+    console.log('✅ Intelligent Games Data Service Initialized.');
   }
 
   /**
-   * Provides a fully enhanced market data set for a given sport.
-   * @param {string} sportKey The key for the sport (e.g., 'americanfootball_nfl').
-   * @returns {Promise<Array>} A list of game objects enhanced with quantitative metrics.
+   * Gets a list of sports with upcoming games directly from the database.
    */
-  async getEnhancedMarketData(sportKey) {
-    const transaction = sentryService.startTransaction({ op: 'service', name: 'get_enhanced_market_data' });
+  async getAvailableSports() {
     try {
-      // 1. Fetch base odds data
-      const baseGames = await oddsService.getSportOdds(sportKey);
-      if (!baseGames || baseGames.length === 0) {
-        return [];
-      }
-
-      // 2. Enhance each game with advanced models
-      const enhancedGames = baseGames.map(game => this.enhanceWithDerivatives(game));
-      
-      transaction.setStatus('ok');
-      return enhancedGames;
-
+      return await DatabaseService.getDistinctSports();
     } catch (error) {
-      transaction.setStatus('internal_error');
-      sentryService.captureError(error, { component: 'games_service' });
-      throw new Error('Failed to acquire and enhance market data.');
-    } finally {
-        transaction.finish();
+      sentryService.captureError(error, { component: 'gamesService_getAvailableSports' });
+      return [];
     }
   }
-  
+
   /**
-   * Enhances a single game object with calculated derivatives and metrics.
-   * @param {object} game The basic game object from oddsService.
-   * @returns {object} The game object with an added 'derivatives' property.
+   * Gets games for a sport, prioritizing the database and falling back to the live API.
    */
-  enhanceWithDerivatives(game) {
-    // This is where various quantitative models are applied to the raw odds.
-    const derivatives = {
-      impliedProbabilities: advancedOddsModel.calculateImpliedProbabilities(game),
-      featureEngineering: advancedOddsModel.engineerGameFeatures(game),
-      // In a full HFT system, volatility, correlation, etc., would be calculated here.
-    };
-    return { ...game, derivatives };
+  async getGamesForSport(sportKey) {
+    try {
+      const dbGames = await DatabaseService.getUpcomingGamesBySport(sportKey);
+      
+      if (dbGames.length > 0) {
+        const firstGameUpdate = new Date(dbGames[0].last_odds_update);
+        const threshold = new Date(Date.now() - STALE_ODDS_THRESHOLD_MINUTES * 60 * 1000);
+        if (firstGameUpdate > threshold) {
+          console.log(`⚡️ Using fresh game data from Supabase for ${sportKey}.`);
+          return this.formatGamesFromDB(dbGames);
+        }
+      }
+
+      console.log(`⚠️ DB data for ${sportKey} is stale. Fetching live from Odds Service.`);
+      const liveGames = await OddsService.getSportOdds(sportKey);
+      
+      if (liveGames.length > 0) {
+        DatabaseService.upsertGamesBatch(liveGames).catch(err => sentryService.captureError(err));
+      }
+      return liveGames;
+
+    } catch (error) {
+      sentryService.captureError(error, { component: 'gamesService_getGamesForSport' });
+      return await OddsService.getSportOdds(sportKey);
+    }
+  }
+
+  /**
+   * Fetches the full details of a single game from the database.
+   */
+  async getGameDetails(eventId) {
+      const dbGame = await DatabaseService.getGameDetails(eventId);
+      return this.formatGamesFromDB([dbGame])[0];
+  }
+
+  /**
+   * Formats database game records into a consistent object structure.
+   */
+  formatGamesFromDB(dbGames) {
+      return dbGames.map(game => ({
+          id: game.event_id, sport_key: game.sport_key, sport_title: game.league_key,
+          home_team: game.home_team, away_team: game.away_team, commence_time: game.commence_time,
+          bookmakers: game.market_data?.bookmakers || [],
+      }));
   }
 }
 
-export default new InstitutionalMarketDataEngine();
+export default new GamesDataService();
