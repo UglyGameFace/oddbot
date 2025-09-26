@@ -1,9 +1,9 @@
-// src/bot.js – FINAL VERSION WITH DYNAMIC & PAGINATED UI
-// Supports all sports from the API and uses the interactive "Parlay Slip" model.
+// src/bot.js – FINAL VERSION WITH WEBHOOK SUPPORT
+// This version disables polling and sets up a webhook endpoint for production environments.
 
 import TelegramBot from 'node-telegram-bot-api';
 import express from 'express';
-import env from './config/env.js';
+import env, { isProduction } from './config/env.js';
 import sentryService from './services/sentryService.js';
 import OddsService from './services/oddsService.js';
 import EnterpriseHealthService from './services/healthService.js';
@@ -11,6 +11,7 @@ import redis from './services/redisService.js';
 import AIService from './services/aiService.js';
 
 const app = express();
+// Use express.json() to parse the webhook payload from Telegram
 app.use(express.json());
 
 // --- Health Check Initialization ---
@@ -18,7 +19,29 @@ const healthService = new EnterpriseHealthService(app);
 healthService.initializeHealthCheckEndpoints();
 
 // --- Telegram Bot Setup ---
-const bot = new TelegramBot(env.TELEGRAM_BOT_TOKEN, { polling: true });
+// IMPORTANT: Polling is set to 'false'. We will use webhooks instead.
+const bot = new TelegramBot(env.TELEGRAM_BOT_TOKEN, { polling: false });
+
+// --- Webhook Setup (Production Only) ---
+if (isProduction) {
+    const webhookUrl = `${env.APP_URL}/api/webhook/${env.TELEGRAM_BOT_TOKEN}`;
+    bot.setWebHook(webhookUrl)
+        .then(() => console.log(`✅ Webhook set to ${webhookUrl}`))
+        .catch(err => console.error('❌ Failed to set webhook:', err));
+
+    // This is the endpoint Telegram will call
+    app.post(`/api/webhook/${env.TELEGRAM_BOT_TOKEN}`, (req, res) => {
+        bot.processUpdate(req.body);
+        res.sendStatus(200); // Acknowledge receipt of the update
+    });
+} else {
+    // For local development, we fall back to polling.
+    bot.options.polling = true;
+    bot.startPolling()
+      .catch(err => console.error('❌ Local polling error:', err));
+    console.log('🤖 Bot is running in local development mode (polling)...');
+}
+
 
 // --- Setup Persistent Quick Access Menu ---
 bot.setMyCommands([
@@ -49,7 +72,6 @@ function formatGameTime(isoString) {
 }
 
 // --- UI Generation Functions ---
-
 function getSportEmoji(sportKey) {
     if (sportKey.includes('americanfootball')) return '🏈';
     if (sportKey.includes('basketball')) return '🏀';
@@ -74,7 +96,7 @@ async function sendSportSelection(chatId, page = 0, messageId = null) {
 
     const keyboardRows = pageSports.map(sport => ([{
         text: `${getSportEmoji(sport.key)} ${sport.title}`,
-        callback_data: `ps_${sport.key}` // ps_ = Parlay Sport
+        callback_data: `ps_${sport.key}`
     }]));
 
     const navButtons = [];
@@ -98,7 +120,7 @@ async function sendGameSelection(chatId, sportKey, messageId) {
     const games = await OddsService.getSportOdds(sportKey);
     if (!games || games.length === 0) {
         bot.editMessageText("No upcoming games found for this sport. Please select another.", { chat_id: chatId, message_id: messageId });
-        setTimeout(() => sendSportSelection(chatId, 0, messageId), 2000); // Go back after 2 seconds
+        setTimeout(() => sendSportSelection(chatId, 0, messageId), 2000);
         return;
     }
 
@@ -187,7 +209,7 @@ bot.on('callback_query', async (cbq) => {
     if (data.startsWith('pick_')) {
         const [_, gameId, selection, odds] = data.split('_');
         const slip = await getParlaySlip(chatId);
-        const allOdds = await OddsService.getAllSportsOdds(); // Should be cached
+        const allOdds = await OddsService.getAllSportsOdds();
         const game = allOdds.find(g => g.id === gameId);
 
         if (game) {
@@ -195,6 +217,7 @@ bot.on('callback_query', async (cbq) => {
                 gameId: game.id, selection, odds: parseInt(odds),
                 home_team: game.home_team, away_team: game.away_team, sport: game.sport_title
             });
+            await bot.deleteMessage(chatId, message.message_id);
             await renderParlaySlip(chatId, slip);
         }
         return;
@@ -221,12 +244,11 @@ bot.on('callback_query', async (cbq) => {
             
             try {
                 const userContext = { riskTolerance: 'balanced', preferredSports: [...new Set(slip.picks.map(p => p.sport))] };
-                const analysis = await AIService.generateParlayAnalysis(userContext, [], 'balanced'); // Pass picks for more context
+                const analysis = await AIService.generateParlayAnalysis(userContext, [], 'balanced');
                 
                 let messageText = '📈 *Your Tailored Parlay Portfolio*\n\n';
-                analysis.parlay.legs.forEach((leg, idx) => {
-                    const gameDate = new Date(leg.commence_time).toLocaleString();
-                    messageText += `*Leg ${idx+1}*: ${leg.sport} — ${leg.teams}\n`;
+                analysis.parlay.legs.forEach((leg) => {
+                    messageText += `*Leg*: ${leg.sport} — ${leg.teams}\n`;
                     messageText += `*Pick*: ${leg.selection} (${leg.odds > 0 ? '+' : ''}${leg.odds})\n`;
                     messageText += `*Justification*: _${leg.reasoning}_\n\n`;
                 });
