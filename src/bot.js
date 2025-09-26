@@ -898,22 +898,35 @@ bot.on('inline_query', async (iq) => {
   }
 });
 
-// --- Graceful Shutdown ---
-const shutdown = async () => {
-  try { if (!isProduction) await bot.stopPolling(); } catch {}
-  process.exit(0);
-};
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
-
-// --- Error Handling & Server Start ---
-process.on('unhandledRejection', (reason) => {
-  sentryService.captureError(new Error('Unhandled Rejection'), { extra: { reason } });
-});
-process.on('uncaughtException', (error) => {
-  sentryService.captureError(error, { component: 'uncaught_exception' });
-  process.exit(1);
-});
-
+// Replace existing listen line to capture the server handle
 const PORT = env.PORT || 3000;
-app.listen(PORT, () => console.log(`✅ Parlay Bot HTTP server live on port ${PORT}`));
+const server = app.listen(PORT, () => console.log(`✅ Parlay Bot HTTP server live on port ${PORT}`));
+
+// Graceful shutdown: close HTTP server, Redis, and bot (polling only in dev)
+const closeRedis = async () => {
+  try {
+    if (redis?.quit) await redis.quit();
+    else if (redis?.disconnect) await redis.disconnect();
+    console.log('✅ Redis connection closed.');
+  } catch (e) {
+    console.error('Redis close error:', e?.message);
+  }
+};
+const shutdown = async (signal) => {
+  try {
+    console.log(`🔻 Received ${signal}, draining...`);
+    if (!isProduction) {
+      try { await bot.stopPolling(); } catch {}
+    }
+    // Stop accepting new HTTP connections
+    await new Promise((resolve) => server.close(resolve));
+    await closeRedis();
+    console.log('✅ Clean shutdown complete.');
+    process.exit(0);
+  } catch (e) {
+    console.error('Shutdown error, forcing exit:', e?.message);
+    process.exit(1);
+  }
+};
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
