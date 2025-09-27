@@ -5,7 +5,7 @@ import aiService from '../../services/aiService.js';
 import advancedOddsModel from '../../advancedOddsModel.js';
 import { formatGameTimeTZ, toDecimalFromAmerican, toAmerican, impliedProbability, groupLegsByGame } from '../../utils/enterpriseAdapters.js';
 
-export function registerModel(bot) {
+export function registerModel(bot) { ... }
   bot.onText(/^\/model(?: (.+))?/, async (msg, match) => {
     const sport = match[1] || 'default';
     const chatId = msg.chat.id;
