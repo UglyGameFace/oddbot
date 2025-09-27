@@ -2,7 +2,7 @@
   "//": "railway.json - ENTERPRISE DEPLOYMENT CONFIGURATION FOR RAILWAY (fixed health checks)",
   "build": {
     "builder": "nixpacks",
-    "buildCommand": "npm install --omit=dev"
+    "buildCommand": "npm install --omit=dev && npm run build"
   },
   "deploy": {
     "startCommand": "npm start",
