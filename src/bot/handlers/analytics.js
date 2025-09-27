@@ -1,5 +1,5 @@
 // src/bot/handlers/analytics.js
-import oddsService from '../services/oddsService.js';
+import oddsService from '../../services/oddsService.js';
 import psychometric from './psychometric.js';
 import { analyzeQuantitative } from '../utils/enterpriseUtilities.js';
 
