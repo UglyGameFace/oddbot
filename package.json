@@ -1,6 +1,6 @@
 {
   "name": "institutional-ai-parlay-bot",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "Fully-featured Telegram parlay bot with AI, analytics, ML, and scheduled caching",
   "main": "src/bot.js",
   "type": "module",
@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node src/bot.js",
-    "dev": "NODE_ENV=production nodemon src/bot.js",
+    "dev": "NODE_ENV=development nodemon src/bot.js",
     "worker:odds": "node src/workers/oddsIngestion.js",
     "worker:notifications": "node src/workers/notificationWorker.js",
     "lint": "eslint . --ext .js",
@@ -35,8 +35,7 @@
     "node-telegram-bot-api": "^0.63.0",
     "openai": "^4.0.0",
     "pg": "^8.10.0",
-    "pidusage": "^3.0.2",
-    "redis": "^4.6.0"
+    "pidusage": "^3.0.2"
   },
   "devDependencies": {
     "eslint": "^8.40.0",
