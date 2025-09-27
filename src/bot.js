@@ -69,7 +69,7 @@ app.get('/healthz', healthOk);              app.head('/healthz', healthOk);
 app.get('/health/readiness', healthOk);     app.head('/health/readiness', healthOk);
 app.get('/health/liveness', healthOk);      app.head('/health/liveness', healthOk);
 
-// Legacy typo (seen in prior configs)
+// Legacy typo coverage (if previously configured)
 app.get('/heath/readiness', healthOk);      app.head('/heath/readiness', healthOk);
 
 const webhookPath = `/webhook/${Buffer.from(TOKEN).toString('hex').slice(0, 32)}`;
@@ -92,6 +92,7 @@ async function startWebhook() {
     }
   });
 
+  // Register webhook with explicit allowed_updates
   const fullWebhook = `${APP_URL.replace(/\/+$/, '')}${webhookPath}`;
   await bot.setWebHook(fullWebhook, {
     secret_token: SECRET || undefined,
