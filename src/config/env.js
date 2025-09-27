@@ -24,6 +24,7 @@ const env = cleanEnv(process.env, {
   SUPABASE_URL: url(),
   SUPABASE_ANON_KEY: str(),
   SUPABASE_SERVICE_KEY: str({ default: '' }),
+
   GOOGLE_GEMINI_API_KEY: str(),
   PERPLEXITY_API_KEY: str(),
   THE_ODDS_API_KEY: str(),
@@ -40,7 +41,7 @@ const env = cleanEnv(process.env, {
   HOST: str({ default: '0.0.0.0' }),
   APP_URL: url({ default: 'http://localhost:3000' }),
 
-  // Webhook secret aliases (optional via defaults)
+  // Optional aliases
   TELEGRAM_WEBHOOK_SECRET: str({ default: process.env.TG_WEBHOOK_SECRET || '' }),
   TG_WEBHOOK_SECRET: str({ default: process.env.TELEGRAM_WEBHOOK_SECRET || '' }),
 
@@ -79,7 +80,6 @@ const env = cleanEnv(process.env, {
   },
 });
 
-// Normalize and export helpful flags/values
 const normalized = Object.freeze({
   ...env,
   WEBHOOK_SECRET: (env.TELEGRAM_WEBHOOK_SECRET || env.TG_WEBHOOK_SECRET || '').trim(),
