@@ -28,16 +28,16 @@ const env = cleanEnv(process.env, {
   
   // APIs
   SUPABASE_URL: url(),
-  SUPABASE_ANON_KEY: str(), // Note: Your file used ANON_KEY, I'm using that.
+  SUPABASE_ANON_KEY: str(),
   SUPABASE_SERVICE_KEY: str({ default: '' }),
   GOOGLE_GEMINI_API_KEY: str(),
   PERPLEXITY_API_KEY: str(),
-  THE_ODDS_API_KEY: str(), // Note: Your file used this name, I'm matching it.
+  THE_ODDS_API_KEY: str(),
   SPORTRADAR_API_KEY: str(),
-  API_SPORTS_KEY: str(), // Note: You had this key, I've included it.
+  API_SPORTS_KEY: str(),
 
   // Sentry
-  SENTRY_DSN: str({default: ''}),
+  SENTRY_DSN: str({ default: '' }),
   SENTRY_ENVIRONMENT: str({ default: '' }),
   SENTRY_TRACES_SAMPLE_RATE: num({ default: 0.2 }),
   SENTRY_ENABLE_PROFILING: bool({ default: false }),
@@ -47,7 +47,11 @@ const env = cleanEnv(process.env, {
   PORT: num({ devDefault: 3000 }),
   HOST: str({ default: '0.0.0.0' }),
   APP_URL: url({ default: 'http://localhost:3000' }),
-  TELEGRAM_WEBHOOK_SECRET: str({ default: '' }),
+
+  // Webhook secret aliases (optional via defaults)
+  // Accept either name; defaults make them optional so envalid won’t throw
+  TELEGRAM_WEBHOOK_SECRET: str({ default: process.env.TG_WEBHOOK_SECRET || '' }),
+  TG_WEBHOOK_SECRET: str({ default: process.env.TELEGRAM_WEBHOOK_SECRET || '' }),
   
   // Application Logic
   RATE_LIMIT_REQUESTS: num({ default: 100 }),
@@ -72,7 +76,6 @@ const env = cleanEnv(process.env, {
 }, {
   strict: true,
   dotEnvPath: '.env',
-  // Your custom reporter logic is preserved
   reporter: ({ errors }) => {
     if (Object.keys(errors).length > 0) {
       console.error('❌ ENVIRONMENT VALIDATION FAILED:');
@@ -88,4 +91,11 @@ const env = cleanEnv(process.env, {
   },
 });
 
-export default Object.freeze(env);
+// Normalize a single WEBHOOK_SECRET field for the app to use
+const normalized = Object.freeze({
+  ...env,
+  WEBHOOK_SECRET: (env.TELEGRAM_WEBHOOK_SECRET || env.TG_WEBHOOK_SECRET || '').trim(),
+  USE_WEBHOOK: (env.APP_URL || '').startsWith('https'),
+});
+
+export default normalized;
