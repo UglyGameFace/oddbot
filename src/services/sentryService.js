@@ -1,8 +1,10 @@
-// src/services/sentryService.js — ENTERPRISE-GRADE ERROR + PROFILING + EXPRESS MIDDLEWARE
+// src/services/sentryService.js — ENTERPRISE-GRADE ERROR + PROFILING (ESM-safe)
 import * as Sentry from '@sentry/node';
 import env, { isProduction } from '../config/env.js';
-// Optional CPU profiling (requires native module). Toggle with SENTRY_ENABLE_PROFILING.
-import { nodeProfilingIntegration } from '@sentry/profiling-node';
+
+// Import @sentry/profiling-node using CommonJS interop pattern for ESM [web:759]
+import profilingPkg from '@sentry/profiling-node';
+const { nodeProfilingIntegration } = profilingPkg;
 
 class EnterpriseSentryService {
   constructor() {
@@ -27,7 +29,7 @@ class EnterpriseSentryService {
         environment: env.SENTRY_ENVIRONMENT || env.NODE_ENV || 'production',
         release: `parlay-bot@${process.env.npm_package_version || '1.0.0'}`,
 
-        // Modern integrations API for Node/Express + optional profiling
+        // Modern integrations API for Node/Express + optional profiling [web:705]
         integrations: [
           Sentry.httpIntegration(), // inbound/outbound HTTP instrumentation [web:705]
           // Capture global unhandled rejections with configurable mode (warn|strict|none) [web:706]
