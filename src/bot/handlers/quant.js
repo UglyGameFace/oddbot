@@ -4,7 +4,9 @@ import oddsService from '../../services/oddsService.js';
 export function registerQuant(bot) {
   bot.onText(/\/quant/, async (msg) => {
     const chatId = msg.chat.id;
+    // FIX: Call the method from the imported service object
     const games = await oddsService.getGamesForSportCached('americanfootball_nfl');
+    
     if (!games?.length) return bot.sendMessage(chatId, 'Not enough game data to run quant analysis. Try again later.');
 
     let best = { price: Infinity, name: 'N/A', game: { away_team: 'N/A', home_team: 'N/A' } };
