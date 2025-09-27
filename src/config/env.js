@@ -37,11 +37,12 @@ const env = cleanEnv(process.env, {
   SENTRY_ENABLE_PROFILING: bool({ default: false }),
   PROFILES_SAMPLE_RATE: num({ default: 0.25 }),
 
+  // Prefer platform-injected PORT; devDefault for local runs
   PORT: num({ devDefault: 3000 }),
   HOST: str({ default: '0.0.0.0' }),
   APP_URL: url({ default: 'http://localhost:3000' }),
 
-  // Optional aliases
+  // Optional aliases for the Telegram webhook secret
   TELEGRAM_WEBHOOK_SECRET: str({ default: process.env.TG_WEBHOOK_SECRET || '' }),
   TG_WEBHOOK_SECRET: str({ default: process.env.TELEGRAM_WEBHOOK_SECRET || '' }),
 
@@ -68,7 +69,7 @@ const env = cleanEnv(process.env, {
   reporter: ({ errors }) => {
     if (Object.keys(errors).length > 0) {
       console.error('❌ ENVIRONMENT VALIDATION FAILED:');
-      Object.entries(errors).forEach(([key, error]) => console.error(`   ${key}: ${error.message}`));
+      Object.entries(errors).forEach(([k, e]) => console.error(`   ${k}: ${e.message}`));
       if (process.env.SENTRY_DSN) {
         Sentry.captureException(new Error('Environment validation failed'), {
           extra: { errors: JSON.stringify(errors, null, 2) },
@@ -80,6 +81,7 @@ const env = cleanEnv(process.env, {
   },
 });
 
+// Normalize and export helpful flags
 const normalized = Object.freeze({
   ...env,
   WEBHOOK_SECRET: (env.TELEGRAM_WEBHOOK_SECRET || env.TG_WEBHOOK_SECRET || '').trim(),
