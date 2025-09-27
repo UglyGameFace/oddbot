@@ -1,39 +1,32 @@
 // src/services/oddsCacheAdapters.js
-// Adapter to expose handler-expected ESM named exports by delegating to the
-// existing ProvenOddsService default export in oddsService.js.
-
+import oddsService from './oddsService.js';
 import redis from './redisService.js';
-import service from './oddsService.js';
+import sentry from './sentryService.js';
 
-// TTLs for per-id game index
-const GAMEIDX_TTL = 120; // seconds
+const CACHE_TTL = 300; // 5 minutes
 
-// Map ProvenOddsService.getSupportedSports() to handler-expected shape
-export async function getAvailableSportsCached() {
-  const sports = await service.getSupportedSports();
-  // Handlers expect { sport_key, sport_title }
-  return (sports || []).map(s => ({
-    sport_key: s.key,
-    sport_title: s.title || s.key,
-  }));
-}
-
-// Map ProvenOddsService.getSportOdds(sportKey) and build an ID index for details
 export async function getGamesForSportCached(sportKey) {
-  const games = await service.getSportOdds(sportKey);
-  // Index by id for quick details lookup on refresh
-  for (const g of games || []) {
-    if (g?.id) {
-      await redis.set(`odds:game:${g.id}`, JSON.stringify(g), 'EX', GAMEIDX_TTL);
+  const redisClient = await redis; // FIX: await the redis connection
+  const cacheKey = `games:${sportKey}`;
+
+  try {
+    const cached = await redisClient.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+  } catch (err) {
+    console.error(`Redis GET error for ${cacheKey}:`, err.message);
+    sentry.captureError(err, { component: 'odds_cache_adapter_read' });
+  }
+
+  const data = await oddsService.getSportOdds(sportKey);
+
+  if (data && data.length) {
+    try {
+      await redisClient.set(cacheKey, JSON.stringify(data), 'EX', CACHE_TTL);
+    } catch (err) {
+      console.error(`Redis SET error for ${cacheKey}:`, err.message);
+      sentry.captureError(err, { component: 'odds_cache_adapter_write' });
     }
   }
-  return games || [];
-}
 
-// Retrieve latest game object by id from the adapter’s index
-export async function getGameDetailsCached(gameId) {
-  if (!gameId) return null;
-  const raw = await redis.get(`odds:game:${gameId}`);
-  if (!raw) return null;
-  try { return JSON.parse(raw); } catch { return null; }
+  return data;
 }
