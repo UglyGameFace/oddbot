@@ -9,7 +9,6 @@
     "dev": "nodemon src/bot.js",
     "worker:odds": "node src/workers/oddsIngestion.js",
     "worker:notifications": "node src/workers/notificationWorker.js",
-    "build": "node src/build.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",
