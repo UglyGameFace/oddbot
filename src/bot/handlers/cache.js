@@ -1,8 +1,8 @@
 import cron from 'node-cron';
-import { refreshCache } from '../../services/oddsCacheAdapters.js';
+import '../../oddsCacheAdapters.js';
 import redisService from '../../services/redisService.js';
 
-export function registerCache(bot) {
+export function someCacheHandler() {
   // On command
   bot.onText(/^\/cache refresh$/, async (msg) => {
     const chatId = msg.chat.id;
