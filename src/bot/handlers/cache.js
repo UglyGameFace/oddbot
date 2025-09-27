@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { cacheOdds, flushCache } from '../../services/oddsCacheAdapters.js';
-import redisService from '../../services/redisService.js';
+import redisService from './services/redisService.js';
 
 export function someCacheHandler() {
   // On command
