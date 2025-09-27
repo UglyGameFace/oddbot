@@ -34,8 +34,9 @@ if (!TOKEN) {
   console.error('TELEGRAM_BOT_TOKEN is required');
   process.exit(1);
 }
-const APP_URL = env.APP_URL || ''; // should be an https public URL in production
-const WEBHOOK_SECRET = env.TG_WEBHOOK_SECRET || env.WEBHOOK_SECRET || process.env.TG_WEBHOOK_SECRET || '';
+const APP_URL = env.APP_URL || '';
+// Normalize secret from either name and the normalized WEBHOOK_SECRET exported by env.js
+const WEBHOOK_SECRET = (env.WEBHOOK_SECRET || env.TELEGRAM_WEBHOOK_SECRET || env.TG_WEBHOOK_SECRET || '').trim();
 const USE_WEBHOOK = Boolean(APP_URL && APP_URL.startsWith('https'));
 
 const bot = new TelegramBot(TOKEN, { polling: !USE_WEBHOOK });
@@ -68,22 +69,26 @@ async function main() {
     const webhookPath = `/webhook/${TOKEN}`;
 
     // Verify Telegram secret header if configured
-    app.post(webhookPath, (req, res, next) => {
-      const incoming = req.headers['x-telegram-bot-api-secret-token'];
-      if (WEBHOOK_SECRET && incoming !== WEBHOOK_SECRET) {
-        return res.sendStatus(403);
+    app.post(
+      webhookPath,
+      (req, res, next) => {
+        if (WEBHOOK_SECRET) {
+          const incoming = req.headers['x-telegram-bot-api-secret-token'];
+          if (incoming !== WEBHOOK_SECRET) return res.sendStatus(403);
+        }
+        next();
+      },
+      (req, res) => {
+        bot.processUpdate(req.body);
+        res.sendStatus(200);
       }
-      next();
-    }, (req, res) => {
-      bot.processUpdate(req.body);
-      res.sendStatus(200);
-    });
+    );
 
     console.log('Setting webhook...');
-    // Include secret_token so Telegram sends the header for verification
+    // Include secret_token only when configured so Telegram sends the header
     await bot.setWebHook(`${APP_URL}${webhookPath}`, {
       secret_token: WEBHOOK_SECRET || undefined,
-      // drop_pending_updates: false, // uncomment if you need to clear backlog: true
+      // drop_pending_updates: false,
     });
     console.log(`Webhook successfully set to: ${APP_URL}${webhookPath}`);
   }
@@ -106,7 +111,7 @@ async function main() {
   const me = await bot.getMe();
   console.log(`✅ Bot @${me.username} fully initialized.`);
 
-  // IMPORTANT: Prefer Railway's injected PORT over any default
+  // IMPORTANT: Prefer Railway's injected PORT over any default, and bind to 0.0.0.0
   const PORT = Number(process.env.PORT) || Number(env.PORT) || 8080;
   const HOST = '0.0.0.0';
   server = app.listen(PORT, HOST, () => {
