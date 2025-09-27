@@ -1,16 +1,12 @@
 // src/bot/handlers/custom.js
 import env from '../../config/env.js';
 import {
-  getBuilderConfig, setBuilderConfig,
+  getBuilderConfig,
   getParlaySlip, setParlaySlip,
   getUserState, setUserState,
   saveToken, loadToken,
 } from '../state.js';
-import {
-  getAvailableSportsCached,
-  getGamesForSportCached,
-  getGameDetailsCached,
-} from '../../services/oddsService.js';
+import oddsService from '../../services/oddsService.js';
 import redis from '../../services/redisService.js';
 import {
   formatGameTimeTZ,
@@ -53,7 +49,7 @@ export function registerCustom(bot) {
 export function registerCustomCallbacks(bot) {
   bot.on('callback_query', async (cbq) => {
     const { data, message } = cbq || {};
-    if (!data || !message) return;
+    if (!data || !message || !data.startsWith('c')) return;
     const chatId = message.chat.id;
 
     try { await bot.answerCallbackQuery(cbq.id); } catch {}
@@ -111,44 +107,6 @@ export function registerCustomCallbacks(bot) {
         rows.push([{ text: '« Back', callback_data: 'cslip_back' }]);
         return bot.sendMessage(chatId, 'Select a leg to remove:', { reply_markup: { inline_keyboard: rows } });
       }
-      if (action === 'save') {
-        const rows = [
-          [{ text: 'Save to Slot 1', callback_data: 'cslip_save_1' }],
-          [{ text: 'Save to Slot 2', callback_data: 'cslip_save_2' }],
-          [{ text: 'Save to Slot 3', callback_data: 'cslip_save_3' }],
-        ];
-        return bot.sendMessage(chatId, 'Choose a slot to save the current slip:', { reply_markup: { inline_keyboard: rows } });
-      }
-      if (action === 'load') {
-        const rows = [
-          [{ text: 'Load Slot 1', callback_data: 'cslip_load_1' }],
-          [{ text: 'Load Slot 2', callback_data: 'cslip_load_2' }],
-          [{ text: 'Load Slot 3', callback_data: 'cslip_load_3' }],
-        ];
-        return bot.sendMessage(chatId, 'Choose a slot to load:', { reply_markup: { inline_keyboard: rows } });
-      }
-      if (action === 'stake') {
-        await setUserState(chatId, 'stake_input', 120);
-        return bot.sendMessage(chatId, 'Enter a stake amount (number):');
-      }
-      if (action === 'refresh') {
-        for (const p of slip.picks) {
-          if (!p.gameId || !p.marketKey) continue;
-          try {
-            const g = await getGameDetailsCached(p.gameId);
-            const m = g?.bookmakers?.[0]?.markets?.find((x) => x.key === p.marketKey);
-            if (!m?.outcomes) continue;
-            const found = m.outcomes.find((o) => {
-              const pt = o.point ? (o.point > 0 ? `+${o.point}` : `${o.point}`) : '';
-              const sel = `${o.name} ${pt}`.trim();
-              return sel === p.selection;
-            });
-            if (found && typeof found.price === 'number') p.odds = parseInt(found.price, 10);
-          } catch {}
-        }
-        await setParlaySlip(chatId, slip);
-        return renderParlaySlip(bot, chatId);
-      }
       if (action === 'back') return renderParlaySlip(bot, chatId);
     }
 
@@ -164,10 +122,8 @@ export function registerCustomCallbacks(bot) {
   });
 }
 
-export function registerSlipCallbacks(_bot) {}
-
 export async function sendCustomSportSelection(bot, chatId, messageId = null) {
-  const sports = await getAvailableSportsCached();
+  const sports = await oddsService.getAvailableSportsCached();
   if (!sports?.length) return bot.sendMessage(chatId, 'No upcoming games found in the database.');
 
   const chosen = new Set(await getCustomSelectedSports(chatId));
@@ -187,9 +143,9 @@ export async function sendCustomSportSelection(bot, chatId, messageId = null) {
 
 export async function sendCustomGamesFromSelected(bot, chatId, messageId) {
   const selected = await getCustomSelectedSports(chatId);
-  const sports = selected.length ? selected : (await getAvailableSportsCached()).map((s) => s.sport_key);
+  const sports = selected.length ? selected : (await oddsService.getAvailableSportsCached()).map((s) => s.sport_key);
   const b = await getBuilderConfig(chatId);
-  const perSport = await Promise.all(sports.map((k) => getGamesForSportCached(k)));
+  const perSport = await Promise.all(sports.map((k) => oddsService.getGamesForSportCached(k)));
   const pooled = applyFilters(perSport.flat(), { cutoffHours: b.cutoffHours, excludedTeams: b.excludedTeams });
 
   if (!pooled.length) {
@@ -202,7 +158,7 @@ export async function sendCustomGamesFromSelected(bot, chatId, messageId) {
 }
 
 export async function sendMarketSelection(bot, chatId, gameId, messageId) {
-  const g = await getGameDetailsCached(gameId);
+  const g = await oddsService.getGameDetailsCached(gameId);
   if (!g?.bookmakers?.length) return bot.editMessageText('Could not find market data.', { chat_id: chatId, message_id: messageId });
 
   const keys = g.bookmakers[0].markets.map((m) => m.key);
@@ -217,7 +173,7 @@ export async function sendMarketSelection(bot, chatId, gameId, messageId) {
 }
 
 export async function sendPickSelection(bot, chatId, gameId, marketKey, messageId) {
-  const g = await getGameDetailsCached(gameId);
+  const g = await oddsService.getGameDetailsCached(gameId);
   const m = g?.bookmakers?.[0]?.markets?.find((x) => x.key === marketKey);
   if (!m) return bot.editMessageText('Market not available.', { chat_id: chatId, message_id: messageId });
 
@@ -271,7 +227,6 @@ export async function renderParlaySlip(bot, chatId) {
   }
 
   if (!slip.picks.length) {
-    try { await bot.editMessageText('Your parlay slip is empty. Select a sport to add a leg.', { chat_id: chatId, message_id: slip.messageId }); } catch {}
     try { await bot.deleteMessage(chatId, slip.messageId); } catch {}
     await setParlaySlip(chatId, { picks: [], stake: slip.stake || 10, messageId: null, totalOdds: 0 });
     return sendCustomSportSelection(bot, chatId);
@@ -282,7 +237,7 @@ export async function renderParlaySlip(bot, chatId) {
     if (!groups[p.game]) groups[p.game] = { commence_time: p.commence_time || null, picks: [] };
     groups[p.game].picks.push(p);
     if (!groups[p.game].commence_time && p.gameId) {
-      const det = await getGameDetailsCached(p.gameId);
+      const det = await oddsService.getGameDetailsCached(p.gameId);
       groups[p.game].commence_time = det?.commence_time || groups[p.game].commence_time;
     }
   }
@@ -307,9 +262,7 @@ export async function renderParlaySlip(bot, chatId) {
   const rows = [
     [{ text: '➕ Add Another Leg', callback_data: 'cslip_add' }],
     [{ text: '🧹 Remove a Leg', callback_data: 'cslip_manage' }, { text: `🗑️ Clear (${slip.picks.length})`, callback_data: 'cslip_clear' }],
-    [{ text: '💾 Save', callback_data: 'cslip_save' }, { text: '📂 Load', callback_data: 'cslip_load' }],
     [{ text: `💵 Stake: $${Number(slip.stake || 0).toFixed(2)}`, callback_data: 'cslip_stake' }],
-    [{ text: '🔄 Refresh Odds', callback_data: 'cslip_refresh' }],
   ];
 
   await bot.editMessageText(text, { parse_mode: 'Markdown', chat_id: chatId, message_id: slip.messageId, reply_markup: { inline_keyboard: rows } });
