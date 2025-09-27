@@ -10,7 +10,7 @@ import {
   getAvailableSportsCached,
   getGamesForSportCached,
   getGameDetailsCached,
-} from '../../services/oddsCacheAdapters.js';
+} from '../../services/oddsService.js';
 import redis from '../../services/redisService.js';
 import {
   formatGameTimeTZ,
