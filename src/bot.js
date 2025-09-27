@@ -2,30 +2,20 @@
 import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
-import { sentryService } from './services/sentryService.js'; // FIX: Use named import
+import sentryService from './services/sentryService.js';
 import { registerAnalytics } from './bot/handlers/analytics.js';
 import { registerModel } from './bot/handlers/model.js';
 import { registerCacheHandler } from './bot/handlers/cache.js';
 import { registerCustom, registerCustomCallbacks } from './bot/handlers/custom.js';
 import { registerAI, registerAICallbacks } from './bot/handlers/ai.js';
 import { registerQuant } from './bot/handlers/quant.js';
-import { registerPlayer, registerPlayerCallbacks } from './bot/handlers/player.js';
-import { registerSettings, registerSettingsCallbacks } from './bot/handlers/settings.js';
-import { registerSystem, registerSystemCallbacks } from './bot/handlers/system.js';
+import { registerPlayer } from './bot/handlers/player.js'; // FIX: Removed non-existent import
+import { registerSettings } from './bot/handlers/settings.js'; // FIX: Removed non-existent import
+import { registerSystem } from './bot/handlers/system.js'; // FIX: Removed non-existent import
 import { registerTools, registerCommonCallbacks } from './bot/handlers/tools.js';
 
-// Create Express app
 const app = express();
-
-// LIVENESS & HEALTH PROBES
 app.get('/liveness', (_req, res) => res.sendStatus(200));
-app.head('/liveness', (_req, res) => res.sendStatus(200));
-const healthOk = (_req, res) => res.status(200).send('OK');
-['/', '/health', '/healthz', '/health/readiness', '/health/liveness'].forEach((path) => {
-  app.get(path, healthOk);
-  app.head(path, healthOk);
-});
-
 sentryService.attachExpressPreRoutes?.(app);
 app.use(express.json());
 
@@ -50,12 +40,9 @@ async function wireHandlers() {
   registerAI(bot);
   registerAICallbacks(bot);
   registerQuant(bot);
-  registerPlayer(bot);
-  registerPlayerCallbacks(bot);
-  registerSettings(bot);
-  registerSettingsCallbacks(bot);
-  registerSystem(bot);
-  registerSystemCallbacks(bot);
+  registerPlayer(bot); // FIX: No second callback function needed
+  registerSettings(bot); // FIX: No second callback function needed
+  registerSystem(bot); // FIX: No second callback function needed
   registerTools(bot);
   registerCommonCallbacks(bot);
   console.log('✅ All handlers registered.');
@@ -67,8 +54,13 @@ async function startWebhook() {
     if (SECRET && req.headers['x-telegram-bot-api-secret-token'] !== SECRET) {
       return res.status(401).send('Unauthorized');
     }
-    try { bot.processUpdate(req.body || {}); res.sendStatus(200); }
-    catch (e) { console.error('processUpdate failed:', e?.message || e); res.sendStatus(500); }
+    try { 
+      bot.processUpdate(req.body || {}); 
+      res.sendStatus(200); 
+    } catch (e) { 
+      console.error('processUpdate failed:', e?.message || e); 
+      res.sendStatus(500); 
+    }
   });
   const fullWebhook = `${APP_URL.replace(/\/+$/, '')}${webhookPath}`;
   await bot.setWebHook(fullWebhook, { secret_token: SECRET || undefined, allowed_updates: ['message','callback_query'] });
@@ -88,7 +80,6 @@ async function initialize() {
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
-console.log(`Binding host ${HOST}, port ${PORT}`);
 app.listen(PORT, HOST, () => {
   console.log(`HTTP server listening on [${HOST}]:${PORT}. Initializing bot...`);
   initialize().catch((e) => {
@@ -96,7 +87,3 @@ app.listen(PORT, HOST, () => {
     process.exit(1);
   });
 });
-
-// Graceful shutdown
-process.on('SIGTERM', () => app.close?.(() => process.exit(0)));
-process.on('SIGINT', () => app.close?.(() => process.exit(0)));
