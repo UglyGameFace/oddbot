@@ -1,0 +1,41 @@
+{
+  "name": "institutional-ai-parlay-bot",
+  "version": "3.0.0",
+  "description": "Fully-featured Telegram parlay bot with AI, analytics, ML, and scheduled caching",
+  "main": "src/bot.js",
+  "type": "module",
+  "engines": { "node": ">=20.0.0" },
+  "scripts": {
+    "start": "node src/bot.js",
+    "dev": "NODE_ENV=production nodemon src/bot.js",
+    "lint": "eslint . --ext .js",
+    "format": "prettier --write \"src/**/*.js\""
+  },
+  "dependencies": {
+    "@sentry/node": "^8.0.0",
+    "@sentry/profiling-node": "^1.5.1",
+    "crypto-js": "^4.2.0",
+    "dotenv": "^10.0.0",
+    "envalid": "^7.0.0",
+    "express": "^4.18.2",
+    "ioredis": "^5.3.2",
+    "merkletreejs": "^0.3.11",
+    "ml-kmeans": "^6.0.0",
+    "ml-matrix": "^6.10.4",
+    "ml-pca": "^4.1.1",
+    "ml-regression": "^6.3.0",
+    "node-cron": "^3.0.3",
+    "node-telegram-bot-api": "^0.61.0",
+    "pg": "^8.10.0",
+    "redis": "^4.6.0",
+    "@google/generative-ai": "^0.4.0",
+    "openai": "^4.0.0",
+    "axios": "^1.6.7"
+  },
+  "devDependencies": {
+    "eslint": "^8.40.0",
+    "eslint-config-prettier": "^9.3.0",
+    "nodemon": "^2.0.20",
+    "prettier": "^3.0.0"
+  }
+}
