@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node src/bot.js",
-    "dev": "NODE_ENV=development nodemon src/bot.js",
+    "dev": "NODE_ENV=production nodemon src/bot.js",
     "worker:odds": "node src/workers/oddsIngestion.js",
     "worker:notifications": "node src/workers/notificationWorker.js",
     "lint": "eslint . --ext .js",
