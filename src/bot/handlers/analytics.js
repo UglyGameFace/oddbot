@@ -1,26 +1,27 @@
-import { getOdds } from '../../services/oddsService.js';
-import aiService from '../../services/aiService.js';
-import { analyzeQuantitative } from '../../quant.js';            // goes up two, lands in src/
-import { psychometricAnalysis } from '../../psychometric.js';    // goes up two, lands in src/
+// src/bot/handlers/analytics.js
 
-export function registerAnalytics(bot) {
-  bot.onText(/^\/analytics(?: (.+))?/, async (msg, match) => {
-    const query = match[1] || '';
-    const chatId = msg.chat.id;
-    try {
-      // 1. Fetch odds data
-      const oddsData = await getOdds(query);
-      // 2. AI validation
-      const aiResult = await aiService.validateOdds(oddsData);
-      const validOdds = aiResult.confidence > 0.8 ? aiResult.data : oddsData;
-      // 3. Quantitative & psychometric analysis
-      const quantReport = analyzeQuantitative(validOdds);
-      const psychoReport = psychometricAnalysis(validOdds);
-      // Send combined report
-      await bot.sendMessage(chatId, `📊 Quantitative Insights:\n${quantReport}\n\n🧠 Behavioral Insights:\n${psychoReport}`);
-    } catch (e) {
-      console.error('Analytics error:', e);
-      await bot.sendMessage(chatId, '❌ Failed to generate analytics.');
-    }
-  });
+import oddsService from '../../services/oddsService.js'; // <-- default export, not named getOdds
+import aiService from '../../services/aiService.js';
+import { analyzeQuantitative } from '../../quant.js'; // assuming you export this function
+import psychometric from '../../psychometric.js'; // default export
+
+// EXAMPLE: Usage
+export async function analyzeAll(sportKey, tg_id) {
+    // Get odds via the oddsService
+    const games = await oddsService.getSportOdds(sportKey);
+
+    // AI Quantitative analysis
+    const quantResult = analyzeQuantitative ? await analyzeQuantitative(games) : null;
+
+    // Do something with aiService if needed
+    // const aiResult = await aiService.someMethod(...);
+
+    // Psychometric analysis (example: profile a user/thread)
+    const psychoProfile = await psychometric.profileUser(tg_id);
+
+    return {
+        quantResult,
+        // aiResult,
+        psychoProfile,
+    };
 }
