@@ -3,7 +3,6 @@
   "environments": {
     "production": {
       "build": {
-        "builder": "nixpacks",
         "buildCommand": "npm ci --omit=dev || npm install --omit=dev"
       },
       "deploy": {
