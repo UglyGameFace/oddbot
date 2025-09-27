@@ -1,8 +1,8 @@
-// src/services/redisService.js - Centralized Redis Client with Keep-Alive
+// src/services/redisService.js
 
 import Redis from 'ioredis';
 import env from '../config/env.js';
-import sentryService from './sentryService.js'; // Corrected import
+import { sentryService } from './sentryService.js'; // FIX: Use named import
 
 let redis;
 let isConnecting = false;
