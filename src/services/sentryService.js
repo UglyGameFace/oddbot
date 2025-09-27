@@ -1,6 +1,5 @@
-// src/services/sentryService.js - ENTERPRISE-GRADE ERROR MONITORING & PERFORMANCE TRACKING
+// src/services/sentryService.js - ENTERPRISE-GRADE ERROR MONITORING & PERFORMANCE TRACKING (stable)
 import * as Sentry from '@sentry/node';
-// The ProfilingIntegration has been intentionally removed to fix compatibility issues with Termux
 import env, { isProduction } from '../config/env.js';
 
 class EnterpriseSentryService {
@@ -33,18 +32,27 @@ class EnterpriseSentryService {
       });
       this.initialized = true;
       console.log('✅ Sentry Enterprise Monitoring Initialized (Profiler Disabled for Compatibility)');
+
+      // Global process-level safety nets
+      process.on('unhandledRejection', (reason) => {
+        Sentry.captureException(reason instanceof Error ? reason : new Error(String(reason)));
+        console.error('UnhandledRejection:', reason);
+      });
+      process.on('uncaughtException', (err) => {
+        Sentry.captureException(err);
+        console.error('UncaughtException:', err);
+      });
     } catch (error) {
       console.error('❌ Sentry initialization failed:', error);
     }
   }
 
-  // ONLY NEW ADDITION: Express middleware hooks
+  // Express middleware hooks (order per Sentry docs)
   attachExpressPreRoutes(app) {
     if (!this.initialized) return;
     if (Sentry.Handlers?.requestHandler) app.use(Sentry.Handlers.requestHandler());
     if (Sentry.Handlers?.tracingHandler) app.use(Sentry.Handlers.tracingHandler());
   }
-
   attachExpressPostRoutes(app) {
     if (!this.initialized) return;
     if (Sentry.Handlers?.errorHandler) app.use(Sentry.Handlers.errorHandler());
@@ -60,8 +68,8 @@ class EnterpriseSentryService {
 
   captureMessage(message, level = 'info', context = {}) {
     if (!this.initialized) {
-        console.log(`Sentry Message [${level}]:`, message, context);
-        return;
+      console.log(`Sentry Message [${level}]:`, message, context);
+      return;
     }
     Sentry.captureMessage(message, { level, extra: context });
   }
@@ -72,15 +80,16 @@ class EnterpriseSentryService {
   }
 
   startTransaction(options) {
-      if (!this.initialized) {
-          return { finish: () => {}, setStatus: () => {} };
-      }
-      return Sentry.startTransaction(options);
+    if (!this.initialized) {
+      return { finish: () => {}, setStatus: () => {} };
+    }
+    return Sentry.startTransaction(options);
   }
-  
+
   beforeSendEvent(event) {
     if (event.request?.data) {
-        delete event.request.data.password;
+      delete event.request.data.password;
+      delete event.request.data.token;
     }
     return event;
   }
