@@ -17,7 +17,13 @@ import { registerTools, registerCommonCallbacks } from './bot/handlers/tools.js'
 // --- Global Error Catcher ---
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ UNHANDLED REJECTION AT:', promise, 'REASON:', reason);
-  sentryService.captureError(reason);
+  sentryService.captureError(new Error(`Unhandled Rejection: ${reason}`), { extra: { promise } });
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('❌ UNCAUGHT EXCEPTION:', error);
+  sentryService.captureError(error);
+  process.exit(1); // Exit on uncaught exceptions
 });
 
 const app = express();
@@ -26,10 +32,11 @@ const USE_WEBHOOK = env.APP_URL && env.APP_URL.startsWith('https');
 
 // --- Bot Initialization ---
 const bot = new TelegramBot(TOKEN, { polling: !USE_WEBHOOK });
+let server; // Define server variable in a higher scope
 
 // --- Main Application Start ---
 async function main() {
-  // 1. Register all bot command and callback handlers
+  console.log('Registering all bot handlers...');
   registerAnalytics(bot); registerModel(bot); registerCacheHandler(bot);
   registerCustom(bot); registerCustomCallbacks(bot);
   registerAI(bot); registerAICallbacks(bot); registerQuant(bot);
@@ -39,12 +46,15 @@ async function main() {
   registerTools(bot); registerCommonCallbacks(bot);
   console.log('✅ All handlers registered.');
 
-  // 2. Set up Express server and Sentry middleware
+  console.log('Setting up Express server and middleware...');
   app.use(express.json());
   sentryService.attachExpressPreRoutes?.(app);
-  
-  // 3. Define Health Check and Webhook routes
-  app.get('/liveness', (_req, res) => res.sendStatus(200));
+
+  // FIX: Added logging to the health check endpoint to confirm it is being reached.
+  app.get('/liveness', (_req, res) => {
+    console.log('✅ Health check endpoint /liveness was hit successfully.');
+    res.sendStatus(200);
+  });
   ['/', '/health', '/healthz'].forEach(path => app.get(path, (_req, res) => res.send('OK')));
 
   if (USE_WEBHOOK) {
@@ -53,14 +63,14 @@ async function main() {
       bot.processUpdate(req.body);
       res.sendStatus(200);
     });
+    console.log('Setting webhook...');
     await bot.setWebHook(`${env.APP_URL}${webhookPath}`);
     console.log(`Webhook successfully set to: ${env.APP_URL}${webhookPath}`);
   }
 
-  // 4. Attach Sentry's post-request error handler
   sentryService.attachExpressPostRoutes?.(app);
 
-  // 5. Set the command list in Telegram
+  console.log('Setting bot commands in Telegram...');
   const commands = [
     { command: 'ai', description: 'Launch the AI Parlay Builder' },
     { command: 'custom', description: 'Manually build a parlay slip' },
@@ -71,27 +81,42 @@ async function main() {
     { command: 'help', description: 'Show the command guide' },
   ];
   await bot.setMyCommands(commands);
-  console.log('Bot commands have been set in Telegram.');
-  
-  // 6. Final confirmation
+  console.log('✅ Bot commands have been set in Telegram.');
+
   const me = await bot.getMe();
   console.log(`✅ Bot @${me.username} fully initialized.`);
-  
-  // 7. Start the server LAST, only after everything is ready.
-  const PORT = process.env.PORT || 8080;
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Server listening on port ${PORT}. Bot is online in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`);
+
+  const PORT = env.PORT || 8080;
+  // FIX: Start the server and store the instance for graceful shutdown.
+  return new Promise((resolve) => {
+    server = app.listen(PORT, '0.0.0.0', () => {
+      console.log(`🚀 Server listening on port ${PORT}. Bot is online in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`);
+      resolve(server);
+    });
   });
 }
 
-// --- Run the application ---
+// --- Run the application and handle graceful shutdown ---
 main().catch((e) => {
   console.error('❌ Fatal Bot Initialization Error:', e);
+  sentryService.captureError(e);
   process.exit(1);
 });
 
-// --- Graceful Shutdown & Keep-Alive ---
-const shutdown = (signal) => process.exit(0);
+// FIX: Implemented a robust graceful shutdown procedure.
+const shutdown = (signal) => {
+  console.log(`\nReceived ${signal}. Shutting down gracefully...`);
+  if (server) {
+    server.close(() => {
+      console.log('✅ HTTP server closed.');
+      process.exit(0);
+    });
+  } else {
+    process.exit(0);
+  }
+};
+
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
-setInterval(() => {}, 1 << 30);
+
+// FIX: Removed the non-standard setInterval keep-alive hack. The Express server handle is sufficient.
