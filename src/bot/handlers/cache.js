@@ -1,6 +1,5 @@
 // src/bot/handlers/cache.js
 
-import cron from 'node-cron';
 import gamesService from '../../services/gamesService.js';
 import oddsService from '../../services/oddsService.js';
 import { sentryService } from '../../services/sentryService.js';
@@ -10,14 +9,15 @@ import { sentryService } from '../../services/sentryService.js';
  * This is optimized to reduce API quota usage by not fetching every sport.
  */
 async function refreshCache() {
-  console.log('🔄 Running scheduled cache refresh for popular sports...');
+  console.log('🔄 Running manual cache refresh for popular sports...');
   try {
-    // Define a list of only the sports you care about to save API quota
+    // Define a list of only the sports you care about
     const popularSportKeys = [
       'americanfootball_nfl',
+      'americanfootball_ncaaf',
       'basketball_nba',
+      'basketball_wnba',
       'baseball_mlb',
-      'icehockey_nhl'
     ];
 
     // Trigger a cache update for each popular sport
@@ -28,7 +28,7 @@ async function refreshCache() {
     }
     console.log('✅ Cache refresh complete for popular sports.');
   } catch (error) {
-    console.error('Auto cache refresh error:', error);
+    console.error('Manual cache refresh error:', error);
     sentryService.captureError(error, { component: 'cache_handler' });
   }
 }
@@ -48,9 +48,5 @@ export function registerCacheHandler(bot) {
     }
   });
 
-  // --- Auto-refresh scheduled every hour ---
-  // Changed from 15 minutes to 1 hour to reduce API usage.
-  cron.schedule('0 * * * *', () => {
-    refreshCache();
-  });
+  // Automatic scheduled refresh has been removed.
 }
