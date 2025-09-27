@@ -1,30 +1,25 @@
 // src/bot/handlers/cache.js
-
 import cron from 'node-cron';
-import { getGamesForSportCached } from '../../services/oddsService.js';
-import redisService from '../../services/redisService.js';
+import oddsService from '../../services/oddsService.js';
 
-// Real refreshCache that clears Redis "games" keys and re-caches odds for top sports
-// Add sports or use logic to get your sports list as needed
 async function refreshCache() {
-  const sports = ['americanfootball_nfl', 'basketball_nba', 'baseball_mlb']; // update with your relevant keys
+  const sports = ['americanfootball_nfl', 'basketball_nba', 'baseball_mlb'];
+  console.log('🔄 Running scheduled cache refresh...');
   for (const sport of sports) {
-    // This will trigger adapter to update cached data
-    await getGamesForSportCached(sport, { forceRefresh: true });
+    await oddsService.getGamesForSportCached(sport);
   }
-  // Optionally, clear extra Redis keys if you want a hard reset:
-  // await redisService.flushAll(); // use with caution!
+  console.log('✅ Cache refresh complete.');
 }
 
 export function registerCacheHandler(bot) {
-  // On-demand cache refresh command
   bot.onText(/^\/cache refresh$/, async (msg) => {
     const chatId = msg.chat.id;
     try {
+      await bot.sendMessage(chatId, 'Manual cache refresh initiated...');
       await refreshCache();
-      await bot.sendMessage(chatId, '✅ Cache refreshed.');
+      await bot.sendMessage(chatId, '✅ Cache refreshed successfully.');
     } catch (e) {
-      console.error('Cache refresh error:', e);
+      console.error('Manual cache refresh error:', e);
       await bot.sendMessage(chatId, '❌ Cache refresh failed.');
     }
   });
@@ -33,7 +28,6 @@ export function registerCacheHandler(bot) {
   cron.schedule('*/5 * * * *', async () => {
     try {
       await refreshCache();
-      console.log('🗄️ Cache auto-refreshed.');
     } catch (e) {
       console.error('Auto cache refresh error:', e);
     }
