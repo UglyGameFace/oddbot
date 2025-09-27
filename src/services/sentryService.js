@@ -1,64 +1,62 @@
-import * as Sentry from '@sentry/node';
+// src/workers/notificationWorker.js - ENTERPRISE MESSAGE BUS
+import TelegramBot from 'node-telegram-bot-api';
+import redis from '../services/redisService.js';
 import env from '../config/env.js';
+import sentryService from '../services/sentryService.js';
 
-// Profiling integration, dynamic import for ESM safety.
-let profilingIntegration = null;
-try {
-  const { NodeProfiler } = await import('@sentry/profiling-node');
-  profilingIntegration = new NodeProfiler({
-    profilesSampleRate: Number(env.SENTRY_PROFILES_SAMPLE_RATE || 0.1)
-  });
-} catch (e) {
-  // Profiling support may not be enabled, that's OK
+const NOTIFICATION_QUEUE_KEY = 'notification_queue';
+
+class EnterpriseNotificationEngine {
+  constructor() {
+    this.isReady = false;
+    this.bot = null;
+    this.initialize();
+  }
+
+  initialize() {
+    if (env.TELEGRAM_BOT_TOKEN) {
+        this.bot = new TelegramBot(env.TELEGRAM_BOT_TOKEN);
+        this.isReady = true;
+        console.log('✅ Enterprise Notification Engine initialized.');
+        this.startListening();
+    } else {
+        console.warn('🚨 Notification Engine disabled: TELEGRAM_BOT_TOKEN not set.');
+    }
+  }
+
+  async startListening() {
+    console.log('...Notification worker listening for messages on Redis queue...');
+    const redisClient = await redis;
+    while (true) {
+        try {
+            // Blocking pop with a timeout of 0 to wait forever
+            const result = await redisClient.blpop(NOTIFICATION_QUEUE_KEY, 0);
+            if (result) {
+                const notification = JSON.parse(result[1]);
+                await this.deliverNotification(notification);
+            }
+        } catch (error) {
+            console.error('❌ Notification worker error:', error);
+            sentryService.captureError(error, { component: 'notification_worker' });
+            // Wait 5 seconds before retrying to prevent rapid-fire errors
+            await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+    }
+  }
+
+  async deliverNotification(notification) {
+    if (!this.isReady) return;
+    try {
+        await this.bot.sendMessage(notification.userId, notification.message, { parse_mode: 'Markdown' });
+        console.log(`✉️ Notification sent to user ${notification.userId}`);
+    } catch (error) {
+        console.error(`Failed to send notification to ${notification.userId}:`, error.message);
+        sentryService.captureError(error, {
+            component: 'notification_delivery',
+            context: { userId: notification.userId }
+        });
+    }
+  }
 }
 
-// Sentry SDK initialization
-Sentry.init({
-  dsn: env.SENTRY_DSN,
-  environment: env.NODE_ENV,
-  tracesSampleRate: Number(env.SENTRY_TRACES_SAMPLE_RATE ?? 1.0),
-  integrations: [
-    ...(profilingIntegration ? [profilingIntegration] : [])
-  ],
-  beforeSend(event) {
-    if (event.exception?.values?.[0]?.value?.includes('Environment variable')) {
-      return null;
-    }
-    if (event.request?.data) {
-      delete event.request.data.password;
-      delete event.request.data.token;
-    }
-    return event;
-  }
-});
-
-// Middleware helpers for Express
-export default {
-  attachExpressPreRoutes(app) {
-    if (Sentry.Handlers?.requestHandler) {
-      app.use(Sentry.Handlers.requestHandler());
-    }
-    if (Sentry.Handlers?.tracingHandler) {
-      app.use(Sentry.Handlers.tracingHandler());
-    }
-  },
-
-  attachExpressPostRoutes(app) {
-    if (Sentry.Handlers?.errorHandler) {
-      app.use(Sentry.Handlers.errorHandler());
-    }
-  },
-
-  captureError(error, context = {}) {
-    Sentry.captureException(error, { extra: context });
-  },
-
-  captureMessage(message, level = 'info', context = {}) {
-    Sentry.captureMessage(message, { level, extra: context });
-  },
-  
-  setUser(user) {
-    if (!user) return;
-    Sentry.setUser({ id: user.id, username: user.username });
-  }
-};
+new EnterpriseNotificationEngine();
