@@ -1,6 +1,6 @@
 // src/bot/handlers/system.js
 export function registerSystem(bot) {
-  // Advertise main commands to the client
+  // Keep all existing commands and handlers exactly as-is
   bot.setMyCommands([
     { command: '/start', description: 'Welcome & Menu' },
     { command: '/parlay', description: '✨ AI Analyst Parlay' },
@@ -30,5 +30,17 @@ export function registerSystem(bot) {
       chatId,
       `Help\n• /parlay — AI: legs/strategy/props/sports + build on fresh odds\n• /custom — manual builder with per‑leg control\n• /player — search a player and add props\n• /quant — heaviest ML favorite today\n• /calc <odds...> — combine odds & probability\n• /kelly <p> <odds> — stake fraction by Kelly\n• /stake <amount> — set current slip stake\n• /settings — filters, SGP avoid, odds range, hours`,
     );
+  });
+
+  // NEW: Minimal callback ack so taps complete; does not change routing or add UI
+  bot.on('callback_query', async (q) => {
+    try {
+      await bot.answerCallbackQuery(q.id, { cache_time: 0 }); // silent ack to stop spinner [Telegram Bot API]
+      // Do not modify existing flows; your current handlers that inspect q.data keep working
+      // If custom routing is needed, it should remain in your existing modules
+    } catch (e) {
+      // Keep quiet in chat; errors are handled by global/Sentry in the app
+      console.error('callback ack failed:', e?.message || e);
+    }
   });
 }
