@@ -22,6 +22,10 @@ if (env.SENTRY_DSN) {
 export default {
   ...Sentry,
   captureError: (error, context = {}) => {
+    if (!env.SENTRY_DSN) {
+      console.error('Sentry Capture:', { error: error.message, context });
+      return;
+    }
     Sentry.withScope(scope => {
       if (context.tags) {
         Object.keys(context.tags).forEach(key => scope.setTag(key, context.tags[key]));
