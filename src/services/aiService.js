@@ -1,147 +1,150 @@
-// src/services/aiService.js - INSTITUTIONAL AI ENGINE WITH ROBUST PARSER & SPECIALIZED FUNCTIONS
+// src/services/aiService.js
 
-import axios from 'axios';
+import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
 import env from '../config/env.js';
-import sentryService from './sentryService.js';
+import oddsService from './oddsService.js';
+import gamesService from './gamesService.js';
 
-class AdvancedAIService {
-  constructor() {
-    this.PPLX_API_URL = 'https://api.perplexity.ai/chat/completions';
-    console.log('✅ Advanced AI Service Initialized (Perplexity Sonar-Pro).');
-  }
+const safetySettings = [
+  { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+];
 
-  /**
-   * Sanitizes and parses the raw text response from the AI.
-   * FIX: Cleans common formatting errors (like '+' in numbers) before parsing.
-   */
-  sanitizeAndParseAIResponse(responseText) {
-    try {
-      let cleanText = responseText;
-      const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error('No JSON object found in the AI response.');
-      cleanText = jsonMatch[0];
-      cleanText = cleanText.replace(/:\s*\+([0-9])/g, ': $1');
-      return JSON.parse(cleanText);
-    } catch (error) {
-      sentryService.captureError(error, { component: 'ai_parsing', context: { responseText } });
-      console.error("AI Response Text that Failed Parsing:", responseText);
-      throw new Error('The AI returned a malformed analysis.');
-    }
-  }
+const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
 
-  /**
-   * Main function to build a complete parlay based on user strategy.
-   */
-  async buildAIParlay(options, gamesData) {
-    const prompt = this.createMasterPrompt(options, gamesData);
-    try {
-      const response = await axios.post(
-        this.PPLX_API_URL,
+class AIService {
+
+  async generateParlay(sportKey, numLegs = 2, mode = 'live') {
+    const model = genAI.getGenerativeModel({
+      model: 'gemini-pro',
+      safetySettings,
+      generationConfig: {
+        maxOutputTokens: 4096,
+      }
+    });
+
+    let finalPrompt;
+
+    if (mode === 'web') {
+      console.log('AI Service: Using Web Research Only mode.');
+      finalPrompt = `
+        You are a world-class sports betting research analyst. Your ONLY task is to perform a deep, real-time web search to construct a compelling **${numLegs}-leg parlay** for the sport of **${sportKey}**.
+
+        **CRITICAL INSTRUCTIONS:**
+        1.  **IGNORE ALL PREVIOUS DATA:** You MUST IGNORE any structured JSON data provided in previous turns or prompts. Your analysis for this request must come exclusively from your own internal, real-time web search capabilities.
+        2.  **PERFORM DEEP RESEARCH:** Search the web for upcoming games in **${sportKey}**. For each game, you must find information on: team form, recent performance, head-to-head history, player injuries, expert opinions, and breaking news.
+        3.  **IDENTIFY REAL BETS:** Based on your research, find **${numLegs}** specific bets that are currently available on a major, real-world sportsbook (e.g., DraftKings, FanDuel, BetMGM). These can be moneyline, spread, totals, or player props.
+        4.  **PROVIDE EVIDENCE:** For each leg of the parlay, you MUST provide a detailed justification that synthesizes the information you found online. Your reasoning must be sharp, insightful, and evidence-based.
+        5.  **STRICT JSON OUTPUT:** Your final output must be ONLY a valid JSON object in the following format, with no other text, apologies, or explanations.
+
+        **JSON OUTPUT FORMAT:**
         {
-          model: 'sonar',
-          messages: [
-            { role: 'system', content: 'You are a world-class sports betting analyst. Your response MUST be ONLY a single, valid JSON object.' },
-            { role: 'user', content: prompt },
-          ],
-        },
-        { headers: { Authorization: `Bearer ${env.PERPLEXITY_API_KEY}` }, timeout: 90000 }
-      );
-      return this.sanitizeAndParseAIResponse(response.data.choices[0].message.content);
-    } catch (error) {
-      const errorMessage = error.response ? JSON.stringify(error.response.data) : error.message;
-      sentryService.captureError(error, { component: 'ai_build_parlay', context: { errorMessage } });
-      throw new Error(`AI analysis failed: ${errorMessage}`);
-    }
-  }
-
-  /**
-   * NEW: Specialized function to find available player props.
-   */
-  async findPlayerProps(playerName) {
-    const prompt = `
-      As a sports betting prop specialist, your task is to find all commonly available player prop bets for "${playerName}" in their next upcoming game.
-      1.  First, identify the player's team and their next scheduled game.
-      2.  Using real-time online sources, find the most common prop lines available on DraftKings or FanDuel for this player.
-      3.  Focus on major categories: Points, Rebounds, Assists (NBA); Passing/Rushing/Receiving Yards, Touchdowns (NFL); Shots on Goal (NHL), etc.
-
-      MANDATORY OUTPUT FORMAT:
-      Your entire response MUST be a single, valid JSON object.
-
-      {
-        "player_name": "${playerName}",
-        "game": "Team A vs. Team B",
-        "props": [
-          {
-            "market": "Points",
-            "selection": "${playerName} Over 25.5",
-            "odds": -115
-          },
-          {
-            "market": "Assists",
-            "selection": "${playerName} Over 8.5",
-            "odds": -120
-          }
-        ]
-      }
-    `;
-    try {
-      const response = await axios.post(
-        this.PPLX_API_URL,
-        { model: 'sonar-pro', messages: [{ role: 'system', content: 'You are a sports betting prop specialist. Respond ONLY with a single, valid JSON object.' },{ role: 'user', content: prompt }] },
-        { headers: { Authorization: `Bearer ${env.PERPLEXITY_API_KEY}` }, timeout: 60000 }
-      );
-      return this.sanitizeAndParseAIResponse(response.data.choices[0].message.content);
-    } catch (error) {
-      const errorMessage = error.response ? JSON.stringify(error.response.data) : error.message;
-      sentryService.captureError(error, { component: 'ai_find_player_props', context: { errorMessage } });
-      throw new Error(`AI prop search failed: ${errorMessage}`);
-    }
-  }
-
-  createMasterPrompt(options, gamesData) {
-    const today = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-    const gameInfo = gamesData.slice(0, 50).map(g => `${g.sport_title}: ${g.home_team} vs ${g.away_team} (ID: ${g.id})`).join('; ');
-    const strategyDescription = {
-        highprobability: "Focus on selections with the highest statistical probability of success, even if the odds are lower (e.g., heavy moneyline favorites, safer spread covers). Prioritize capital preservation.",
-        balanced: "Seek out 'value' bets where the odds seem favorable relative to the true probability. This includes underdogs with a strong chance to win, or spreads/totals where the market may have misjudged the line.",
-        lottery: "Construct a high-risk, high-reward parlay. Focus on correlated picks, significant underdogs, or difficult prop bets that could lead to a massive payout."
-    };
-    return `
-      As a world-class sports betting analyst, your task is to construct the most optimal parlay based on my request and real-time, online data. Today is ${today}.
-
-      **MY REQUEST:**
-      - Number of Legs: ${options.legs}
-      - Risk Strategy: "${options.strategy}" (${strategyDescription[options.strategy]})
-      - Include Player Props: ${options.includeProps ? 'Yes' : 'No'}
-
-      **YOUR TASK:**
-      1.  **Deep Research:** Use real-time online sources (ESPN, official league stats) to analyze team form, matchups, injuries, betting trends, and line movements.
-      2.  **Quantitative Edge:** Identify a clear, data-driven edge for every pick. State your justification with specific stats.
-      3.  **Player Prop Analysis (If Requested):** Find players with favorable matchups. Justify props like "Over 25.5 points" with hard data.
-      4.  **Parlay Construction:** Select the ${options.legs} best picks that align with my chosen risk strategy.
-
-      **AVAILABLE GAMES SAMPLE:** ${gameInfo}
-
-      **MANDATORY OUTPUT FORMAT:**
-      Your entire response MUST be a single, valid JSON object.
-
-      {
-        "parlay": {
-          "title": "Data-Driven Value Parlay",
-          "total_legs": ${options.legs},
-          "strategy": "${options.strategy}",
-          "overall_narrative": "A brief, compelling story for why this parlay makes sense as a whole.",
-          "legs": [
+          "parlay_legs": [
             {
-              "leg_number": 1, "sport": "NFL", "game": "Team A vs. Team B", "market_type": "Player Props",
-              "selection": "Player X Over 75.5 Rushing Yards", "odds": -115,
-              "justification": "Player X has exceeded this line in 4 of his last 5 games. Team B has the 28th ranked rush defense.", "confidence_score": 8.5
+              "game": "Team A vs Team B",
+              "market": "Player Points",
+              "pick": "Player X Over 22.5",
+              "sportsbook": "DraftKings",
+              "justification": "Based on recent news of Team B's starting defender being injured and Player X's high scoring average in the last 5 games, this prop is highly valuable."
             }
-          ]
+          ],
+          "confidence_score": 0.82
         }
+      `;
+    } else if (mode === 'db') {
+      console.log('AI Service: Using database-only mode.');
+      const gameData = await gamesService.getGamesForSport(sportKey);
+      if (!gameData || gameData.length === 0) {
+        throw new Error('No games found in the database for the specified sport.');
       }
-    `;
+      finalPrompt = `
+        You are an expert sports betting analyst. Your task is to construct a **${numLegs}-leg parlay** using ONLY the provided game data from our internal database.
+
+        **Methodology:**
+        1.  **Game Analysis:** Review the provided game data, focusing on head-to-head (h2h) and spreads odds.
+        2.  **Parlay Construction:** Select exactly **${numLegs} legs** for the parlay from the available markets (h2h, spreads).
+        3.  **Justification and Formatting:** Provide a detailed justification for each leg based on the odds. Your final output must be ONLY a valid JSON object in the format specified below.
+
+        **JSON OUTPUT FORMAT:**
+        {
+          "parlay_legs": [{"game": "...", "market": "...", "pick": "...", "justification": "..."}],
+          "confidence_score": 0.75
+        }
+
+        **Game Data from Database:**
+        \`\`\`json
+        ${JSON.stringify(gameData.slice(0, 15), null, 2)}
+        \`\`\`
+      `;
+    } else { // Default to 'live'
+      console.log('AI Service: Using live API mode.');
+      const liveGames = await oddsService.getSportOdds(sportKey);
+      if (!liveGames || liveGames.length === 0) {
+        throw new Error('Could not fetch live odds for the specified sport.');
+      }
+
+      const enrichedGames = await Promise.all(liveGames.slice(0, 10).map(async (game) => {
+          const playerProps = await oddsService.getPlayerPropsForGame(sportKey, game.id);
+          return { ...game, player_props: playerProps };
+      }));
+      
+      finalPrompt = `
+        You are an expert sports betting analyst with 20 years of experience in quantitative and qualitative analysis. Your task is to construct a **${numLegs}-leg parlay** from the provided game data. You must follow a strict, evidence-based methodology.
+
+        **Methodology:**
+        1.  **Initial Game Analysis:** Review the provided game data, including head-to-head (h2h) odds, spreads, and commence times.
+        2.  **Deep Dive into Player Props:** For the games you've shortlisted, scrutinize the player props data. Look for star players, favorable matchups, and prop bets that seem statistically probable.
+        3.  **Cross-Correlation:** Correlate player performance with game outcomes.
+        4.  **Parlay Construction:** Select exactly **${numLegs} legs** for the parlay. The legs can be a mix of moneyline (h2h), spreads, or player props.
+        5.  **Justification and Formatting:** You MUST provide a detailed justification for each leg, citing specific data points from the provided JSON. Your final output must be ONLY a valid JSON object.
+
+        **JSON OUTPUT FORMAT:**
+          {
+            "parlay_legs": [
+              {
+                "game": "Team A vs Team B",
+                "market": "Moneyline or Player Points",
+                "pick": "Team A",
+                "justification": "Detailed reason citing player props, h2h odds, or other data."
+              }
+            ],
+            "confidence_score": 0.85
+          }
+
+        **Live Game and Player Prop Data:**
+        \`\`\`json
+        ${JSON.stringify(enrichedGames, null, 2)}
+        \`\`\`
+      `;
+    }
+
+    try {
+      const result = await model.generateContent(finalPrompt);
+      const response = await result.response;
+      const text = response.text();
+      const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
+      return JSON.parse(cleanJson);
+    } catch (error) {
+      console.error(`AI parlay generation error in ${mode} mode:`, error);
+      throw new Error(`Failed to generate AI parlay using ${mode} mode.`);
+    }
   }
+
+    async validateOdds(oddsData) {
+        const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
+        const prompt = `Validate the following sports odds data. Is it structured correctly and are the values plausible? Respond with only a JSON object: {"valid": true/false, "reason": "..."}\n\n${JSON.stringify(oddsData)}`;
+        try {
+            const result = await model.generateContent(prompt);
+            const response = await result.response;
+            const text = response.text();
+            return JSON.parse(text);
+        } catch (error) {
+            console.error('AI validation error:', error);
+            return { valid: false, reason: 'AI validation failed' };
+        }
+    }
 }
 
-export default new AdvancedAIService();
+export default new AIService();
