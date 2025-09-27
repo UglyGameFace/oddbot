@@ -6,6 +6,15 @@ import { sentryService } from '../services/sentryService.js';
 import env from '../config/env.js';
 import gamesService from '../services/gamesService.js';
 
+// FIX: Added a top-level, process-wide error catcher. This is the definitive fix.
+// It will catch any unhandled promise rejection that might crash the worker silently.
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ UNHANDLED REJECTION IN ODDS WORKER:', reason);
+  sentryService.captureError(new Error(`Unhandled Rejection in odds worker: ${reason}`), { extra: { promise } });
+  // Optionally, you can decide to exit the process after a critical failure
+  // process.exit(1); 
+});
+
 class InstitutionalOddsIngestionEngine {
   constructor() {
     this.isJobRunning = false;
@@ -20,6 +29,7 @@ class InstitutionalOddsIngestionEngine {
   initializeScheduling() {
     cron.schedule('*/15 * * * *', () => this.runIngestionCycle(), { timezone: env.TIMEZONE });
     console.log('✅ Odds Ingestion Engine scheduled to run every 15 minutes.');
+    // Run once on startup, after a brief delay.
     setTimeout(() => this.runIngestionCycle(), 5000); 
   }
 
@@ -33,15 +43,15 @@ class InstitutionalOddsIngestionEngine {
     let totalUpsertedCount = 0;
 
     try {
+      // This initial call is the most likely point of failure.
       const sports = await gamesService.getAvailableSports();
+      
       if (!sports || sports.length === 0) {
-        console.log('Ingestion cycle complete. No sports available in DB to process.');
+        console.warn('ODDS WORKER: No sports available from GamesService. This could be due to invalid API keys or no games in the database. Cycle will try again later.');
         this.isJobRunning = false;
         return;
       }
 
-      // FIX: Process and upsert data one sport at a time to keep memory usage low and stable.
-      // This prevents the application from exceeding resource limits on startup.
       for (const sport of sports) {
         try {
           const oddsForSport = await OddsService.getSportOdds(sport.sport_key);
