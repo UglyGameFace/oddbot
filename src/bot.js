@@ -14,7 +14,7 @@ import { registerSettings, registerSettingsCallbacks } from './bot/handlers/sett
 import { registerSystem, registerSystemCallbacks } from './bot/handlers/system.js';
 import { registerTools, registerCommonCallbacks } from './bot/handlers/tools.js';
 
-// --- Global Error Catcher ---
+// Global error catcher
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ UNHANDLED REJECTION AT:', promise, 'REASON:', reason);
   sentryService.captureError(new Error(`Unhandled Rejection: ${reason}`), { extra: { promise } });
@@ -27,7 +27,6 @@ process.on('uncaughtException', (error) => {
 
 const app = express();
 
-// Required/optional env
 const TOKEN = env.TELEGRAM_BOT_TOKEN;
 if (!TOKEN) {
   console.error('TELEGRAM_BOT_TOKEN is required');
@@ -40,7 +39,7 @@ const USE_WEBHOOK = env.USE_WEBHOOK === true;
 const bot = new TelegramBot(TOKEN, { polling: !USE_WEBHOOK });
 let server;
 
-// --- Main Application Start ---
+// Main
 async function main() {
   console.log('Registering all bot handlers...');
   registerAnalytics(bot); registerModel(bot); registerCacheHandler(bot);
@@ -56,20 +55,23 @@ async function main() {
   app.use(express.json());
   sentryService.attachExpressPreRoutes?.(app);
 
-  // Liveness/health endpoints for Railway
-  app.get('/liveness', (_req, res) => {
-    console.log('✅ Health check endpoint /liveness was hit successfully.');
-    res.sendStatus(200);
-  });
-  ['/', '/health', '/healthz'].forEach((path) =>
-    app.get(path, (_req, res) => res.status(200).send('OK'))
-  );
+  // Liveness: fast, unauthenticated 200
+  app.get('/', (_req, res) => res.status(200).send('OK'));
+  app.get('/health', (_req, res) => res.sendStatus(200));
   app.head('/health', (_req, res) => res.sendStatus(200));
+  app.get('/liveness', (_req, res) => res.sendStatus(200));
+
+  // Start server BEFORE webhook calls so healthcheck can pass quickly
+  const PORT = Number(process.env.PORT) || Number(env.PORT) || 8080;
+  const HOST = '0.0.0.0';
+  server = app.listen(PORT, HOST, () => {
+    console.log(`🚀 Server listening on ${HOST}:${PORT}. Bot is starting in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`);
+  });
 
   if (USE_WEBHOOK) {
     const webhookPath = `/webhook/${TOKEN}`;
 
-    // Verify Telegram secret header if configured
+    // Verify Telegram secret only on webhook route
     app.post(
       webhookPath,
       (req, res, next) => {
@@ -88,7 +90,6 @@ async function main() {
     console.log('Setting webhook...');
     await bot.setWebHook(`${APP_URL}${webhookPath}`, {
       secret_token: WEBHOOK_SECRET || undefined,
-      // drop_pending_updates: false,
     });
     console.log(`Webhook successfully set to: ${APP_URL}${webhookPath}`);
   }
@@ -110,16 +111,10 @@ async function main() {
 
   const me = await bot.getMe();
   console.log(`✅ Bot @${me.username} fully initialized.`);
-
-  // Prefer Railway's injected PORT, bind on 0.0.0.0
-  const PORT = Number(process.env.PORT) || Number(env.PORT) || 8080;
-  const HOST = '0.0.0.0';
-  server = app.listen(PORT, HOST, () => {
-    console.log(`🚀 Server listening on ${HOST}:${PORT}. Bot is online in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`);
-  });
+  console.log('Application startup sequence complete. Process will now run indefinitely.');
 }
 
-// --- Graceful Shutdown Logic ---
+// Graceful shutdown
 const shutdown = async (signal) => {
   console.log(`\nReceived ${signal}. Shutting down gracefully...`);
   try {
@@ -140,9 +135,7 @@ const shutdown = async (signal) => {
   }
 };
 
-// --- Execute Main Function and Keep Process Alive ---
 main().then(() => {
-  console.log('Application startup sequence complete. Process will now run indefinitely.');
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 }).catch((e) => {
