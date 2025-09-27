@@ -1,12 +1,11 @@
-// src/services/sentryService.js — ERROR MONITORING + OPTIONAL PROFILING (ESM-safe, non-breaking)
+// src/services/sentryService.js — FULL: Express middleware + helpers + optional profiling (ESM-safe)
 import * as Sentry from '@sentry/node';
 import env, { isProduction } from '../config/env.js';
 
 class EnterpriseSentryService {
   constructor() {
     this.initialized = false;
-    this.errorHandler = null;
-    // Fire and forget; Sentry init can happen early without blocking app
+    this.errorHandler = null; // retained for introspection if needed
     void this.initializeSentry();
   }
 
@@ -16,14 +15,13 @@ class EnterpriseSentryService {
       return;
     }
 
-    // Optional profiling toggle (off by default unless explicitly true)
-    const enableProfiling = (process.env.SENTRY_ENABLE_PROFILING || 'false').toLowerCase() === 'true';
-
-    // Try to load profiling integration safely in ESM context
+    // Optional profiling: enable via env.SENTRY_ENABLE_PROFILING (validated in env.js)
+    const enableProfiling = !!env.SENTRY_ENABLE_PROFILING;
     let profilingIntegrationFn = null;
+
     if (enableProfiling) {
       try {
-        const mod = await import('@sentry/profiling-node'); // CommonJS under ESM: use property fallbacks
+        const mod = await import('@sentry/profiling-node'); // ESM-safe dynamic import [Sentry profiling]
         profilingIntegrationFn =
           mod.nodeProfilingIntegration ||
           mod.default?.nodeProfilingIntegration ||
@@ -36,25 +34,30 @@ class EnterpriseSentryService {
     try {
       Sentry.init({
         dsn: env.SENTRY_DSN,
-        environment: env.SENTRY_ENVIRONMENT || env.NODE_ENV || 'production',
+        environment: env.SENTRY_ENVIRONMENT || env.NODE_ENV, // both keys are validated now
         release: `parlay-bot@${process.env.npm_package_version || '1.0.0'}`,
+
+        // Modern SDK integrations + optional profiling
         integrations: [
-          // Modern helpers; available under @sentry/node v7+
           Sentry.httpIntegration(),
           Sentry.onUnhandledRejectionIntegration?.(),
           Sentry.onUncaughtExceptionIntegration?.(),
           ...(profilingIntegrationFn ? [profilingIntegrationFn()] : []),
         ].filter(Boolean),
-        // Performance + profiling sampling
+
+        // Performance + profiling sample rates
         tracesSampleRate: Number(env.SENTRY_TRACES_SAMPLE_RATE ?? 1.0),
-        profilesSampleRate: Number(process.env.PROFILES_SAMPLE_RATE ?? 0.25),
+        profilesSampleRate: Number(env.PROFILES_SAMPLE_RATE ?? 0.25),
+
         attachStacktrace: true,
         sendDefaultPii: false,
         maxBreadcrumbs: 100,
+
+        // Scrub payloads
         beforeSend: (event) => this.beforeSendEvent(event),
       });
 
-      // Global safety nets
+      // Global process-level safety nets (keep in addition to SDK integrations)
       process.on('unhandledRejection', (reason) => {
         Sentry.captureException(reason instanceof Error ? reason : new Error(String(reason)));
         console.error('UnhandledRejection:', reason);
@@ -73,35 +76,57 @@ class EnterpriseSentryService {
     }
   }
 
-  attachExpressPreRoutes(app) {
+  // Install BEFORE routes, per Sentry Express docs
+  attachExpressPreRoutes(app, requestOptions = {}) {
     if (!this.initialized) return;
-    if (Sentry.Handlers?.requestHandler) app.use(Sentry.Handlers.requestHandler()); // per-request scope [web:705]
-    if (Sentry.Handlers?.tracingHandler) app.use(Sentry.Handlers.tracingHandler()); // request traces [web:705]
-  }
-
-  attachExpressPostRoutes(app) {
-    if (!this.initialized) return;
-    if (Sentry.Handlers?.errorHandler) app.use(Sentry.Handlers.errorHandler()); // error capture [web:705]
-  }
-
-  captureError(error, context = {}) {
-    if (!this.initialized) {
-      console.error('Sentry Capture:', error, context);
-      return;
+    if (Sentry.Handlers?.requestHandler) {
+      app.use(
+        Sentry.Handlers.requestHandler({
+          // example: include only specific user fields, suppress serverName, tweak transaction naming, etc.
+          // user: ['id', 'username'],
+          // serverName: false,
+          // transaction: 'methodPath',
+          ...requestOptions,
+        })
+      );
     }
+    if (Sentry.Handlers?.tracingHandler) {
+      app.use(Sentry.Handlers.tracingHandler());
+    }
+  }
+
+  // Install AFTER routes, with configurable error capture policy
+  attachExpressPostRoutes(app, { capture404 = false, shouldHandleError } = {}) {
+    if (!this.initialized) return;
+    const errMw = Sentry.Handlers?.errorHandler?.({
+      shouldHandleError:
+        typeof shouldHandleError === 'function'
+          ? shouldHandleError
+          : (error) => {
+              if (capture404 && error?.status === 404) return true;
+              return error?.status >= 500; // default to 5xx
+            },
+    });
+    if (errMw) {
+      this.errorHandler = errMw;
+      app.use(errMw);
+    }
+  }
+
+  // Convenience helpers retained
+  captureError(error, context = {}) {
+    if (!this.initialized) return console.error('Sentry Capture:', error, context);
     Sentry.captureException(error, { extra: context });
   }
 
   captureMessage(message, level = 'info', context = {}) {
-    if (!this.initialized) {
-      console.log(`Sentry Message [${level}]:`, message, context);
-      return;
-    }
+    if (!this.initialized) return console.log(`Sentry Message [${level}]:`, message, context);
     Sentry.captureMessage(message, { level, extra: context });
   }
 
   identifyUser(user) {
     if (!this.initialized || !user) return;
+    // Example expects tg_id + username; adjust to your user model as needed
     Sentry.setUser({ id: user.tg_id, username: user.username });
   }
 
