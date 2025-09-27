@@ -34,11 +34,17 @@ if (!TOKEN) {
   console.error('TELEGRAM_BOT_TOKEN is required');
   process.exit(1);
 }
+
+// APP_URL should be https in production to enable webhook mode
 const APP_URL = env.APP_URL || '';
-// Normalize secret from either name and the normalized WEBHOOK_SECRET exported by env.js
+
+// Normalize the webhook secret from env normalization (see env.js) or aliases
 const WEBHOOK_SECRET = (env.WEBHOOK_SECRET || env.TELEGRAM_WEBHOOK_SECRET || env.TG_WEBHOOK_SECRET || '').trim();
+
+// Decide mode by URL scheme
 const USE_WEBHOOK = Boolean(APP_URL && APP_URL.startsWith('https'));
 
+// Initialize bot
 const bot = new TelegramBot(TOKEN, { polling: !USE_WEBHOOK });
 let server;
 
@@ -63,12 +69,16 @@ async function main() {
     console.log('✅ Health check endpoint /liveness was hit successfully.');
     res.sendStatus(200);
   });
-  ['/', '/health', '/healthz'].forEach(path => app.get(path, (_req, res) => res.status(200).send('OK')));
+  ['/', '/health', '/healthz'].forEach((path) =>
+    app.get(path, (_req, res) => res.status(200).send('OK'))
+  );
+  // Some platforms probe with HEAD, respond 200 as well
+  app.head('/health', (_req, res) => res.sendStatus(200));
 
   if (USE_WEBHOOK) {
     const webhookPath = `/webhook/${TOKEN}`;
 
-    // Verify Telegram secret header if configured
+    // Verify Telegram secret header only when configured
     app.post(
       webhookPath,
       (req, res, next) => {
@@ -85,8 +95,8 @@ async function main() {
     );
 
     console.log('Setting webhook...');
-    // Include secret_token only when configured so Telegram sends the header
     await bot.setWebHook(`${APP_URL}${webhookPath}`, {
+      // Telegram will include X-Telegram-Bot-Api-Secret-Token only if this is set
       secret_token: WEBHOOK_SECRET || undefined,
       // drop_pending_updates: false,
     });
@@ -111,7 +121,7 @@ async function main() {
   const me = await bot.getMe();
   console.log(`✅ Bot @${me.username} fully initialized.`);
 
-  // IMPORTANT: Prefer Railway's injected PORT over any default, and bind to 0.0.0.0
+  // Prefer Railway's injected PORT, bind on 0.0.0.0
   const PORT = Number(process.env.PORT) || Number(env.PORT) || 8080;
   const HOST = '0.0.0.0';
   server = app.listen(PORT, HOST, () => {
