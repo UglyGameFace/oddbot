@@ -27,8 +27,17 @@ process.on('uncaughtException', (error) => {
 });
 
 const app = express();
+
+// Required/optional env
 const TOKEN = env.TELEGRAM_BOT_TOKEN;
-const USE_WEBHOOK = env.APP_URL && env.APP_URL.startsWith('https');
+if (!TOKEN) {
+  console.error('TELEGRAM_BOT_TOKEN is required');
+  process.exit(1);
+}
+const APP_URL = env.APP_URL || ''; // should be an https public URL in production
+const WEBHOOK_SECRET = env.TG_WEBHOOK_SECRET || env.WEBHOOK_SECRET || process.env.TG_WEBHOOK_SECRET || '';
+const USE_WEBHOOK = Boolean(APP_URL && APP_URL.startsWith('https'));
+
 const bot = new TelegramBot(TOKEN, { polling: !USE_WEBHOOK });
 let server;
 
@@ -47,22 +56,36 @@ async function main() {
   console.log('Setting up Express server and middleware...');
   app.use(express.json());
   sentryService.attachExpressPreRoutes?.(app);
-  
+
+  // Liveness/health endpoints for Railway
   app.get('/liveness', (_req, res) => {
     console.log('✅ Health check endpoint /liveness was hit successfully.');
     res.sendStatus(200);
   });
-  ['/', '/health', '/healthz'].forEach(path => app.get(path, (_req, res) => res.send('OK')));
+  ['/', '/health', '/healthz'].forEach(path => app.get(path, (_req, res) => res.status(200).send('OK')));
 
   if (USE_WEBHOOK) {
     const webhookPath = `/webhook/${TOKEN}`;
-    app.post(webhookPath, (req, res) => {
+
+    // Verify Telegram secret header if configured
+    app.post(webhookPath, (req, res, next) => {
+      const incoming = req.headers['x-telegram-bot-api-secret-token'];
+      if (WEBHOOK_SECRET && incoming !== WEBHOOK_SECRET) {
+        return res.sendStatus(403);
+      }
+      next();
+    }, (req, res) => {
       bot.processUpdate(req.body);
       res.sendStatus(200);
     });
+
     console.log('Setting webhook...');
-    await bot.setWebHook(`${env.APP_URL}${webhookPath}`);
-    console.log(`Webhook successfully set to: ${env.APP_URL}${webhookPath}`);
+    // Include secret_token so Telegram sends the header for verification
+    await bot.setWebHook(`${APP_URL}${webhookPath}`, {
+      secret_token: WEBHOOK_SECRET || undefined,
+      // drop_pending_updates: false, // uncomment if you need to clear backlog: true
+    });
+    console.log(`Webhook successfully set to: ${APP_URL}${webhookPath}`);
   }
 
   sentryService.attachExpressPostRoutes?.(app);
@@ -79,34 +102,42 @@ async function main() {
   ];
   await bot.setMyCommands(commands);
   console.log('✅ Bot commands have been set in Telegram.');
-  
+
   const me = await bot.getMe();
   console.log(`✅ Bot @${me.username} fully initialized.`);
-  
-  const PORT = env.PORT || 8080;
-  server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Server listening on port ${PORT}. Bot is online in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`);
+
+  // IMPORTANT: Prefer Railway's injected PORT over any default
+  const PORT = Number(process.env.PORT) || Number(env.PORT) || 8080;
+  const HOST = '0.0.0.0';
+  server = app.listen(PORT, HOST, () => {
+    console.log(`🚀 Server listening on ${HOST}:${PORT}. Bot is online in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`);
   });
 }
 
 // --- Graceful Shutdown Logic ---
-const shutdown = (signal) => {
+const shutdown = async (signal) => {
   console.log(`\nReceived ${signal}. Shutting down gracefully...`);
-  if (server) {
-    server.close(() => {
-      console.log('✅ HTTP server closed.');
+  try {
+    if (!USE_WEBHOOK) {
+      try { await bot.stopPolling({ cancel: true, reason: signal }); } catch {}
+    } else {
+      try { await bot.deleteWebHook(); } catch {}
+    }
+  } finally {
+    if (server) {
+      server.close(() => {
+        console.log('✅ HTTP server closed.');
+        process.exit(0);
+      });
+    } else {
       process.exit(0);
-    });
-  } else {
-    process.exit(0);
+    }
   }
 };
 
 // --- Execute Main Function and Keep Process Alive ---
 main().then(() => {
   console.log('Application startup sequence complete. Process will now run indefinitely.');
-  // This is the definitive fix: We attach signal handlers here, after the async main function has completed.
-  // This ensures the process stays alive to listen for these signals, rather than exiting.
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 }).catch((e) => {
