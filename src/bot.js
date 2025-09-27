@@ -119,6 +119,57 @@ async function boot() {
     if (msg?.text === '/ping') bot.sendMessage(msg.chat.id, 'pong');
   });
 
+  // Hardened pieces to paste into your existing src/bot.js
+
+// 1) Normalize secret to avoid whitespace mismatches
+const SECRET = (env.TELEGRAM_WEBHOOK_SECRET || '').trim();
+
+// 2) After setWebHook, fetch and log webhook info
+async function logWebhookInfo(stage = 'post-set') {
+  try {
+    const info = await fetch(`https://api.telegram.org/bot${TOKEN}/getWebhookInfo`).then(r => r.json());
+    console.log(`[webhook-info:${stage}]`, JSON.stringify(info));
+  } catch (e) {
+    console.error('Failed to getWebhookInfo:', e?.message || e);
+  }
+}
+
+// In startWebhook(), after await bot.setWebHook(...):
+await logWebhookInfo('post-set');
+
+// 3) Add minimal request logging and explicit 2xx on success
+app.post(webhookPath, (req, res) => {
+  const hdr = req.headers['x-telegram-bot-api-secret-token'] || '';
+  if (SECRET) {
+    if (hdr !== SECRET) {
+      console.warn('Webhook 401: secret mismatch', { haveHeader: Boolean(hdr) });
+      return res.status(401).send('unauthorized');
+    }
+  }
+  try {
+    bot.processUpdate(req.body);
+    // Return immediately; Telegram only needs a 200 quickly
+    return res.status(200).send('OK');
+  } catch (e) {
+    console.error('processUpdate failed:', e?.message || e);
+    return res.status(500).send('error');
+  }
+});
+
+// 4) Optional: secure debug route to inspect Telegram’s webhook status in production
+// Protect with a simple token to avoid exposing internals
+const DEBUG_TOKEN = (process.env.DEBUG_TOKEN || '').trim();
+app.get('/debug/webhookinfo', async (req, res) => {
+  if (!DEBUG_TOKEN || req.headers['x-debug-token'] !== DEBUG_TOKEN) return res.status(401).send('unauthorized');
+  try {
+    const info = await fetch(`https://api.telegram.org/bot${TOKEN}/getWebhookInfo`).then(r => r.json());
+    res.status(200).json(info);
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+  
+
   // Diagnostics
   try {
     const me = await bot.getMe();
