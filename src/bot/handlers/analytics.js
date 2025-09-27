@@ -1,7 +1,7 @@
 import { getOdds } from '../../services/oddsService.js';
 import aiService from '../../services/aiService.js';
-import { analyzeQuantitative } from '../../quant.js';
-import { psychometricAnalysis } from '../../psychometric.js';
+import { analyzeQuantitative } from '../../quant.js';            // goes up two, lands in src/
+import { psychometricAnalysis } from '../../psychometric.js';    // goes up two, lands in src/
 
 export function registerAnalytics(bot) {
   bot.onText(/^\/analytics(?: (.+))?/, async (msg, match) => {
