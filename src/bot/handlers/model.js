@@ -3,7 +3,7 @@
 import { getOdds } from '../../services/oddsService.js';
 import aiService from '../../services/aiService.js';
 import { generateModels } from '../../advancedOddsModel.js';
-import { adaptEnterprise } from '../../utils/enterpriseAdapters.js';
+import { formatGameTimeTZ, toDecimalFromAmerican, toAmerican, impliedProbability, groupLegsByGame } from '../../utils/enterpriseAdapters.js';
 
 export function registerModel(bot) {
   bot.onText(/^\/model(?: (.+))?/, async (msg, match) => {
