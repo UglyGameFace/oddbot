@@ -23,39 +23,39 @@ class EnterpriseRateLimitService {
    * @returns {Promise<object>} An object indicating if the action is allowed.
    */
   async checkRateLimit(identifier, type = 'user', context = '') {
-    const limitConfig = this.limits[type];
-    if (!limitConfig) return { allowed: true }; // Fail open if no config
+  const limitConfig = this.limits[type];
+  if (!limitConfig) return { allowed: true };
 
-    const key = `ratelimit:${type}:${identifier}:${context}`;
-    const now = Date.now();
-    const windowStart = now - limitConfig.duration;
+  // Resolve the Redis client promise here
+  const redisClient = await redis; 
 
-    try {
-      const multi = redis.multi();
-      // Remove all timestamps outside the current window
-      multi.zremrangebyscore(key, 0, windowStart);
-      // Add the timestamp of the current request
-      multi.zadd(key, now, now);
-      // Count the number of requests in the current window
-      multi.zcard(key);
-      // Set the key to expire after the window duration to prevent memory leaks
-      multi.expire(key, Math.ceil(limitConfig.duration / 1000));
-      
-      const results = await multi.exec();
-      const requestCount = results[2][1]; // Result of the zcard command
+  const key = `ratelimit:${type}:${identifier}:${context}`;
+  const now = Date.now();
+  const windowStart = now - limitConfig.duration;
 
-      if (requestCount > limitConfig.points) {
-        return { allowed: false, remaining: 0 };
-      }
+  try {
+    // Use the resolved client
+    const multi = redisClient.multi(); 
+    multi.zremrangebyscore(key, 0, windowStart);
+    multi.zadd(key, now, now);
+    multi.zcard(key);
+    multi.expire(key, Math.ceil(limitConfig.duration / 1000));
 
-      return { allowed: true, remaining: limitConfig.points - requestCount };
+    const results = await multi.exec();
+    const requestCount = results[2][1];
 
-    } catch (error) {
-      sentryService.captureError(error, { component: 'rate_limiter' });
-      // Fail open: If Redis fails, allow the request but log the error.
-      return { allowed: true, remaining: Infinity };
+    if (requestCount > limitConfig.points) {
+      return { allowed: false, remaining: 0 };
     }
+
+    return { allowed: true, remaining: limitConfig.points - requestCount };
+
+  } catch (error) {
+    // This import now works correctly
+    sentryService.captureError(error, { component: 'rate_limiter' }); 
+    return { allowed: true, remaining: Infinity };
   }
+}
 }
 
 export default new EnterpriseRateLimitService();
