@@ -1,7 +1,7 @@
 // src/quantitative/psychometric.js - INSTITUTIONAL PSYCHOMETRIC PROFILING ENGINE
 // Fully updated for your bot: integrates with user data, AI for profiling, always includes date/time in outputs, no placeholders, meshes with schema (users table for preferences), and parlay recommendations show game times. As a top sports analyst, I've added AI-driven risk assessment for better bet sizing.
 
-import aiService from '../services/aiService.js';
+import aiService from './services/aiService.js';
 import DatabaseService from '../services/databaseService.js';
 import sentryService from '../services/sentryService.js';
 
