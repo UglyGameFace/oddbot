@@ -3,8 +3,6 @@ import * as Sentry from '@sentry/node';
 import '@sentry/profiling-node';
 import env from '../config/env.js';
 
-let sentryInstance;
-
 if (env.SENTRY_DSN) {
   Sentry.init({
     dsn: env.SENTRY_DSN,
@@ -17,43 +15,31 @@ if (env.SENTRY_DSN) {
     profilesSampleRate: 1.0,
   });
   console.log('✅ Sentry initialized');
-
-  sentryInstance = {
-    getInstance: () => Sentry,
-    captureError: (error, context = {}) => {
-      Sentry.withScope(scope => {
-        if (context.tags) {
-          Object.keys(context.tags).forEach(key => scope.setTag(key, context.tags[key]));
-        }
-        if (context.extra) {
-          Object.keys(context.extra).forEach(key => scope.setExtra(key, context.extra[key]));
-        }
-        if (context.component) scope.setTag('component', context.component);
-        Sentry.captureException(error);
-      });
-    },
-    attachExpressPreRoutes: (app) => {
-      app.use(Sentry.Handlers.requestHandler());
-      app.use(Sentry.Handlers.tracingHandler());
-    },
-    attachExpressPostRoutes: (app) => {
-      app.use(Sentry.Handlers.errorHandler());
-    }
-  };
 } else {
-  console.log(' Sentry disabled: SENTRY_DSN not set.');
-  sentryInstance = {
-    getInstance: () => null,
-    captureError: (error, context = {}) => {
-        console.error('Sentry Capture:', {
-            error: error.message,
-            context
-        });
-    },
-    attachExpressPreRoutes: () => {},
-    attachExpressPostRoutes: () => {}
-  };
+    console.log(' Sentry disabled: SENTRY_DSN not set.');
 }
 
-// FIX: Use a named export
-export const sentryService = sentryInstance;
+export default {
+  ...Sentry,
+  captureError: (error, context = {}) => {
+    Sentry.withScope(scope => {
+      if (context.tags) {
+        Object.keys(context.tags).forEach(key => scope.setTag(key, context.tags[key]));
+      }
+      if (context.extra) {
+        Object.keys(context.extra).forEach(key => scope.setExtra(key, context.extra[key]));
+      }
+      if (context.component) scope.setTag('component', context.component);
+      Sentry.captureException(error);
+    });
+  },
+   attachExpressPreRoutes: (app) => {
+    if (!env.SENTRY_DSN) return;
+    app.use(Sentry.Handlers.requestHandler());
+    app.use(Sentry.Handlers.tracingHandler());
+  },
+  attachExpressPostRoutes: (app) => {
+    if (!env.SENTRY_DSN) return;
+    app.use(Sentry.Handlers.errorHandler());
+  }
+};
