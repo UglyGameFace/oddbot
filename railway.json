@@ -1,13 +1,13 @@
 {
-  "//": "railway.json - ENTERPRISE DEPLOYMENT CONFIGURATION FOR RAILWAY",
+  "//": "railway.json - ENTERPRISE DEPLOYMENT CONFIGURATION FOR RAILWAY (fixed health checks)",
   "build": {
     "builder": "nixpacks",
-    "buildCommand": "npm install --omit=dev && npm run build"
+    "buildCommand": "npm install --omit=dev"
   },
   "deploy": {
     "startCommand": "npm start",
-    "healthcheckPath": "/health/readiness",
-    "healthcheckTimeout": 300,
+    "healthcheckPath": "/healthz",
+    "healthcheckTimeout": 10,
     "restartPolicy": {
       "type": "on-failure",
       "maximumRetryCount": 3
@@ -19,16 +19,15 @@
   },
   "checks": {
     "liveness": {
-      "path": "/health/liveness",
+      "path": "/healthz",
       "interval": 30,
-      "timeout": 10,
+      "timeout": 5,
       "initialDelay": 15
     },
     "readiness": {
-      "path": "/health/readiness",
+      "path": "/healthz",
       "interval": 30,
-      "timeout": 10,
-      "initialDelay": 30
+      "timeout": 5,
+      "initialDelay": 20
     }
   }
-}
