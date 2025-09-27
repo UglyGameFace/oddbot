@@ -1,4 +1,4 @@
-// src/bot.js — FINAL WITH MULTI-PATH HEALTHCHECKS
+// src/bot.js — FINAL WITH MULTI-PATH HEALTHCHECKS + HEAD + legacy “/heath/readiness”
 import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
@@ -56,17 +56,21 @@ async function wireHandlers() {
   });
 }
 
-// HTTP server with multi-path health endpoints
+// HTTP server with multi-path health endpoints (GET + HEAD)
 const app = express();
 app.use(express.json());
 
-// Serve all common healthcheck paths as 200
 const healthOk = (_req, res) => res.status(200).send('OK');
-app.get('/', healthOk);
-app.get('/health', healthOk);
-app.get('/healthz', healthOk);
-app.get('/health/readiness', healthOk);
-app.get('/health/liveness', healthOk);
+
+// Common health endpoints
+app.get('/', healthOk);                     app.head('/', healthOk);
+app.get('/health', healthOk);               app.head('/health', healthOk);
+app.get('/healthz', healthOk);              app.head('/healthz', healthOk);
+app.get('/health/readiness', healthOk);     app.head('/health/readiness', healthOk);
+app.get('/health/liveness', healthOk);      app.head('/health/liveness', healthOk);
+
+// Legacy typo (seen in prior configs)
+app.get('/heath/readiness', healthOk);      app.head('/heath/readiness', healthOk);
 
 const webhookPath = `/webhook/${Buffer.from(TOKEN).toString('hex').slice(0, 32)}`;
 
@@ -120,5 +124,6 @@ app.listen(PORT, '0.0.0.0', () => {
   });
 });
 
+// Global safety
 process.on('unhandledRejection', (e) => console.error('UnhandledRejection:', e));
 process.on('uncaughtException', (e) => console.error('UncaughtException:', e));
