@@ -1,4 +1,4 @@
-# docker-compose.yaml - Run the complete application stack (Corrected)
+# docker-compose.yaml - Run the complete application stack (Corrected & Final)
 version: '3.8'
 
 services:
@@ -31,7 +31,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health/liveness"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/liveness"]
       interval: 30s
       timeout: 10s
       retries: 3
