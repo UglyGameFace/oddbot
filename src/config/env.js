@@ -1,25 +1,22 @@
-// src/config/env.js - ENTERPRISE ENVIRONMENT MANAGEMENT WITH SENTRY INTEGRATION (Updated with APP_URL & TELEGRAM_WEBHOOK_SECRET validation)
-
+// src/config/env.js - ENTERPRISE ENVIRONMENT MANAGEMENT WITH SENTRY INTEGRATION
 import dotenv from 'dotenv';
-import { cleanEnv, str, num, url, bool, json } from 'envalid';
+import { cleanEnv, str, num, url, bool } from 'envalid';
 import * as Sentry from '@sentry/node';
 
 dotenv.config();
 
-// Pre-validation Sentry initialization for environment errors
+// Pre-validation Sentry (non-breaking; mock DSN fallback)
 Sentry.init({
-  dsn: process.env.SENTRY_DSN || 'https://mock@sentry.io/0', // Mock for validation phase
+  dsn: process.env.SENTRY_DSN || 'https://mock@sentry.io/0',
   environment: process.env.NODE_ENV || 'development',
   beforeSend: (event) => {
-    // Filter out environment configuration errors during validation
-    if (event.exception?.values?.[0]?.value?.includes('Environment variable')) {
-      return null;
-    }
+    // Ignore validation-time “Environment variable …” noise
+    if (event.exception?.values?.[0]?.value?.includes('Environment variable')) return null;
     return event;
   },
 });
 
-// Strict schema with optional defaults where appropriate
+// Strict schema; supply sane defaults so optional flags don’t break with envalid
 const env = cleanEnv(
   process.env,
   {
@@ -37,6 +34,9 @@ const env = cleanEnv(
     // Sentry
     SENTRY_DSN: str(),
     SENTRY_TRACES_SAMPLE_RATE: num({ default: 0.2 }),
+    // New: safe profiling flags so later code can read them without envalid errors
+    SENTRY_ENABLE_PROFILING: bool({ default: false }),
+    PROFILES_SAMPLE_RATE: num({ default: 0.25 }),
 
     // Runtime
     NODE_ENV: str({ choices: ['development', 'production', 'staging', 'test'], default: 'development' }),
@@ -73,11 +73,8 @@ const env = cleanEnv(
     LOG_LEVEL: str({ choices: ['error', 'warn', 'info', 'debug', 'trace'], default: 'info' }),
     TIMEZONE: str({ default: 'America/New_York' }),
 
-    // Public URL for webhooks
-    // Provide a default for development to avoid failing schema when not deploying webhooks locally
-    APP_URL: url({ default: 'http://localhost:3000', desc: 'Public URL of the deployed app (required for webhooks in production)' }),
-
-    // NEW: validate optional webhook secret so envalid allows access in code
+    // Public URL + webhook secret (used for Telegram webhooks)
+    APP_URL: url({ default: 'http://localhost:3000' }),
     TELEGRAM_WEBHOOK_SECRET: str({ default: '' }),
   },
   {
@@ -101,32 +98,8 @@ const env = cleanEnv(
   }
 );
 
-// Post-validation Sentry reinitialization with actual DSN
-if (env.SENTRY_DSN && env.SENTRY_DSN !== 'https://mock@sentry.io/0') {
-  Sentry.init({
-    dsn: env.SENTRY_DSN,
-    environment: env.NODE_ENV,
-    integrations: [
-      new Sentry.Integrations.Http({ tracing: true }),
-      new Sentry.Integrations.OnUncaughtException(),
-      new Sentry.Integrations.OnUnhandledRejection(),
-    ],
-    tracesSampleRate: env.SENTRY_TRACES_SAMPLE_RATE,
-    beforeSend: (event) => {
-      // Filter out sensitive information
-      if (event.request) {
-        event.request.headers = {};
-      }
-      return event;
-    },
-    beforeBreadcrumb: (breadcrumb) => {
-      if (breadcrumb.category === 'console' && breadcrumb.message?.includes('password')) {
-        return null;
-      }
-      return breadcrumb;
-    },
-  });
-}
+// Post-validation: avoid full Sentry app init here; Sentry is initialized in the dedicated service per best practice
+// This prevents double initialization and keeps Express middleware ordering correct in the main entrypoint. [Sentry docs]
 
 // --- UTILITY HELPERS ---
 export const isProduction = env.NODE_ENV === 'production';
@@ -153,7 +126,6 @@ export function validateServiceConfiguration() {
     if (env.JWT_SECRET.includes('default')) {
       warnings.push('SECURITY WARNING: Using default JWT secret in production');
     }
-    // In production, APP_URL must not be localhost
     if (env.APP_URL.includes('localhost')) {
       warnings.push('APP_URL points to localhost in production; set public https:// URL for webhook');
     }
@@ -166,10 +138,7 @@ export function validateServiceConfiguration() {
   if (warnings.length > 0) {
     warnings.forEach((warning) => {
       console.warn('⚠️', warning);
-      Sentry.captureMessage(warning, {
-        level: 'warning',
-        tags: { type: 'configuration_warning' },
-      });
+      // Defer real Sentry capture to the main Sentry service to avoid double init
     });
   }
 
@@ -179,5 +148,4 @@ export function validateServiceConfiguration() {
 // Run config validation once
 validateServiceConfiguration();
 
-// Export the frozen env object and all helpers for safe usage everywhere else
 export default Object.freeze(env);
