@@ -6,6 +6,10 @@ import sentryService from './sentryService.js';
 
 let redis;
 let isConnecting = false;
+let resolveConnection;
+const connectionPromise = new Promise((resolve) => {
+  resolveConnection = resolve;
+});
 
 const connectToRedis = () => {
   if (redis || isConnecting) return;
@@ -19,20 +23,23 @@ const connectToRedis = () => {
       // NEW: Tell the client not to wait for 'ready' state before processing commands
       enableReadyCheck: false,
       // NEW: Keep the connection alive by sending a ping every 50 seconds
-      keepAlive: 50000, 
+      keepAlive: 50000,
     };
-    
+
     const client = new Redis(env.REDIS_URL, redisOptions);
-    
+
     client.on('connect', () => console.log('✅ Redis client connected.'));
-    client.on('ready', () => console.log(' Redis client ready.'));
+    client.on('ready', () => {
+        console.log(' Redis client ready.');
+        resolveConnection(client);
+    });
     client.on('error', err => {
       console.error('❌ Redis client error:', err.message);
       sentryService.captureError(err, { component: 'redis_service' });
     });
     client.on('close', () => console.warn(' Redis connection closed.'));
     client.on('reconnecting', () => console.log(' Redis client reconnecting...'));
-    
+
     redis = client;
     isConnecting = false;
   } catch (error) {
@@ -43,4 +50,4 @@ const connectToRedis = () => {
 
 connectToRedis();
 
-export default redis;
+export default connectionPromise;
