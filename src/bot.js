@@ -14,6 +14,13 @@ import { registerSettings, registerSettingsCallbacks } from './bot/handlers/sett
 import { registerSystem, registerSystemCallbacks } from './bot/handlers/system.js';
 import { registerTools, registerCommonCallbacks } from './bot/handlers/tools.js';
 
+// --- ADDED THIS BLOCK TO CATCH SILENT ERRORS ---
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ UNHANDLED REJECTION AT:', promise, 'REASON:', reason);
+  // This will help you find the hidden error causing the shutdown.
+});
+// --- END OF NEW BLOCK ---
+
 const app = express();
 
 // --- Health Checks & Basic Middleware ---
@@ -80,8 +87,7 @@ async function initialize() {
   if (USE_WEBHOOK) {
     await startWebhook();
   }
-
-  // --- ADDED THIS BLOCK TO SET COMMANDS ---
+  
   const commands = [
     { command: 'ai', description: 'Launch the AI Parlay Builder' },
     { command: 'custom', description: 'Manually build a parlay slip' },
@@ -98,8 +104,7 @@ async function initialize() {
   } catch (error) {
     console.error('Failed to set bot commands:', error);
   }
-  // --- END OF ADDED BLOCK ---
-
+  
   const me = await bot.getMe();
   console.log(`🚀 Bot @${me.username} is now online in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`);
 }
