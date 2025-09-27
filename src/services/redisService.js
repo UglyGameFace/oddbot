@@ -1,7 +1,7 @@
 // src/services/redisService.js
 import Redis from 'ioredis';
 import env from '../config/env.js';
-import { sentryService } from './sentryService.js';
+import sentryService from './sentryService.js';
 
 const redisOptions = {
   maxRetriesPerRequest: 3,
