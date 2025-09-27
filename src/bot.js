@@ -1,21 +1,22 @@
-// src/bot.js — FINAL WITH MULTI-PATH HEALTHCHECKS + HEAD + legacy “/heath/readiness”
+// src/bot.js — hardened healthchecks (GET+HEAD), dual-stack bind, robust webhook
 import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
 
+// --- Environment
 const TOKEN = env.TELEGRAM_BOT_TOKEN;
 const APP_URL = env.APP_URL;
 const SECRET = (env.TELEGRAM_WEBHOOK_SECRET || '').trim();
-const USE_WEBHOOK = Boolean(APP_URL && APP_URL.startsWith('http'));
-
 if (!TOKEN) {
   console.error('FATAL: Missing TELEGRAM_BOT_TOKEN');
   process.exit(1);
 }
+const USE_WEBHOOK = Boolean(APP_URL && APP_URL.startsWith('http'));
 
+// --- Bot
 const bot = new TelegramBot(TOKEN, { polling: false, filepath: false });
 
-// Handler wiring with correct paths and logging
+// --- Handlers wiring with logging
 async function wireHandlers() {
   console.log('Wiring handlers...');
   const tryImport = async (path) => {
@@ -50,28 +51,27 @@ async function wireHandlers() {
   }
   console.log('Handler wiring complete.');
 
-  // Baseline listener to confirm text events arrive
+  // Baseline liveness command
   bot.on('message', (msg) => {
     if (msg?.text?.trim().toLowerCase() === '/ping') bot.sendMessage(msg.chat.id, 'pong');
   });
 }
 
-// HTTP server with multi-path health endpoints (GET + HEAD)
+// --- HTTP server and healthchecks
 const app = express();
 app.use(express.json());
 
+// Health: reply 200 on GET and HEAD for common paths (platforms often probe with HEAD)
 const healthOk = (_req, res) => res.status(200).send('OK');
-
-// Common health endpoints
 app.get('/', healthOk);                     app.head('/', healthOk);
 app.get('/health', healthOk);               app.head('/health', healthOk);
 app.get('/healthz', healthOk);              app.head('/healthz', healthOk);
 app.get('/health/readiness', healthOk);     app.head('/health/readiness', healthOk);
 app.get('/health/liveness', healthOk);      app.head('/health/liveness', healthOk);
-
-// Legacy typo coverage (if previously configured)
+// Legacy typo coverage
 app.get('/heath/readiness', healthOk);      app.head('/heath/readiness', healthOk);
 
+// --- Webhook route and registration
 const webhookPath = `/webhook/${Buffer.from(TOKEN).toString('hex').slice(0, 32)}`;
 
 async function startWebhook() {
@@ -92,11 +92,10 @@ async function startWebhook() {
     }
   });
 
-  // Register webhook with explicit allowed_updates
   const fullWebhook = `${APP_URL.replace(/\/+$/, '')}${webhookPath}`;
   await bot.setWebHook(fullWebhook, {
-    secret_token: SECRET || undefined,
-    allowed_updates: ['message', 'callback_query'],
+    secret_token: SECRET || undefined,       // Telegram will echo X-Telegram-Bot-Api-Secret-Token if set
+    allowed_updates: ['message', 'callback_query'], // ensure text and buttons are delivered
   });
   console.log(`Webhook set: ${fullWebhook}`);
 }
@@ -110,21 +109,37 @@ async function startPolling() {
   console.log('Polling started.');
 }
 
+// --- Init
 async function initialize() {
   await wireHandlers();
   if (USE_WEBHOOK) await startWebhook(); else await startPolling();
   try { const me = await bot.getMe(); console.log(`Bot @${me.username} ready in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`); } catch {}
 }
 
+// --- Listen: prefer dual-stack to satisfy platform probes
 const PORT = Number(process.env.PORT || env.PORT || 3000);
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`HTTP server listening on :${PORT}. Initializing bot...`);
+// Some orchestrators probe over IPv6; binding to '::' covers both stacks where supported
+const HOST = '::'; // falls back internally for IPv4 on most Node builds
+
+app.listen(PORT, HOST, () => {
+  console.log(`HTTP server listening on [${HOST}]:${PORT}. Initializing bot...`);
   initialize().catch((e) => {
     console.error('Fatal bot init error:', e?.message || e);
     process.exit(1);
   });
 });
 
-// Global safety
+// Graceful signal handlers (platform-initiated stops will hit here)
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  try { bot.stopPolling?.(); } catch {}
+  process.exit(0);
+});
+process.on('SIGINT', () => {
+  console.log('SIGINT received, shutting down gracefully');
+  try { bot.stopPolling?.(); } catch {}
+  process.exit(0);
+});
+
 process.on('unhandledRejection', (e) => console.error('UnhandledRejection:', e));
 process.on('uncaughtException', (e) => console.error('UncaughtException:', e));
