@@ -3,15 +3,13 @@ import Redis from 'ioredis';
 import env from '../config/env.js';
 import sentryService from './sentryService.js';
 
-const redisOptions = {
+const redis = new Redis(env.REDIS_URL, {
   maxRetriesPerRequest: 3,
   connectTimeout: 15000,
   lazyConnect: true,
   enableReadyCheck: false,
   keepAlive: 50000,
-};
-
-const redis = new Redis(env.REDIS_URL, redisOptions);
+});
 
 redis.on('connect', () => console.log('✅ Redis client connected.'));
 redis.on('ready', () => console.log(' Redis client ready.'));
