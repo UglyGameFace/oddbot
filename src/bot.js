@@ -1,7 +1,8 @@
+// src/bot.js
 import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
-import sentryService from './services/sentryService.js';
+import { sentryService } from './services/sentryService.js'; // FIX: Use named import
 import { registerAnalytics } from './bot/handlers/analytics.js';
 import { registerModel } from './bot/handlers/model.js';
 import { registerCacheHandler } from './bot/handlers/cache.js';
