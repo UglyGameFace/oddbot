@@ -1,62 +1,59 @@
-// src/workers/notificationWorker.js - ENTERPRISE MESSAGE BUS
-import TelegramBot from 'node-telegram-bot-api';
-import redis from '../services/redisService.js';
+// src/services/sentryService.js
+import * as Sentry from '@sentry/node';
+import '@sentry/profiling-node';
 import env from '../config/env.js';
-import sentryService from '../services/sentryService.js';
 
-const NOTIFICATION_QUEUE_KEY = 'notification_queue';
+let sentryInstance;
 
-class EnterpriseNotificationEngine {
-  constructor() {
-    this.isReady = false;
-    this.bot = null;
-    this.initialize();
-  }
+if (env.SENTRY_DSN) {
+  Sentry.init({
+    dsn: env.SENTRY_DSN,
+    environment: env.NODE_ENV || 'development',
+    integrations: [
+      new Sentry.Integrations.Http({ tracing: true }),
+      new Sentry.Integrations.Express(),
+    ],
+    tracesSampleRate: 1.0,
+    profilesSampleRate: 1.0,
+  });
+  console.log('✅ Sentry initialized');
 
-  initialize() {
-    if (env.TELEGRAM_BOT_TOKEN) {
-        this.bot = new TelegramBot(env.TELEGRAM_BOT_TOKEN);
-        this.isReady = true;
-        console.log('✅ Enterprise Notification Engine initialized.');
-        this.startListening();
-    } else {
-        console.warn('🚨 Notification Engine disabled: TELEGRAM_BOT_TOKEN not set.');
-    }
-  }
-
-  async startListening() {
-    console.log('...Notification worker listening for messages on Redis queue...');
-    const redisClient = await redis;
-    while (true) {
-        try {
-            // Blocking pop with a timeout of 0 to wait forever
-            const result = await redisClient.blpop(NOTIFICATION_QUEUE_KEY, 0);
-            if (result) {
-                const notification = JSON.parse(result[1]);
-                await this.deliverNotification(notification);
-            }
-        } catch (error) {
-            console.error('❌ Notification worker error:', error);
-            sentryService.captureError(error, { component: 'notification_worker' });
-            // Wait 5 seconds before retrying to prevent rapid-fire errors
-            await new Promise(resolve => setTimeout(resolve, 5000));
+  sentryInstance = {
+    getInstance: () => Sentry,
+    captureError: (error, context = {}) => {
+      Sentry.withScope(scope => {
+        if (context.tags) {
+          Object.keys(context.tags).forEach(key => scope.setTag(key, context.tags[key]));
         }
+        if (context.extra) {
+          Object.keys(context.extra).forEach(key => scope.setExtra(key, context.extra[key]));
+        }
+        if (context.component) scope.setTag('component', context.component);
+        Sentry.captureException(error);
+      });
+    },
+    attachExpressPreRoutes: (app) => {
+      app.use(Sentry.Handlers.requestHandler());
+      app.use(Sentry.Handlers.tracingHandler());
+    },
+    attachExpressPostRoutes: (app) => {
+      app.use(Sentry.Handlers.errorHandler());
     }
-  }
-
-  async deliverNotification(notification) {
-    if (!this.isReady) return;
-    try {
-        await this.bot.sendMessage(notification.userId, notification.message, { parse_mode: 'Markdown' });
-        console.log(`✉️ Notification sent to user ${notification.userId}`);
-    } catch (error) {
-        console.error(`Failed to send notification to ${notification.userId}:`, error.message);
-        sentryService.captureError(error, {
-            component: 'notification_delivery',
-            context: { userId: notification.userId }
+  };
+} else {
+  console.log(' Sentry disabled: SENTRY_DSN not set.');
+  sentryInstance = {
+    getInstance: () => null,
+    captureError: (error, context = {}) => {
+        console.error('Sentry Capture:', {
+            error: error.message,
+            context
         });
-    }
-  }
+    },
+    attachExpressPreRoutes: () => {},
+    attachExpressPostRoutes: () => {}
+  };
 }
 
-new EnterpriseNotificationEngine();
+// FIX: Use a named export
+export const sentryService = sentryInstance;
