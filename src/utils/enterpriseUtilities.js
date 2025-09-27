@@ -31,8 +31,6 @@ export function analyzeQuantitative(oddsData) {
  */
 export const psychometric = {
     async profileUser(chatId) {
-        // In a real scenario, this would query a database.
-        // For now, it returns a static profile based on a hash.
         const hash = createHash('sha256').update(String(chatId)).digest('hex');
         const riskAppetite = (parseInt(hash.substring(0, 2), 16) / 255);
         return {
@@ -53,17 +51,10 @@ export const advancedOddsModel = {
         const home = h2h.find(o => o.name === game.home_team);
         const away = h2h.find(o => o.name === game.away_team);
         const draw = h2h.find(o => o.name === 'Draw');
-
         const prob = (price) => price ? (1 / toDecimalFromAmerican(price)) * 100 : 0;
-
-        return {
-            home: prob(home?.price),
-            away: prob(away?.price),
-            draw: prob(draw?.price)
-        };
+        return { home: prob(home?.price), away: prob(away?.price), draw: prob(draw?.price) };
     },
     engineerGameFeatures(game) {
-        // Simple feature engineering example
         const probs = this.calculateImpliedProbabilities(game);
         return {
             isClearFavorite: Math.abs(probs.home - probs.away) > 30,
@@ -80,7 +71,7 @@ export function getSportEmoji(key = '') {
   if (k.includes('americanfootball_nfl')) return '🏈';
   if (k.includes('americanfootball_ncaaf')) return '🎓🏈';
   if (k.includes('basketball_nba')) return '🏀';
-  if (k.includes('basketball_wnba')) return 'W🏀';
+  if (k.includes('basketball_wnba')) return '🙋🏽‍♀️🏀';
   if (k.includes('basketball_ncaab')) return '🎓';
   if (k.includes('baseball_mlb')) return '⚾';
   if (k.includes('icehockey_nhl')) return '🏒';
