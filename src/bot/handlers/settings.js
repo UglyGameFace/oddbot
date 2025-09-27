@@ -1,97 +1,167 @@
 // src/bot/handlers/settings.js
-import { getBuilderConfig, setBuilderConfig } from '../state.js';
+
+import { getAIConfig, setAIConfig, getBuilderConfig, setBuilderConfig, setUserState } from '../state.js';
+
+// --- Main Command and Callback Router ---
 
 export function registerSettings(bot) {
-  bot.onText(/\/settings/, async (msg) => sendBuilderSettings(bot, msg.chat.id));
+  bot.onText(/^\/settings$/, async (msg) => {
+    await sendMainMenu(bot, msg.chat.id);
+  });
+}
+
+export function registerSettingsCallbacks(bot) {
   bot.on('callback_query', async (cbq) => {
     const { data, message } = cbq || {};
-    if (!data || !message) return;
+    if (!data || !message || !data.startsWith('set_')) return;
+
     const chatId = message.chat.id;
+    const messageId = message.message_id;
+    await bot.answerCallbackQuery(cbq.id);
 
-    try { await bot.answerCallbackQuery(cbq.id); } catch {}
+    const parts = data.split('_');
+    const action = parts[1];
 
-    if (data === 'b_settings') return sendBuilderSettings(bot, chatId, message.message_id);
-    if (data === 'bs_f_menu') return sendFilterMenu(bot, chatId, message.message_id);
+    // Main Menu Navigation
+    if (action === 'main') return sendMainMenu(bot, chatId, messageId);
+    if (action === 'ai') return sendAiSettingsMenu(bot, chatId, messageId);
+    if (action === 'builder') return sendBuilderSettingsMenu(bot, chatId, messageId);
 
-    if (data.startsWith('bs_f_set_')) {
-      const v = parseInt(data.split('_').pop(), 10);
-      const b = await getBuilderConfig(chatId);
-      b.cutoffHours = Number.isFinite(v) ? v : b.cutoffHours;
-      await setBuilderConfig(chatId, b);
-      return sendBuilderSettings(bot, chatId, message.message_id);
+    // AI Settings
+    if (action === 'aimode') return sendAiModeMenu(bot, chatId, messageId);
+    if (action === 'aimodel') return sendAiModelMenu(bot, chatId, messageId);
+    if (action === 'aibettype') return sendAiBetTypeMenu(bot, chatId, messageId);
+    
+    // Builder Settings
+    if (action === 'bldodds') return sendBuilderOddsMenu(bot, chatId, messageId);
+    if (action === 'bldcutoff') return sendBuilderCutoffMenu(bot, chatId, messageId);
+    if (action === 'bldsamegame') {
+        const config = await getBuilderConfig(chatId);
+        config.avoidSameGame = !config.avoidSameGame;
+        await setBuilderConfig(chatId, config);
+        return sendBuilderSettingsMenu(bot, chatId, messageId);
     }
+    
+    // Set Value Actions
+    if (action === 'set') {
+      const [,, category, key, value] = parts;
+      let config, setConfigFunc;
 
-    if (data === 'bs_sgp_tgl') {
-      const b = await getBuilderConfig(chatId);
-      b.avoidSameGame = !b.avoidSameGame;
-      await setBuilderConfig(chatId, b);
-      return sendBuilderSettings(bot, chatId, message.message_id);
-    }
+      if (category === 'ai') {
+        config = await getAIConfig(chatId);
+        setConfigFunc = setAIConfig;
+      } else { // builder
+        config = await getBuilderConfig(chatId);
+        setConfigFunc = setBuilderConfig;
+      }
+      
+      config[key] = isNaN(value) ? value : Number(value);
+      await setConfigFunc(chatId, config);
 
-    if (data === 'bs_odds_menu') return sendOddsMenu(bot, chatId, message.message_id);
-
-    if (data.startsWith('bs_omin_')) {
-      const v = parseInt(data.split('_').pop(), 10);
-      const b = await getBuilderConfig(chatId);
-      b.minOdds = Number.isFinite(v) ? v : b.minOdds;
-      await setBuilderConfig(chatId, b);
-      return sendBuilderSettings(bot, chatId, message.message_id);
-    }
-
-    if (data.startsWith('bs_omax_')) {
-      const v = parseInt(data.split('_').pop(), 10);
-      const b = await getBuilderConfig(chatId);
-      b.maxOdds = Number.isFinite(v) ? v : b.maxOdds;
-      await setBuilderConfig(chatId, b);
-      return sendBuilderSettings(bot, chatId, message.message_id);
+      if (category === 'ai') return sendAiSettingsMenu(bot, chatId, messageId);
+      if (category === 'builder' && key.includes('Odds')) return sendBuilderOddsMenu(bot, chatId, messageId);
+      if (category === 'builder' && key.includes('cutoff')) return sendBuilderCutoffMenu(bot, chatId, messageId);
     }
   });
 }
 
-async function sendBuilderSettings(bot, chatId, messageId = null) {
-  const b = await getBuilderConfig(chatId);
-  const text =
-    `*⚙️ Builder Settings*\n\n` +
-    `• Filter: ${b.cutoffHours === 0 ? 'All' : `${b.cutoffHours}h`}\n` +
-    `• Avoid Same Game: ${b.avoidSameGame ? '✅' : '❌'}\n` +
-    `• Odds Range: ${b.minOdds} to ${b.maxOdds}\n` +
-    `• Exclusions: ${b.excludedTeams.length ? b.excludedTeams.join(', ') : 'None'}`;
+// --- Main Menu ---
 
-  const rows = [
-    [{ text: `Filter: ${b.cutoffHours === 0 ? 'All' : `${b.cutoffHours}h`}`, callback_data: 'bs_f_menu' }, { text: `SGP Avoid: ${b.avoidSameGame ? 'On' : 'Off'}`, callback_data: 'bs_sgp_tgl' }],
-    [{ text: `Odds Range`, callback_data: 'bs_odds_menu' }],
-    [{ text: '« Back', callback_data: 'cfg_main' }],
+async function sendMainMenu(bot, chatId, messageId = null) {
+  const text = '⚙️ *Bot Settings*\n\nChoose a category to configure:';
+  const keyboard = [
+    [{ text: '🤖 AI Analyst Settings', callback_data: 'set_ai' }],
+    [{ text: '✍️ Custom Builder Settings', callback_data: 'set_builder' }]
   ];
+  const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
 
-  const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } };
-  if (messageId) return bot.editMessageText(text, { ...opts, chat_id: chatId, message_id: messageId });
-  return bot.sendMessage(chatId, text, opts);
+  if (messageId) await bot.editMessageText(text, { ...opts, chat_id: chatId, message_id: messageId });
+  else await bot.sendMessage(chatId, text, opts);
 }
 
-async function sendFilterMenu(bot, chatId, messageId) {
-  const rows = [
-    [{ text: '6h', callback_data: 'bs_f_set_6' }, { text: '12h', callback_data: 'bs_f_set_12' }, { text: '24h', callback_data: 'bs_f_set_24' }],
-    [{ text: '48h', callback_data: 'bs_f_set_48' }, { text: 'All', callback_data: 'bs_f_set_0' }],
-    [{ text: '« Back', callback_data: 'b_settings' }],
+// --- AI Analyst Settings Menus ---
+
+async function sendAiSettingsMenu(bot, chatId, messageId) {
+  const config = await getAIConfig(chatId);
+  const text = `*🤖 AI Analyst Settings*\n\nSet your default preferences for the \`/ai\` command.`;
+  const keyboard = [
+    [{ text: `Default Mode: ${config.mode || 'Live API'}`, callback_data: 'set_aimode' }],
+    [{ text: `Default Web AI: ${config.model || 'Gemini'}`, callback_data: 'set_aimodel' }],
+    [{ text: `Default Bet Type: ${config.betType || 'Mixed'}`, callback_data: 'set_aibettype' }],
+    [{ text: '« Back to Main Menu', callback_data: 'set_main' }]
   ];
-  await bot.editMessageText('*Select game time filter:*', {
-    parse_mode: 'Markdown',
-    chat_id: chatId,
-    message_id: messageId,
-    reply_markup: { inline_keyboard: rows },
-  });
+  const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
+  await bot.editMessageText(text, { ...opts, chat_id: chatId, message_id: messageId });
 }
 
-async function sendOddsMenu(bot, chatId, messageId) {
-  const rows = [
-    [{ text: 'Min: Any', callback_data: 'bs_omin_-2000' }, { text: 'Min: -500', callback_data: 'bs_omin_-500' }, { text: 'Min: -200', callback_data: 'bs_omin_-200' }],
-    [{ text: 'Max: +1000', callback_data: 'bs_omax_1000' }, { text: 'Max: +500', callback_data: 'bs_omax_500' }, { text: 'Max: +300', callback_data: 'bs_omax_300' }],
-    [{ text: '« Back', callback_data: 'b_settings' }],
+async function sendAiModeMenu(bot, chatId, messageId) {
+    const text = 'Select your preferred default analysis mode for the AI:';
+    const keyboard = [
+        [{ text: '📡 Live API (Best)', callback_data: 'set_set_ai_mode_live' }],
+        [{ text: '🌐 Web Research', callback_data: 'set_set_ai_mode_web' }],
+        [{ text: '💾 Database Fallback', callback_data: 'set_set_ai_mode_db' }],
+        [{ text: '« Back to AI Settings', callback_data: 'set_ai' }]
+    ];
+    await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: keyboard } });
+}
+
+async function sendAiModelMenu(bot, chatId, messageId) {
+    const text = 'Select your default AI for the "Web Research" mode:';
+    const keyboard = [
+        [{ text: '🧠 Gemini (Creative)', callback_data: 'set_set_ai_model_gemini' }],
+        [{ text: '⚡ Perplexity (Data-Focused)', callback_data: 'set_set_ai_model_perplexity' }],
+        [{ text: '« Back to AI Settings', callback_data: 'set_ai' }]
+    ];
+    await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: keyboard } });
+}
+
+async function sendAiBetTypeMenu(bot, chatId, messageId) {
+    const text = 'Select the default type of parlay the AI should build:';
+    const keyboard = [
+        [{ text: '🔥 Player Props Only', callback_data: 'set_set_ai_betType_props' }],
+        [{ text: '🧩 Any Bet Type (Mixed)', callback_data: 'set_set_ai_betType_mixed' }],
+        [{ text: '« Back to AI Settings', callback_data: 'set_ai' }]
+    ];
+    await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: keyboard } });
+}
+
+// --- Custom Builder Settings Menus ---
+
+async function sendBuilderSettingsMenu(bot, chatId, messageId) {
+  const config = await getBuilderConfig(chatId);
+  const text = `*✍️ Custom Builder Settings*\n\nConfigure the rules for the manual \`/custom\` parlay builder.`;
+  const keyboard = [
+    [{ text: `Odds Range: ${config.minOdds} to ${config.maxOdds}`, callback_data: 'set_bldodds' }],
+    [{ text: `Time Cutoff: ${config.cutoffHours} hours`, callback_data: 'set_bldcutoff' }],
+    [{ text: `Avoid Same-Game Legs: ${config.avoidSameGame ? '✅ Yes' : '❌ No'}`, callback_data: 'set_bldsamegame' }],
+    [{ text: '« Back to Main Menu', callback_data: 'set_main' }]
   ];
-  await bot.editMessageText('*Set acceptable odds range per leg:*', {
-    parse_mode: 'Markdown',
-    chat_id: chatId,
-    message_id: messageId,
-    reply_markup: { inline_keyboard: rows },
-  });
+  const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
+  await bot.editMessageText(text, { ...opts, chat_id: chatId, message_id: messageId });
+}
+
+async function sendBuilderOddsMenu(bot, chatId, messageId) {
+    const config = await getBuilderConfig(chatId);
+    const text = `*Set Odds Range*\n\nCurrent: ${config.minOdds} to ${config.maxOdds}\n\nSelect a minimum and maximum odds value for legs in the custom builder.`;
+    const keyboard = [
+        [{ text: 'Min Odds: -500', callback_data: 'set_set_builder_minOdds_-500' }, { text: 'Max Odds: +500', callback_data: 'set_set_builder_maxOdds_500' }],
+        [{ text: 'Min Odds: -200', callback_data: 'set_set_builder_minOdds_-200' }, { text: 'Max Odds: +200', callback_data: 'set_set_builder_maxOdds_200' }],
+        [{ text: 'Min Odds: +100', callback_data: 'set_set_builder_minOdds_100' }, { text: 'Max Odds: +1000', callback_data: 'set_set_builder_maxOdds_1000' }],
+        [{ text: '« Back to Builder Settings', callback_data: 'set_builder' }]
+    ];
+    const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
+    await bot.editMessageText(text, { ...opts, chat_id: chatId, message_id: messageId });
+}
+
+async function sendBuilderCutoffMenu(bot, chatId, messageId) {
+    const text = 'Select the maximum time horizon for games to appear in the custom builder:';
+    const keyboard = [
+        [{ text: 'Next 6 Hours', callback_data: 'set_set_builder_cutoffHours_6' }],
+        [{ text: 'Next 12 Hours', callback_data: 'set_set_builder_cutoffHours_12' }],
+        [{ text: 'Next 24 Hours', callback_data: 'set_set_builder_cutoffHours_24' }],
+        [{ text: 'Next 48 Hours', callback_data: 'set_set_builder_cutoffHours_48' }],
+        [{ text: '« Back to Builder Settings', callback_data: 'set_builder' }]
+    ];
+    const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
+    await bot.editMessageText(text, { ...opts, chat_id: chatId, message_id: messageId });
 }
