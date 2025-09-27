@@ -1,37 +1,32 @@
 {
   "$schema": "https://railway.app/railway.schema.json",
-  "environments": {
-    "production": {
-      "build": {
-        "buildCommand": "npm ci --omit=dev || npm install --omit=dev"
-      },
-      "deploy": {
-        "startCommand": "npm start",
-        "healthcheckPath": "/liveness",
-        "healthcheckTimeout": 120,
-        "healthcheckInitialDelay": 10,
-        "restartPolicyType": "ON_FAILURE",
-        "restartPolicyMaxRetries": 3
-      },
-      "variables": {
-        "APP_URL": "https://parlay-bot-production-d099.up.railway.app",
-        "TELEGRAM_BOT_TOKEN": "<YOUR_TELEGRAM_BOT_TOKEN>",
-        "TELEGRAM_WEBHOOK_SECRET": "<YOUR_WEBHOOK_SECRET>",
-        "SENTRY_DSN": "<YOUR_SENTRY_DSN>",
-        "SENTRY_TRACES_SAMPLE_RATE": "0.2",
-        "SENTRY_PROFILES_SAMPLE_RATE": "0.1",
-        "SUPABASE_URL": "<YOUR_SUPABASE_URL>",
-        "SUPABASE_ANON_KEY": "<YOUR_SUPABASE_ANON_KEY>",
-        "GOOGLE_GEMINI_API_KEY": "<YOUR_GOOGLE_GEMINI_KEY>",
-        "PERPLEXITY_API_KEY": "<YOUR_PERPLEXITY_KEY>",
-        "THE_ODDS_API_KEY": "<YOUR_THE_ODDS_API_KEY>",
-        "SPORTRADAR_API_KEY": "<YOUR_SPORTRADAR_KEY>",
-        "API_SPORTS_KEY": "<YOUR_API_SPORTS_KEY>",
-        "DATABASE_URL": "<YOUR_DATABASE_URL>",
-        "REDIS_URL": "redis://:<PASSWORD>@<YOUR_REDIS_HOST>:6379"
-      }
+  "services": [
+    {
+      "name": "parlay-bot",
+      "buildCommand": "npm ci --omit=dev || npm install --omit=dev",
+      "startCommand": "npm start",
+      "healthcheckPath": "/liveness",
+      "healthcheckTimeout": 120,
+      "healthcheckInterval": 30,
+      "healthcheckRetries": 3,
+      "restartPolicyType": "ON_FAILURE",
+      "restartPolicyMaxRetries": 10
+    },
+    {
+      "name": "worker-odds",
+      "buildCommand": "npm ci --omit=dev || npm install --omit=dev",
+      "startCommand": "npm run worker:odds",
+      "restartPolicyType": "ON_FAILURE",
+      "restartPolicyMaxRetries": 10
+    },
+    {
+      "name": "worker-notifications",
+      "buildCommand": "npm ci --omit=dev || npm install --omit=dev",
+      "startCommand": "npm run worker:notifications",
+      "restartPolicyType": "ON_FAILURE",
+      "restartPolicyMaxRetries": 10
     }
-  },
+  ],
   "environment": {
     "NODE_ENV": "production",
     "LOG_LEVEL": "info"
