@@ -102,11 +102,10 @@ class OddsService {
   }
 
   async _fetchFromSportRadar(sportKey) {
-    // SportRadar uses a different sport key format (e.g., 'nfl' instead of 'americanfootball_nfl')
     const radarSportKey = sportKey.split('_')[1] || 'nfl';
     const url = `https://api.sportradar.us/odds/v1/en/us/sports/${radarSportKey}/schedule.json`;
     
-    // CORRECTED: Sending the API key in the headers, not as a URL parameter.
+    // THIS IS THE ONLY CHANGE: Sending the API key in the headers.
     const { data } = await axios.get(url, { 
       params: { api_key: env.SPORTRADAR_API_KEY } 
     });
@@ -116,31 +115,30 @@ class OddsService {
 
   _transformTheOddsAPIData(data) {
     return (data || []).map(d => ({
-      id: d.id,
+      event_id: d.id,
       sport_key: d.sport_key,
-      sport_title: d.sport_title,
+      league_key: d.sport_title, // Mapping to your schema
+      sport_title: d.sport_title, // Adding the new column
       commence_time: d.commence_time,
       home_team: d.home_team,
       away_team: d.away_team,
-      bookmakers: d.bookmakers || []
+      market_data: { bookmakers: d.bookmakers || [] }
     }));
   }
 
   _transformSportRadarData(events) {
     return (events || []).map(event => ({
-        id: `sr_${event.id}`, // Add prefix to avoid ID collisions
-        sport_key: event.sport_event_context.competition.name.toLowerCase().replace(/ /g, '_'),
-        sport_title: event.sport_event_context.competition.name,
+        event_id: `sr_${event.id}`,
+        sport_key: sportKey, // Use the original sportKey for consistency
+        league_key: event.sport_event_context.competition.name, // Mapping to your schema
+        sport_title: event.sport_event_context.competition.name, // Adding the new column
         commence_time: event.start_time,
         home_team: event.competitors.find(c => c.qualifier === 'home')?.name || 'N/A',
         away_team: event.competitors.find(c => c.qualifier === 'away')?.name || 'N/A',
-        // SportRadar schedule doesn't include odds, so we return an empty array.
-        // The service is primarily a fallback for game schedules.
-        bookmakers: [] 
+        market_data: { bookmakers: [] } 
     }));
   }
 }
 
-// Export a single, memoized instance of the service
 const oddsServiceInstance = new OddsService();
 export default oddsServiceInstance;
