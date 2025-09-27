@@ -5,6 +5,14 @@ import sentryService from './services/sentryService.js';
 import { registerAnalytics } from './bot/handlers/analytics.js';
 import { registerModel } from './bot/handlers/model.js';
 import { registerCacheHandler } from './bot/handlers/cache.js';
+import { registerCustom, registerCustomCallbacks } from './bot/handlers/custom.js';
+import { registerAI, registerAICallbacks } from './bot/handlers/ai.js';
+import { registerQuant } from './bot/handlers/quant.js';
+import { registerPlayer, registerPlayerCallbacks } from './bot/handlers/player.js';
+import { registerSettings, registerSettingsCallbacks } from './bot/handlers/settings.js';
+import { registerSystem, registerSystemCallbacks } from './bot/handlers/system.js';
+import { registerTools, registerCommonCallbacks } from './bot/handlers/tools.js';
+
 // Create Express app
 const app = express();
 
@@ -29,14 +37,26 @@ if (!TOKEN) {
   console.error('FATAL: Missing TELEGRAM_BOT_TOKEN');
   process.exit(1);
 }
-const bot = new TelegramBot(TOKEN, { polling: false, filepath: false });
+const bot = new TelegramBot(TOKEN, { polling: !USE_WEBHOOK, filepath: false });
 
 async function wireHandlers() {
   console.log('Wiring handlers...');
   registerAnalytics(bot);
   registerModel(bot);
   registerCacheHandler(bot);
-  // Register any other modules/handlers here
+  registerCustom(bot);
+  registerCustomCallbacks(bot);
+  registerAI(bot);
+  registerAICallbacks(bot);
+  registerQuant(bot);
+  registerPlayer(bot);
+  registerPlayerCallbacks(bot);
+  registerSettings(bot);
+  registerSettingsCallbacks(bot);
+  registerSystem(bot);
+  registerSystemCallbacks(bot);
+  registerTools(bot);
+  registerCommonCallbacks(bot);
   console.log('✅ All handlers registered.');
 }
 
@@ -53,17 +73,14 @@ async function startWebhook() {
   await bot.setWebHook(fullWebhook, { secret_token: SECRET || undefined, allowed_updates: ['message','callback_query'] });
   console.log(`Webhook set: ${fullWebhook}`);
 }
-async function startPolling() {
-  try { await bot.deleteWebHook({ drop_pending_updates: true }); } catch {}
-  await bot.startPolling({ params: { allowed_updates: ['message','callback_query'] } });
-  console.log('Polling started.');
-}
 
 sentryService.attachExpressPostRoutes?.(app);
 
 async function initialize() {
   await wireHandlers();
-  if (USE_WEBHOOK) await startWebhook(); else await startPolling();
+  if (USE_WEBHOOK) {
+    await startWebhook();
+  }
   const me = await bot.getMe();
   console.log(`Bot @${me.username} ready in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`);
 }
