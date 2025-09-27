@@ -7,7 +7,7 @@ import psychometric from '../../psychometric.js';                   // src/psych
 
 // Optionally, add more imports as needed, always starting with '../../' for anything in /src/services/, /src/bot/, /src/utils/
 
-export function registerAnalytics(bot) {
+export function registerAnalytics(bot) { ... }
   // Usage: /analytics [sport_key] (example: /analytics basketball_nba)
   bot.onText(/^\/analytics(?:\s+(\w+))?/, async (msg, match) => {
     const sportKey = match[1] || 'basketball_nba';
