@@ -14,12 +14,10 @@ import { registerSettings, registerSettingsCallbacks } from './bot/handlers/sett
 import { registerSystem, registerSystemCallbacks } from './bot/handlers/system.js';
 import { registerTools, registerCommonCallbacks } from './bot/handlers/tools.js';
 
-// --- ADDED THIS BLOCK TO CATCH SILENT ERRORS ---
+// --- CATCH SILENT ERRORS ---
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ UNHANDLED REJECTION AT:', promise, 'REASON:', reason);
-  // This will help you find the hidden error causing the shutdown.
 });
-// --- END OF NEW BLOCK ---
 
 const app = express();
 
@@ -81,13 +79,19 @@ async function startWebhook() {
 
 sentryService.attachExpressPostRoutes?.(app);
 
-// --- Application Start ---
+// --- Application Start (UPDATED WITH TRACER LOGS) ---
 async function initialize() {
+  console.log('[Tracer] Step 1: Starting wireHandlers()...');
   await wireHandlers();
+  console.log('[Tracer] Step 1: COMPLETED.');
+
   if (USE_WEBHOOK) {
+    console.log('[Tracer] Step 2: Starting startWebhook()...');
     await startWebhook();
+    console.log('[Tracer] Step 2: COMPLETED.');
   }
-  
+
+  console.log('[Tracer] Step 3: Starting setMyCommands()...');
   const commands = [
     { command: 'ai', description: 'Launch the AI Parlay Builder' },
     { command: 'custom', description: 'Manually build a parlay slip' },
@@ -100,12 +104,16 @@ async function initialize() {
 
   try {
     await bot.setMyCommands(commands);
-    console.log('Bot commands have been set in Telegram.');
+    console.log('[Tracer] Step 3: COMPLETED.');
   } catch (error) {
-    console.error('Failed to set bot commands:', error);
+    console.error('[Tracer] Step 3: FAILED.', error);
+    throw error; // Re-throw to ensure it's caught by the main handler
   }
   
+  console.log('[Tracer] Step 4: Starting getMe()...');
   const me = await bot.getMe();
+  console.log('[Tracer] Step 4: COMPLETED.');
+
   console.log(`🚀 Bot @${me.username} is now online in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`);
 }
 
