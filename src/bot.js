@@ -84,8 +84,9 @@ async function initialize() {
   console.log(`🚀 Bot @${me.username} is now online in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`);
 }
 
-const PORT = Number(env.PORT) || 3000;
-const HOST = env.HOST || '0.0.0.0';
+const PORT = process.env.PORT || 8080;
+const HOST = process.env.HOST || '0.0.0.0';
+
 app.listen(PORT, HOST, () => {
   console.log(`HTTP server listening on [${HOST}]:${PORT}. Initializing bot...`);
   initialize().catch((e) => {
