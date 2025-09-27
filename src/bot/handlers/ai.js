@@ -5,7 +5,6 @@ import gamesService from '../../services/gamesService.js';
 import { setUserState, getUserState } from '../state.js';
 import { getSportEmoji } from '../../utils/enterpriseUtilities.js';
 
-// Human-friendly fallback titles to prevent null labels
 const SPORT_TITLES = {
   basketball_nba: 'NBA',
   basketball_wnba: 'WNBA',
@@ -13,15 +12,14 @@ const SPORT_TITLES = {
   football_nfl: 'NFL',
   hockey_nhl: 'NHL',
   icehockey_nhl: 'NHL',
-  football_ncaaf: 'NCAAF',             // local/legacy
-  americanfootball_ncaaf: 'NCAAF',     // The Odds API [web:349][web:350]
+  football_ncaaf: 'NCAAF',
+  americanfootball_ncaaf: 'NCAAF',
 };
 
-// Prefer College Football first; de-emphasize NHL
 const PREFERRED_FIRST = ['football_ncaaf', 'americanfootball_ncaaf'];
 const DEPRIORITIZE_LAST = ['hockey_nhl', 'icehockey_nhl'];
+const PAGE_SIZE = 10;
 
-// Sort sports so CFB appears before NHL when both are present
 function sortSports(sports) {
   const rank = (k) => {
     if (PREFERRED_FIRST.includes(k)) return -100;
@@ -32,11 +30,12 @@ function sortSports(sports) {
     (a, b) => rank(a?.sport_key || '') - rank(b?.sport_key || '')
   );
 }
+function pageOf(arr, page) { const start = page * PAGE_SIZE; return arr.slice(start, start + PAGE_SIZE); }
 
 export function registerAI(bot) {
   bot.onText(/^\/ai$/, async (msg) => {
     const chatId = msg.chat.id;
-    await setUserState(chatId, {});
+    await setUserState(chatId, { page: 0 });
     sendSportSelection(bot, chatId);
   });
 }
@@ -49,9 +48,16 @@ export function registerAICallbacks(bot) {
     const chatId = message.chat.id;
     await bot.answerCallbackQuery(cbq.id);
 
-    let state = await getUserState(chatId);
+    let state = await getUserState(chatId) || {};
     const parts = data.split('_');
     const action = parts[1];
+
+    if (action === 'page') {
+      const page = parseInt(parts[2], 10) || 0;
+      state.page = page;
+      await setUserState(chatId, state);
+      return sendSportSelection(bot, chatId, message.message_id, page);
+    }
 
     if (action === 'sport') {
       state.sportKey = parts.slice(2).join('_');
@@ -64,8 +70,8 @@ export function registerAICallbacks(bot) {
     } else if (action === 'mode') {
       state.mode = parts[2];
       await setUserState(chatId, state);
-      if (state.mode === 'db') { // DB mode doesn't have props, so skip to execution
-        state.betType = 'mixed'; // Default to mixed for DB mode
+      if (state.mode === 'db') {
+        state.betType = 'mixed';
         await setUserState(chatId, state);
         executeAiRequest(bot, chatId, message.message_id);
       } else {
@@ -85,7 +91,7 @@ export function registerAICallbacks(bot) {
       executeAiRequest(bot, chatId, message.message_id);
     } else if (action === 'back') {
       const to = parts[2];
-      if (to === 'sport') sendSportSelection(bot, chatId, message.message_id);
+      if (to === 'sport') sendSportSelection(bot, chatId, message.message_id, state.page || 0);
       if (to === 'legs') sendLegSelection(bot, chatId, message.message_id);
       if (to === 'mode') sendModeSelection(bot, chatId, message.message_id);
       if (to === 'bettype') sendBetTypeSelection(bot, chatId, message.message_id);
@@ -93,23 +99,29 @@ export function registerAICallbacks(bot) {
   });
 }
 
-// --- UI Step Functions ---
-
-async function sendSportSelection(bot, chatId, messageId = null) {
+async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
   const sportsRaw = await gamesService.getAvailableSports();
-  const sports = sortSports((sportsRaw || []).filter(s => s?.sport_key)); // prioritize CFB over NHL
+  const sports = sortSports((sportsRaw || []).filter(s => s?.sport_key));
   if (!sports?.length) return bot.sendMessage(chatId, 'No games in DB to analyze.');
 
-  // Safe, non-null labels: sport_title → fallback map → sport_key [web:368]
-  const buttons = sports.map(s => {
+  const totalPages = Math.max(1, Math.ceil(sports.length / PAGE_SIZE));
+  page = Math.min(Math.max(0, page), totalPages - 1);
+
+  const slice = pageOf(sports, page).map(s => {
     const title = s?.sport_title ?? SPORT_TITLES[s.sport_key] ?? s.sport_key;
     return { text: `${getSportEmoji(s.sport_key)} ${title}`, callback_data: `ai_sport_${s.sport_key}` };
   });
 
-  const keyboard = [];
-  for (let i = 0; i < buttons.length; i += 2) keyboard.push(buttons.slice(i, i + 2));
+  const rows = [];
+  for (let i = 0; i < slice.length; i += 2) rows.push(slice.slice(i, i + 2));
+
+  const nav = [];
+  if (page > 0) nav.push({ text: '‹ Prev', callback_data: `ai_page_${page - 1}` });
+  if (page < totalPages - 1) nav.push({ text: 'Next ›', callback_data: `ai_page_${page + 1}` });
+  if (nav.length) rows.push(nav);
+
   const text = '🤖 *AI Parlay Builder*\n\n*Step 1:* Select a sport.';
-  const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
+  const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } };
   if (messageId) await bot.editMessageText(text, { ...opts, chat_id: chatId, message_id: messageId });
   else await bot.sendMessage(chatId, text, opts);
 }
