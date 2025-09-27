@@ -4,8 +4,7 @@ import TelegramBot from 'node-telegram-bot-api';
 import sentryService from './services/sentryService.js';
 import { registerAnalytics } from './bot/handlers/analytics.js';
 import { registerModel } from './bot/handlers/model.js';
-import { registerCache } from './bot/handlers/cache.js';
-
+import { registerCacheHandler } from './bot/handlers/cache.js';
 // Create Express app
 const app = express();
 
