@@ -8,7 +8,7 @@ dotenv.config();
 // Pre-validation Sentry (non-breaking)
 Sentry.init({
   dsn: process.env.SENTRY_DSN || 'https://mock@sentry.io/0',
-  environment: process.env.NODE_ENV || 'development',
+  environment: process.env.NODE_ENV || 'production',
   beforeSend: (event) => {
     if (event.exception?.values?.[0]?.value?.includes('Environment variable')) return null;
     return event;
