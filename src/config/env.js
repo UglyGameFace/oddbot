@@ -38,9 +38,9 @@ const env = cleanEnv(process.env, {
   PROFILES_SAMPLE_RATE: num({ default: 0.25 }),
 
   // Prefer platform-injected PORT; devDefault for local runs
-  PORT: num({ devDefault: 3000 }),
+  PORT: num({ devDefault: 8080 }),
   HOST: str({ default: '0.0.0.0' }),
-  APP_URL: url({ default: 'http://localhost:3000' }),
+  APP_URL: url({ default: 'http://localhost:8080' }),
 
   // Optional aliases for the Telegram webhook secret
   TELEGRAM_WEBHOOK_SECRET: str({ default: process.env.TG_WEBHOOK_SECRET || '' }),
