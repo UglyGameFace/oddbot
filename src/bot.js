@@ -29,7 +29,6 @@ const TOKEN = env.TELEGRAM_BOT_TOKEN;
 const USE_WEBHOOK = env.APP_URL && env.APP_URL.startsWith('https');
 const bot = new TelegramBot(TOKEN, { 
     polling: !USE_WEBHOOK,
-    // Note: It's good practice to set request timeout
     request: { timeout: 20000 } 
 });
 
@@ -42,7 +41,7 @@ async function wireHandlers() {
   registerCustom(bot);
   registerCustomCallbacks(bot);
   registerAI(bot);
-  registerAICallbacks(bot); // Crucial for the new button UI
+  registerAICallbacks(bot);
   registerQuant(bot);
   registerPlayer(bot);
   registerPlayerCallbacks(bot);
@@ -98,7 +97,6 @@ app.listen(PORT, HOST, () => {
 // --- Graceful Shutdown ---
 const shutdown = (signal) => {
   console.log(`\n${signal} received. Shutting down gracefully...`);
-  // Add any cleanup logic here (e.g., close database connections)
   process.exit(0);
 };
 process.on('SIGTERM', () => shutdown('SIGTERM'));
