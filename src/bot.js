@@ -79,7 +79,7 @@ async function startWebhook() {
 
 sentryService.attachExpressPostRoutes?.(app);
 
-// --- Application Start (UPDATED WITH TRACER LOGS) ---
+// --- Application Start (WITH TRACER LOGS) ---
 async function initialize() {
   console.log('[Tracer] Step 1: Starting wireHandlers()...');
   await wireHandlers();
@@ -134,3 +134,8 @@ const shutdown = (signal) => {
 };
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+
+// --- Keep Process Alive ---
+// This timer prevents the Node.js process from exiting if it incorrectly
+// believes its event loop is empty. This is a workaround for the silent shutdown issue.
+setInterval(() => {}, 1 << 30);
