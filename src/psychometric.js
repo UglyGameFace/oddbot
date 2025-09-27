@@ -3,7 +3,7 @@
 
 import aiService from './services/aiService.js';
 import DatabaseService from './services/databaseService.js';
-import sentryService from '../services/sentryService.js';
+import sentryService from './services/sentryService.js';
 
 class InstitutionalPsychometricProfiler {
   constructor() {
