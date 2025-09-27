@@ -3,6 +3,7 @@ import env from '../../config/env.js';
 import AIService from '../../services/aiService.js';
 import { getAIConfig, setAIConfig, getBuilderConfig } from '../state.js';
 import oddsService from '../../services/oddsService.js';
+import redis from '../../services/redisService.js';
 
 const tz = env.TIMEZONE || 'America/New_York';
 const formatGameTimeTZ = (iso) => new Date(iso).toLocaleString('en-US', {
@@ -34,7 +35,7 @@ export function registerAI(bot) {
 export function registerAICallbacks(bot) {
   bot.on('callback_query', async (cbq) => {
     const { data, message } = cbq || {};
-    if (!data || !message) return;
+    if (!data || !message || !data.startsWith('cfg')) return;
     const chatId = message.chat.id;
 
     try { await bot.answerCallbackQuery(cbq.id); } catch {}
@@ -50,9 +51,9 @@ export function registerAICallbacks(bot) {
     }
     if (data === 'cfg_s_menu') return sendAIStrategyMenu(bot, chatId, message.message_id);
     if (data.startsWith('cfg_s_set_')) {
-      const st = data.split('_').slice(3).join('_');
+      const st = data.split('_').pop();
       const cfg = await getAIConfig(chatId);
-      if (['conservative', 'balanced', 'aggressive'].includes(st)) cfg.strategy = st;
+      if (['highprobability', 'balanced', 'lottery'].includes(st)) cfg.strategy = st;
       await setAIConfig(chatId, cfg);
       return sendAIConfigurationMenu(bot, chatId, message.message_id);
     }
@@ -69,6 +70,19 @@ export function registerAICallbacks(bot) {
       await setAIConfig(chatId, cfg);
       return sendAISportsMenu(bot, chatId, message.message_id);
     }
+    if (data.startsWith('cfgsp_toggle_')) {
+        const sportKey = data.substring('cfgsp_toggle_'.length);
+        const cfg = await getAIConfig(chatId);
+        const selected = new Set(cfg.sports || []);
+        if (selected.has(sportKey)) {
+            selected.delete(sportKey);
+        } else {
+            selected.add(sportKey);
+        }
+        cfg.sports = Array.from(selected);
+        await setAIConfig(chatId, cfg);
+        return sendAISportsMenu(bot, chatId, message.message_id);
+    }
     if (data === 'cfg_build') {
       const cfg = await getAIConfig(chatId);
       return handleAIBuild(bot, chatId, cfg, message.message_id);
@@ -79,7 +93,7 @@ export function registerAICallbacks(bot) {
 async function sendAIConfigurationMenu(bot, chatId, messageId = null) {
   const cfg = await getAIConfig(chatId);
   const sportsText = cfg.sports?.length ? `${cfg.sports.length} selected` : 'All';
-  const text = `*✨ AI Analyst Parlay*\n\nConfigure legs/strategy/props/sports; AI uses fresh cached odds respecting your filters.`;
+  const text = `*✨ AI Analyst Parlay*\n\nConfigure your parlay, and the AI will build it using the latest market data.`;
   const rows = [
     [{ text: `Legs: ${cfg.legs}`, callback_data: `cfg_l_menu` }, { text: `Strategy: ${cfg.strategy}`, callback_data: 'cfg_s_menu' }],
     [{ text: `Player Props: ${cfg.includeProps ? '✅ Yes' : '❌ No'}`, callback_data: 'cfg_p_tgl' }],
@@ -101,13 +115,13 @@ async function sendAILegsMenu(bot, chatId, messageId) {
 }
 
 async function sendAIStrategyMenu(bot, chatId, messageId) {
-  const strategies = ['conservative', 'balanced', 'aggressive'];
+  const strategies = ['highprobability', 'balanced', 'lottery'];
   const rows = [strategies.map((s) => ({ text: s[0].toUpperCase() + s.slice(1), callback_data: `cfg_s_set_${s}` })), [{ text: '« Back', callback_data: 'cfg_main' }]];
   await bot.editMessageText('*Select strategy:*', { parse_mode: 'Markdown', chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: rows } });
 }
 
 async function sendAISportsMenu(bot, chatId, messageId) {
-  const all = await getAvailableSportsCached();
+  const all = await oddsService.getAvailableSportsCached();
   const cfg = await getAIConfig(chatId);
   const selected = new Set(cfg.sports || []);
   const rows = [];
@@ -124,32 +138,29 @@ const AI_BUILD_MIN_INTERVAL_MS = 60000;
 
 async function handleAIBuild(bot, chatId, cfg, messageId) {
   const limKey = `rl:ai:${chatId}`;
-  const { default: r } = await import('../../services/redisService.js');
-  const last = Number(await r.get(limKey));
+  const last = Number(await redis.get(limKey));
   const now = Date.now();
   if (last && now - last < AI_BUILD_MIN_INTERVAL_MS) {
-    await bot.sendMessage(chatId, '⏳ Please wait before requesting another AI build.');
+    await bot.sendMessage(chatId, '⏳ Please wait a moment before requesting another AI build.');
     return;
   }
-  await r.set(limKey, now, 'EX', Math.ceil(AI_BUILD_MIN_INTERVAL_MS / 1000));
+  await redis.set(limKey, now, 'EX', Math.ceil(AI_BUILD_MIN_INTERVAL_MS / 1000));
 
   try {
-    await bot.editMessageText('🤖 Accessing current market data and running deep quantitative analysis...', { chat_id: chatId, message_id: messageId, reply_markup: null });
+    await bot.editMessageText('🤖 Accessing real-time market data and running deep quantitative analysis...', { chat_id: chatId, message_id: messageId, reply_markup: null });
   } catch {}
 
   try {
-    const allSports = await getAvailableSportsCached();
+    const allSports = await oddsService.getAvailableSportsCached();
     const sportKeys = cfg.sports?.length ? cfg.sports : allSports.map((s) => s.sport_key);
-    const perSport = await Promise.all(sportKeys.map((k) => getGamesForSportCached(k)));
+    const perSport = await Promise.all(sportKeys.map((k) => oddsService.getGamesForSportCached(k)));
     let pooled = perSport.flat();
 
     const b = await getBuilderConfig(chatId);
     pooled = applyFilters(pooled, { cutoffHours: b.cutoffHours, excludedTeams: b.excludedTeams });
 
     if (pooled.length < cfg.legs) {
-      await bot.sendMessage(chatId, `Not enough upcoming games to build a ${cfg.legs}-leg parlay with the current filters/time window.`);
-      try { await bot.deleteMessage(chatId, messageId); } catch {}
-      return;
+      return bot.editMessageText(`Not enough upcoming games to build a ${cfg.legs}-leg parlay with your current filters. Try adjusting in /settings.`, { chat_id: chatId, message_id: messageId });
     }
 
     const result = await AIService.buildAIParlay(cfg, pooled);
@@ -159,29 +170,18 @@ async function handleAIBuild(bot, chatId, cfg, messageId) {
     const totAm = Math.round(toAmericanFromDecimal(totDec));
     parlay.total_odds = totAm;
 
-    const byGame = {};
-    parlay.legs.forEach((leg) => {
-      if (!byGame[leg.game]) byGame[leg.game] = { legs: [], commence_time: leg.commence_time, sport: leg.sport };
-      byGame[leg.game].legs.push(leg);
-      if (!byGame[leg.game].commence_time && leg.commence_time) byGame[leg.game].commence_time = leg.commence_time;
-    });
-
     let out = `📈 *${parlay.title || 'AI-Generated Parlay'}*\n\n_${parlay.overall_narrative}_\n\n`;
-    Object.entries(byGame).forEach(([game, info]) => {
-      const timeStr = info.commence_time ? formatGameTimeTZ(info.commence_time) : '';
-      out += `*${info.sport}* — ${game}${timeStr ? ` — ${timeStr}` : ''}\n`;
-      info.legs.forEach((leg) => {
-        const sOdds = leg.odds > 0 ? `+${leg.odds}` : `${leg.odds}`;
-        out += `• ${leg.selection} (${sOdds})\n`;
-      });
-      out += `\n`;
+    parlay.legs.forEach((leg) => {
+      const sOdds = leg.odds > 0 ? `+${leg.odds}` : `${leg.odds}`;
+      out += `*${leg.game}*\n`;
+      out += `• ${leg.selection} (${sOdds})\n`;
+      out += `_${leg.justification}_\n\n`;
     });
     out += `*Total Odds*: *${totAm > 0 ? '+' : ''}${totAm}*`;
 
-    await bot.sendMessage(chatId, out, { parse_mode: 'Markdown' });
-    try { await bot.deleteMessage(chatId, messageId); } catch {}
+    await bot.editMessageText(out, { chat_id: chatId, message_id: messageId, parse_mode: 'Markdown' });
   } catch (err) {
-    await bot.sendMessage(chatId, `🚨 AI analysis failed.\n\n_Error: ${err.message}_`);
-    try { await bot.deleteMessage(chatId, messageId); } catch {}
+    console.error("AI Build Failed:", err);
+    await bot.editMessageText(`🚨 AI analysis failed.\n\n_Error: ${err.message}_`, { chat_id: chatId, message_id: messageId, parse_mode: 'Markdown' });
   }
 }
