@@ -6,29 +6,27 @@ import oddsService from '../../services/oddsService.js';
 import { sentryService } from '../../services/sentryService.js';
 
 /**
- * Refreshes the cache for all sports available in the database.
- * This function now uses the modern, two-step approach:
- * 1. Get the list of all sports from our database (fast and cheap).
- * 2. For each sport, call the live odds service to fetch and cache the latest data.
+ * Refreshes the cache for a predefined list of popular sports.
+ * This is optimized to reduce API quota usage by not fetching every sport.
  */
 async function refreshCache() {
-  console.log('🔄 Running scheduled cache refresh...');
+  console.log('🔄 Running scheduled cache refresh for popular sports...');
   try {
-    const availableSports = await gamesService.getAvailableSports();
-    if (!availableSports || availableSports.length === 0) {
-      console.log('No sports found in the database to refresh.');
-      return;
-    }
+    // Define a list of only the sports you care about to save API quota
+    const popularSportKeys = [
+      'americanfootball_nfl',
+      'basketball_nba',
+      'baseball_mlb',
+      'icehockey_nhl'
+    ];
 
-    const sportKeys = availableSports.map(s => s.sport_key);
-
-    // Trigger a cache update for each sport
-    for (const sport of sportKeys) {
+    // Trigger a cache update for each popular sport
+    for (const sport of popularSportKeys) {
       // By calling getSportOdds, the oddsService will automatically fetch
       // live data and update the Redis cache according to its internal logic.
       await oddsService.getSportOdds(sport);
     }
-    console.log('✅ Cache refresh complete for all available sports.');
+    console.log('✅ Cache refresh complete for popular sports.');
   } catch (error) {
     console.error('Auto cache refresh error:', error);
     sentryService.captureError(error, { component: 'cache_handler' });
@@ -40,7 +38,7 @@ export function registerCacheHandler(bot) {
   bot.onText(/^\/cache$/, async (msg) => {
     const chatId = msg.chat.id;
     try {
-      await bot.sendMessage(chatId, '⏳ Initiating manual cache refresh for all sports...');
+      await bot.sendMessage(chatId, '⏳ Initiating manual cache refresh for popular sports...');
       await refreshCache();
       await bot.sendMessage(chatId, '✅ Cache refresh complete.');
     } catch (e) {
@@ -50,9 +48,9 @@ export function registerCacheHandler(bot) {
     }
   });
 
-  // --- Auto-refresh scheduled every 15 minutes ---
-  // Note: A 15-minute interval is safer for API rate limits than 5 minutes.
-  cron.schedule('*/15 * * * *', () => {
+  // --- Auto-refresh scheduled every hour ---
+  // Changed from 15 minutes to 1 hour to reduce API usage.
+  cron.schedule('0 * * * *', () => {
     refreshCache();
   });
 }
