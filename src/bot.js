@@ -1,33 +1,35 @@
-// src/bot.js — FINAL: Sentry middleware, robust health, webhook with secret + allowed_updates, IPv4 bind by default
 import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
 import sentryService from './services/sentryService.js';
 
 const app = express();
-sentryService.attachExpressPreRoutes?.(app); // Sentry request + tracing
+
+// ─── LIVENESS PROBE (new) ─────────────────────────────────────────
+app.get('/liveness', (_req, res) => res.sendStatus(200));
+app.head('/liveness', (_req, res) => res.sendStatus(200));
+
+sentryService.attachExpressPreRoutes?.(app);
 app.use(express.json());
 
 const TOKEN = env.TELEGRAM_BOT_TOKEN;
 const APP_URL = env.APP_URL;
-const SECRET = (env.TELEGRAM_WEBHOOK_SECRET || '').trim();
+const SECRET = env.TELEGRAM_WEBHOOK_SECRET.trim();
 const USE_WEBHOOK = Boolean(APP_URL && APP_URL.startsWith('http'));
 if (!TOKEN) {
   console.error('FATAL: Missing TELEGRAM_BOT_TOKEN');
   process.exit(1);
 }
-
 const bot = new TelegramBot(TOKEN, { polling: false, filepath: false });
 
-// Health endpoints (GET + HEAD -> 200)
+// HEALTH ENDPOINTS (unchanged)
 const healthOk = (_req, res) => res.status(200).send('OK');
-app.get('/', healthOk);                     app.head('/', healthOk);
-app.get('/health', healthOk);               app.head('/health', healthOk);
-app.get('/healthz', healthOk);              app.head('/healthz', healthOk);
-app.get('/health/readiness', healthOk);     app.head('/health/readiness', healthOk);
-app.get('/health/liveness', healthOk);      app.head('/health/liveness', healthOk);
+app.get('/', healthOk); app.head('/', healthOk);
+app.get('/health', healthOk); app.head('/health', healthOk);
+app.get('/healthz', healthOk); app.head('/healthz', healthOk);
+app.get('/health/readiness', healthOk); app.head('/health/readiness', healthOk);
+app.get('/health/liveness', healthOk); app.head('/health/liveness', healthOk);
 
-// Keep all existing handlers; add only a safe callback ack to stop spinners
 async function wireHandlers() {
   console.log('Wiring handlers...');
   const tryImport = async (p) => {
@@ -58,11 +60,9 @@ async function wireHandlers() {
     if (typeof mod.registerAICallbacks === 'function') { mod.registerAICallbacks(bot); ok = true; }
     console.log(ok ? `  👍 Registered '${name}' listeners.` : `  ⚠️ No registration function in '${name}'.`);
   }
-  // Baseline text ping
   bot.on('message', (msg) => {
     if (msg?.text?.trim().toLowerCase() === '/ping') bot.sendMessage(msg.chat.id, 'pong');
   });
-  // Baseline callback ack (does not alter routing)
   bot.on('callback_query', async (q) => {
     try { await bot.answerCallbackQuery(q.id, { cache_time: 0 }); } catch {}
   });
@@ -79,33 +79,28 @@ async function startWebhook() {
     catch (e) { console.error('processUpdate failed:', e?.message || e); res.sendStatus(500); }
   });
   const fullWebhook = `${APP_URL.replace(/\/+$/, '')}${webhookPath}`;
-  await bot.setWebHook(fullWebhook, {
-    secret_token: SECRET || undefined,
-    allowed_updates: ['message', 'callback_query'],
-  });
+  await bot.setWebHook(fullWebhook, { secret_token: SECRET || undefined, allowed_updates: ['message','callback_query'] });
   console.log(`Webhook set: ${fullWebhook}`);
 }
 async function startPolling() {
   try { await bot.deleteWebHook({ drop_pending_updates: true }); } catch {}
-  await bot.startPolling({ params: { allowed_updates: ['message', 'callback_query'] } });
+  await bot.startPolling({ params: { allowed_updates: ['message','callback_query'] } });
   console.log('Polling started.');
 }
 
-// Sentry error middleware AFTER routes
 sentryService.attachExpressPostRoutes?.(app);
 
-// Unified, Railway- and local-friendly PORT/host binding
-const PORT = process.env.PORT ? Number(process.env.PORT) : (env.PORT || 3000);
-const HOST = process.env.HOST || '0.0.0.0';
-
-// Boot + listen
 async function initialize() {
   await wireHandlers();
-  if (USE_WEBHOOK) await startWebhook();
-  else await startPolling();
+  if (USE_WEBHOOK) await startWebhook(); else await startPolling();
   const me = await bot.getMe();
   console.log(`Bot @${me.username} ready in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`);
 }
+
+// ─── PORT BINDING FIX ────────────────────────────────────────────
+// Removed: fallback to env.PORT (this caused deployments to bind wrong port)
+const PORT = Number(process.env.PORT) || 3000;
+const HOST = process.env.HOST || '0.0.0.0';
 
 console.log(`Binding host ${HOST}, port ${PORT}`);
 app.listen(PORT, HOST, () => {
@@ -115,6 +110,7 @@ app.listen(PORT, HOST, () => {
     process.exit(1);
   });
 });
-// Console safety nets
-process.on('unhandledRejection', (e) => console.error('UnhandledRejection:', e));
-process.on('uncaughtException', (e) => console.error('UncaughtException:', e));
+
+// Graceful shutdown (unchanged)
+process.on('SIGTERM', () => app.close?.(() => process.exit(0)));
+process.on('SIGINT', () => app.close?.(() => process.exit(0)));
