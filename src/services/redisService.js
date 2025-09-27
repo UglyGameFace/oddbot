@@ -23,7 +23,7 @@ function getRedisClient() {
       // These options are optimized for cloud environments and prevent common issues.
       maxRetriesPerRequest: 3,
       connectTimeout: 15000,
-      lazyConnect: true, // Don't connect until the first command is issued
+      lazyConnect: false, // CHANGED: Connect immediately on startup to get clear errors.
       enableReadyCheck: false,
       // Keep the connection alive by sending a ping, crucial for serverless environments
       keepAlive: 50000, 
@@ -44,7 +44,8 @@ function getRedisClient() {
     });
 
     client.on('error', (err) => {
-      console.error('❌ Redis client error:', err.message);
+      // UPDATED: Log the full error object for more detail.
+      console.error('❌ Redis client error:', err); 
       sentryService.captureError(err, { component: 'redis_service' });
       // On the first connection error, reject the promise to allow for fast failure
       if (!client.isReady) {
