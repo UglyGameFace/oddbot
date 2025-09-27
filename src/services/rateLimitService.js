@@ -1,7 +1,7 @@
 // src/services/rateLimitService.js - ENTERPRISE-GRADE RATE LIMITING
 import redis from './redisService.js';
 import env from '../config/env.js';
-import sentryService from './sentryService.js';
+import { sentryService } from './sentryService.js';
 
 class EnterpriseRateLimitService {
   constructor() {
