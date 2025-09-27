@@ -7,16 +7,21 @@
   "engines": { "node": ">=20.0.0" },
   "scripts": {
     "start": "node src/bot.js",
-    "dev": "NODE_ENV=production nodemon src/bot.js",
+    "dev": "NODE_ENV=development nodemon src/bot.js",
+    "worker:odds": "node src/workers/oddsIngestion.js",
+    "worker:notifications": "node src/workers/notificationWorker.js",
     "lint": "eslint . --ext .js",
     "format": "prettier --write \"src/**/*.js\""
   },
   "dependencies": {
+    "@google/generative-ai": "^0.21.0",
     "@sentry/node": "^8.0.0",
     "@sentry/profiling-node": "^1.5.1",
+    "@supabase/supabase-js": "^2.38.0",
+    "axios": "^1.6.7",
     "crypto-js": "^4.2.0",
-    "dotenv": "^10.0.0",
-    "envalid": "^7.0.0",
+    "dotenv": "^16.3.1",
+    "envalid": "^7.3.1",
     "express": "^4.18.2",
     "ioredis": "^5.3.2",
     "merkletreejs": "^0.3.11",
@@ -25,17 +30,26 @@
     "ml-pca": "^4.1.1",
     "ml-regression": "^6.3.0",
     "node-cron": "^3.0.3",
-    "node-telegram-bot-api": "^0.61.0",
-    "pg": "^8.10.0",
-    "redis": "^4.6.0",
-    "@google/generative-ai": "^0.4.0",
+    "node-telegram-bot-api": "^0.64.0",
     "openai": "^4.0.0",
-    "axios": "^1.6.7"
+    "pg": "^8.10.0",
+    "pidusage": "^3.0.2",
+    "redis": "^4.6.0"
   },
   "devDependencies": {
     "eslint": "^8.40.0",
     "eslint-config-prettier": "^9.3.0",
-    "nodemon": "^2.0.20",
+    "nodemon": "^3.0.1",
     "prettier": "^3.0.0"
-  }
+  },
+  "keywords": [
+    "telegram",
+    "betting",
+    "ai",
+    "parlay",
+    "quantitative",
+    "institutional"
+  ],
+  "author": "Institutional Analytics",
+  "license": "MIT"
 }
