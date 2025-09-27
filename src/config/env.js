@@ -1,19 +1,15 @@
 // src/config/env.js
-
 import dotenv from 'dotenv';
 import { cleanEnv, str, num, url, bool } from 'envalid';
 import * as Sentry from '@sentry/node';
 
-// Load .env file
 dotenv.config();
 
-// Initialize Sentry early
 if (process.env.SENTRY_DSN) {
   Sentry.init({
     dsn: process.env.SENTRY_DSN,
     environment: process.env.NODE_ENV || 'production',
     beforeSend: (event) => {
-      // Custom filter to ignore environment variable errors if needed
       if (event.exception?.values?.[0]?.value?.includes('Environment variable')) return null;
       return event;
     },
@@ -21,12 +17,10 @@ if (process.env.SENTRY_DSN) {
 }
 
 const env = cleanEnv(process.env, {
-  // Core Bot
   TELEGRAM_BOT_TOKEN: str(),
   NODE_ENV: str({ choices: ['development','production','staging','test'], default: 'production' }),
   TIMEZONE: str({ default: 'America/New_York' }),
-  
-  // APIs
+
   SUPABASE_URL: url(),
   SUPABASE_ANON_KEY: str(),
   SUPABASE_SERVICE_KEY: str({ default: '' }),
@@ -36,24 +30,20 @@ const env = cleanEnv(process.env, {
   SPORTRADAR_API_KEY: str(),
   API_SPORTS_KEY: str(),
 
-  // Sentry
   SENTRY_DSN: str({ default: '' }),
   SENTRY_ENVIRONMENT: str({ default: '' }),
   SENTRY_TRACES_SAMPLE_RATE: num({ default: 0.2 }),
   SENTRY_ENABLE_PROFILING: bool({ default: false }),
   PROFILES_SAMPLE_RATE: num({ default: 0.25 }),
 
-  // Server & Performance
   PORT: num({ devDefault: 3000 }),
   HOST: str({ default: '0.0.0.0' }),
   APP_URL: url({ default: 'http://localhost:3000' }),
 
   // Webhook secret aliases (optional via defaults)
-  // Accept either name; defaults make them optional so envalid won’t throw
   TELEGRAM_WEBHOOK_SECRET: str({ default: process.env.TG_WEBHOOK_SECRET || '' }),
   TG_WEBHOOK_SECRET: str({ default: process.env.TELEGRAM_WEBHOOK_SECRET || '' }),
-  
-  // Application Logic
+
   RATE_LIMIT_REQUESTS: num({ default: 100 }),
   RATE_LIMIT_TIME_WINDOW: num({ default: 900000 }),
   TELEGRAM_POLLING_INTERVAL: num({ default: 300 }),
@@ -61,14 +51,12 @@ const env = cleanEnv(process.env, {
   CACHE_TTL_DEFAULT: num({ default: 300 }),
   ENCRYPTION_KEY: str({ default: 'default-encryption-key-change-in-production' }),
   JWT_SECRET: str({ default: 'default-jwt-secret-change-in-production' }),
-  
-  // Feature Flags
+
   FEATURE_QUANTITATIVE_ANALYTICS: bool({ default: true }),
   FEATURE_BEHAVIORAL_INSIGHTS: bool({ default: true }),
   FEATURE_REAL_TIME_ODDS: bool({ default: true }),
   FEATURE_ADVANCED_NOTIFICATIONS: bool({ default: true }),
-  
-  // Resource Management
+
   WORKER_POOL_SIZE: num({ default: 4 }),
   DATABASE_POOL_SIZE: num({ default: 10 }),
   MAX_EVENT_LOOP_DELAY: num({ default: 1000 }),
@@ -91,7 +79,7 @@ const env = cleanEnv(process.env, {
   },
 });
 
-// Normalize a single WEBHOOK_SECRET field for the app to use
+// Normalize and export helpful flags/values
 const normalized = Object.freeze({
   ...env,
   WEBHOOK_SECRET: (env.TELEGRAM_WEBHOOK_SECRET || env.TG_WEBHOOK_SECRET || '').trim(),
