@@ -5,7 +5,7 @@ import TelegramBot from 'node-telegram-bot-api';
 import sentryService from './services/sentryService.js';
 
 const app = express();
-sentryService.attachExpressPreRoutes?.(app); // Sentry request + tracing [web:705]
+sentryService.attachExpressPreRoutes?.(app); // Sentry request + tracing
 app.use(express.json());
 
 const TOKEN = env.TELEGRAM_BOT_TOKEN;
@@ -21,11 +21,11 @@ const bot = new TelegramBot(TOKEN, { polling: false, filepath: false });
 
 // Health endpoints (GET + HEAD -> 200)
 const healthOk = (_req, res) => res.status(200).send('OK');
-app.get('/', healthOk);                     app.head('/', healthOk);            // [web:569]
-app.get('/health', healthOk);               app.head('/health', healthOk);      // [web:569]
-app.get('/healthz', healthOk);              app.head('/healthz', healthOk);     // [web:569]
-app.get('/health/readiness', healthOk);     app.head('/health/readiness', healthOk); // [web:569]
-app.get('/health/liveness', healthOk);      app.head('/health/liveness', healthOk);  // [web:569]
+app.get('/', healthOk);                     app.head('/', healthOk);
+app.get('/health', healthOk);               app.head('/health', healthOk);
+app.get('/healthz', healthOk);              app.head('/healthz', healthOk);
+app.get('/health/readiness', healthOk);     app.head('/health/readiness', healthOk);
+app.get('/health/liveness', healthOk);      app.head('/health/liveness', healthOk);
 
 // Keep all existing handlers; add only a safe callback ack to stop spinners
 async function wireHandlers() {
@@ -80,34 +80,34 @@ async function startWebhook() {
   });
   const fullWebhook = `${APP_URL.replace(/\/+$/, '')}${webhookPath}`;
   await bot.setWebHook(fullWebhook, {
-    secret_token: SECRET || undefined,                         // header verification [web:20]
-    allowed_updates: ['message', 'callback_query'],            // deliver callbacks [web:20]
+    secret_token: SECRET || undefined,
+    allowed_updates: ['message', 'callback_query'],
   });
   console.log(`Webhook set: ${fullWebhook}`);
 }
 async function startPolling() {
   try { await bot.deleteWebHook({ drop_pending_updates: true }); } catch {}
-  await bot.startPolling({ params: { allowed_updates: ['message', 'callback_query'] } }); // [web:20]
+  await bot.startPolling({ params: { allowed_updates: ['message', 'callback_query'] } });
   console.log('Polling started.');
 }
 
 // Sentry error middleware AFTER routes
 sentryService.attachExpressPostRoutes?.(app);
 
+// Unified, Railway- and local-friendly PORT/host binding
+const injected = Number(process.env.PORT);
+const local = Number(env.PORT);
+const PORT = injected || local || 3000;
+const HOST = process.env.HOST || '0.0.0.0';
+
 // Boot + listen
 async function initialize() {
   await wireHandlers();
-  if (USE_WEBHOOK) await startWebhook(); else await startPolling();
+  if (USE_WEBHOOK) await startWebhook();
+  else await startPolling();
   const me = await bot.getMe();
   console.log(`Bot @${me.username} ready in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`);
 }
-
-// Replace your current PORT/HOST block with this:
-const isProd = process.env.NODE_ENV === 'production';
-const injectedPort = Number(process.env.PORT);
-const fallbackPort = Number(env.PORT || 3000);
-const PORT = isProd ? injectedPort : (injectedPort || fallbackPort); // force platform PORT in prod
-const HOST = process.env.HOST || '0.0.0.0';
 
 console.log(`Binding host ${HOST}, port ${PORT}`);
 app.listen(PORT, HOST, () => {
@@ -117,7 +117,6 @@ app.listen(PORT, HOST, () => {
     process.exit(1);
   });
 });
-
 
 // Console safety nets
 process.on('unhandledRejection', (e) => console.error('UnhandledRejection:', e));
