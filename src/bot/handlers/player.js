@@ -1,74 +1,147 @@
 // src/bot/handlers/player.js
-import {
-  getBuilderConfig, getParlaySlip, setParlaySlip,
-  setUserState, getUserState,
-} from '../state.js';
-import AIService from '../../services/aiService.js';
-import redis from '../../services/redisService.js';
 
+import oddsService from '../../services/oddsService.js';
+import gamesService from '../../services/gamesService.js';
+import { setUserState, getUserState, saveToken, loadToken } from '../state.js';
+import { getSportEmoji, formatGameTimeTZ } from '../../utils/enterpriseUtilities.js';
+
+// --- Command to Start the Player Search Flow ---
 export function registerPlayer(bot) {
-  bot.onText(/\/player/, async (msg) => {
-    await setUserState(msg.chat.id, 'awaiting_player', 300);
-    await bot.sendMessage(msg.chat.id, '🤵 Which player is needed?');
+  bot.onText(/^\/player$/, async (msg) => {
+    const chatId = msg.chat.id;
+    await setUserState(chatId, { waitingForPlayerName: true }, 120); // State expires in 2 minutes
+    await bot.sendMessage(chatId, '🔍 *Find Player Props*\n\nEnter the full or partial last name of the player you want to find:', { parse_mode: 'Markdown' });
   });
 
   bot.on('message', async (msg) => {
-    if (!msg.text || msg.text.startsWith('/')) return;
     const chatId = msg.chat.id;
     const state = await getUserState(chatId);
-    if (state !== 'awaiting_player') return;
 
-    await setUserState(chatId, 'none', 1);
-    const waiting = await bot.sendMessage(chatId, `🔍 Searching for all available prop bets for *${msg.text.trim()}*...`, { parse_mode: 'Markdown' });
-    try {
-      const result = await AIService.findPlayerProps(msg.text.trim());
-      if (!result?.props?.length) {
-        return bot.editMessageText(`No prop bets found for *${msg.text.trim()}*.`, {
-          chat_id: chatId, message_id: waiting.message_id, parse_mode: 'Markdown'
-        });
+    if (state.waitingForPlayerName && msg.text && !msg.text.startsWith('/')) {
+      const playerNameQuery = msg.text.trim().toLowerCase();
+      await setUserState(chatId, {}); // Clear state
+
+      await bot.sendMessage(chatId, `Searching for players matching "*${playerNameQuery}*"...`, { parse_mode: 'Markdown' });
+      
+      try {
+        const uniquePlayers = await findUniquePlayers(playerNameQuery);
+
+        if (Object.keys(uniquePlayers).length === 0) {
+          return bot.sendMessage(chatId, `No players found matching "${playerNameQuery}".`);
+        }
+
+        if (Object.keys(uniquePlayers).length === 1) {
+          const singlePlayerKey = Object.keys(uniquePlayers)[0];
+          const playerData = uniquePlayers[singlePlayerKey];
+          return displayPlayerProps(bot, chatId, playerData);
+        }
+
+        // If multiple players are found, present a selection menu
+        const text = `Multiple players found. Please select the correct one:`;
+        const keyboard = await Promise.all(Object.entries(uniquePlayers).map(async ([key, data]) => {
+            const token = await saveToken('player_select', { key, data });
+            return [{ text: `${data.name} (${data.sport.toUpperCase()})`, callback_data: `player_select_${token}` }];
+        }));
+        
+        await bot.sendMessage(chatId, text, { reply_markup: { inline_keyboard: keyboard } });
+
+      } catch (error) {
+        console.error("Player search error:", error);
+        await bot.sendMessage(chatId, 'An error occurred while searching for players.');
       }
-      await redis.set(`player_props:${chatId}`, JSON.stringify(result), 'EX', 600);
-      const rows = result.props.slice(0, 25).map((p, i) => [{ text: `${p.selection} (${p.odds})`, callback_data: `pp_${i}` }]);
-      await bot.editMessageText(`*Available Props for ${result.player_name}*\n_Game: ${result.game}_\n\nSelect props to add to your parlay slip:`, {
-        chat_id: chatId, message_id: waiting.message_id, parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows }
-      });
-    } catch (e) {
-      await bot.editMessageText(`Could not find player props. Error: ${e.message}`, {
-        chat_id: chatId, message_id: waiting.message_id
-      });
     }
   });
+}
 
+// --- Callback Handler for Player Selection ---
+export function registerPlayerCallbacks(bot) {
   bot.on('callback_query', async (cbq) => {
     const { data, message } = cbq || {};
-    if (!data || !message) return;
-    if (!data.startsWith('pp_')) return;
+    if (!data || !message || !data.startsWith('player_')) return;
 
     const chatId = message.chat.id;
-    try { await bot.answerCallbackQuery(cbq.id); } catch {}
+    await bot.answerCallbackQuery(cbq.id);
 
-    const idx = parseInt(data.substring(3), 10);
-    const raw = await redis.get(`player_props:${chatId}`);
-    if (!raw) return;
-    const result = JSON.parse(raw);
-    const chosen = result.props[idx];
-    if (!chosen) return;
+    const parts = data.split('_');
+    const action = parts[1];
 
-    const b = await getBuilderConfig(chatId);
-    const slip = await getParlaySlip(chatId);
-
-    if (b.avoidSameGame && slip.picks.some((p) => p.game === result.game)) {
-      return bot.sendMessage(chatId, 'Avoiding same‑game legs (toggle in /settings).');
+    if (action === 'select') {
+        const token = parts.slice(2).join('_');
+        const payload = await loadToken('player_select', token);
+        if (payload && payload.data) {
+            await bot.deleteMessage(chatId, message.message_id);
+            await displayPlayerProps(bot, chatId, payload.data);
+        }
     }
-    const price = parseInt(chosen.odds, 10);
-    if (price < b.minOdds || price > b.maxOdds) {
-      return bot.sendMessage(chatId, `Pick outside allowed odds range (${b.minOdds} to ${b.maxOdds}).`);
-    }
-
-    slip.picks.push({ game: result.game, selection: chosen.selection, odds: price, marketKey: 'prop', gameId: null, commence_time: null });
-    await setParlaySlip(chatId, slip);
-    try { await bot.deleteMessage(chatId, message.message_id); } catch {}
-    const { renderParlaySlip } = await import('./custom.js');
-    return renderParlaySlip(bot, chatId);
   });
+}
+
+// --- Helper Functions ---
+
+async function findUniquePlayers(query) {
+    const availableSports = await gamesService.getAvailableSports();
+    if (!availableSports.length) return {};
+
+    const uniquePlayers = {};
+
+    await Promise.all(availableSports.map(async (sport) => {
+        const games = await gamesService.getGamesForSport(sport.sport_key);
+        if (!games) return;
+
+        await Promise.all(games.map(async (game) => {
+            const bookmakers = await oddsService.getPlayerPropsForGame(sport.sport_key, game.id);
+            if (!bookmakers || !bookmakers.length) return;
+
+            bookmakers.forEach(bookmaker => {
+                bookmaker.markets.forEach(market => {
+                    market.outcomes.forEach(outcome => {
+                        const playerName = outcome.description;
+                        if (playerName && playerName.toLowerCase().includes(query)) {
+                            const playerKey = `${playerName}-${sport.sport_key}`;
+                            if (!uniquePlayers[playerKey]) {
+                                uniquePlayers[playerKey] = {
+                                    name: playerName,
+                                    sport: sport.sport_key,
+                                    props: []
+                                };
+                            }
+                            uniquePlayers[playerKey].props.push({
+                                game: `${game.away_team} @ ${game.home_team}`,
+                                commence_time: game.commence_time,
+                                market: market.key,
+                                pick: `${outcome.name} ${outcome.point || ''}`.trim(),
+                                price: outcome.price,
+                                bookmaker: bookmaker.title,
+                            });
+                        }
+                    });
+                });
+            });
+        }));
+    }));
+    return uniquePlayers;
+}
+
+async function displayPlayerProps(bot, chatId, playerData) {
+    let response = `*Found ${playerData.props.length} prop(s) for ${playerData.name}:*\n\n`;
+    
+    // Group props by game
+    const propsByGame = playerData.props.reduce((acc, prop) => {
+        if (!acc[prop.game]) {
+            acc[prop.game] = { commence_time: prop.commence_time, props: [] };
+        }
+        acc[prop.game].props.push(prop);
+        return acc;
+    }, {});
+
+    Object.entries(propsByGame).forEach(([game, data]) => {
+        response += `*${game}*\n`;
+        response += `${getSportEmoji(playerData.sport)} ${formatGameTimeTZ(data.commence_time)}\n`;
+        data.props.forEach(prop => {
+            response += `  • *${prop.market}:* **${prop.pick}** (${prop.price > 0 ? '+' : ''}${prop.price}) - *${prop.bookmaker}*\n`;
+        });
+        response += `\n`;
+    });
+
+    await bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
 }
