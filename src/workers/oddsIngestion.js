@@ -9,7 +9,6 @@ import gamesService from '../services/gamesService.js';
 class InstitutionalOddsIngestionEngine {
   constructor() {
     this.isJobRunning = false;
-    // FIX: Wrap the initialization in a try/catch to prevent startup crashes.
     try {
       this.initializeScheduling();
     } catch (error) {
@@ -19,11 +18,8 @@ class InstitutionalOddsIngestionEngine {
   }
 
   initializeScheduling() {
-    // Run every 15 minutes
     cron.schedule('*/15 * * * *', () => this.runIngestionCycle(), { timezone: env.TIMEZONE });
     console.log('✅ Odds Ingestion Engine scheduled to run every 15 minutes.');
-    
-    // Run once on startup, but with a small delay to allow other services to initialize.
     setTimeout(() => this.runIngestionCycle(), 5000); 
   }
 
@@ -34,6 +30,7 @@ class InstitutionalOddsIngestionEngine {
     }
     this.isJobRunning = true;
     console.log('🚀 Starting institutional odds ingestion cycle...');
+    let totalUpsertedCount = 0;
 
     try {
       const sports = await gamesService.getAvailableSports();
@@ -43,30 +40,31 @@ class InstitutionalOddsIngestionEngine {
         return;
       }
 
-      const allOdds = [];
+      // FIX: Process and upsert data one sport at a time to keep memory usage low and stable.
+      // This prevents the application from exceeding resource limits on startup.
       for (const sport of sports) {
-        // Individual try/catch for each sport to ensure one failing sport doesn't stop others.
         try {
-          const odds = await OddsService.getSportOdds(sport.sport_key);
-          if (odds && odds.length > 0) {
-            allOdds.push(...odds);
+          const oddsForSport = await OddsService.getSportOdds(sport.sport_key);
+          if (oddsForSport && oddsForSport.length > 0) {
+            console.log(`  -> Fetched ${oddsForSport.length} games for ${sport.sport_key}. Upserting now...`);
+            await DatabaseService.upsertGames(oddsForSport);
+            totalUpsertedCount += oddsForSport.length;
           }
         } catch (e) {
-            console.error(`Failed to fetch odds for ${sport.sport_key} during ingestion:`, e.message);
-            sentryService.captureError(e, { component: 'odds_ingestion_worker', sport_key: sport.sport_key });
+            console.error(`Failed to process odds for ${sport.sport_key} during ingestion:`, e.message);
+            sentryService.captureError(e, { component: 'odds_ingestion_worker_sport_failure', sport_key: sport.sport_key });
         }
       }
 
-      if (allOdds.length > 0) {
-        await DatabaseService.upsertGames(allOdds);
-        console.log(`✅ Ingestion cycle complete. Upserted data for ${allOdds.length} games.`);
+      if (totalUpsertedCount > 0) {
+        console.log(`✅ Ingestion cycle complete. Total upserted games: ${totalUpsertedCount}.`);
       } else {
-        console.log('Ingestion cycle complete. No new odds found across all sports.');
+        console.log('Ingestion cycle complete. No new odds were found across all sports.');
       }
       
     } catch (error) {
-      console.error('❌ A critical error occurred during the ingestion cycle:', error);
-      sentryService.captureError(error, { component: 'odds_ingestion_worker' });
+      console.error('❌ A critical error occurred during the main ingestion cycle:', error);
+      sentryService.captureError(error, { component: 'odds_ingestion_worker_main' });
     } finally {
       this.isJobRunning = false;
     }
