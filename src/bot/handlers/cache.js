@@ -1,7 +1,7 @@
 // src/bot/handlers/cache.js
 
 import cron from 'node-cron';
-import { getGamesForSportCached } from '../../services/oddsCacheAdapters.js';
+import { getGamesForSportCached } from '../../services/oddsService.js';
 import redisService from '../../services/redisService.js';
 
 // Real refreshCache that clears Redis "games" keys and re-caches odds for top sports
