@@ -1,106 +1,123 @@
-// src/services/gamesService.js - INTELLIGENT DATA HUB (FINAL & COMPLETE VERSION)
-// This service prioritizes fetching data from the Supabase DB to respect API rate limits.
-// It falls back to the live oddsService only when data is stale or unavailable.
+// src/services/gamesService.js
 
-import DatabaseService from './databaseService.js';
-import OddsService from './oddsService.js';
-import sentryService from './sentryService.js';
+import databaseService from './databaseService.js';
+import oddsService from './oddsService.js';
+import redisClient from './redisService.js';
+import { sentryService } from './sentryService.js';
+import env from '../config/env.js';
 
-const STALE_ODDS_THRESHOLD_MINUTES = 5; // How old can DB odds be before we require a live fetch?
+const CACHE_TTL = env.CACHE_TTL_DEFAULT || 300; // 5 minutes default
 
-class GamesDataService {
-  constructor() {
-    console.log('✅ Intelligent Games Data Service Initialized.');
-  }
+class GamesService {
 
   /**
-   * Gets a list of sports that have upcoming games, sourced directly from your database.
-   * This is extremely fast and uses no API quota.
+   * Gets a list of all currently available sports.
+   * Strategy: Redis -> Database -> Live API Fallback
    */
   async getAvailableSports() {
+    const redis = await redisClient;
+    const cacheKey = 'games:available_sports';
+
     try {
-      const sports = await DatabaseService.getDistinctSports();
-      // Additional filtering to ensure we have a title to display
-      return sports.filter(s => s.sport_title);
+      const cached = await redis.get(cacheKey);
+      if (cached) return JSON.parse(cached);
+    } catch (e) {
+      sentryService.captureError(e, { component: 'games_service', operation: 'getAvailableSports_cache_read' });
+    }
+
+    try {
+      // 1. Primary Source: Database
+      let sports = await databaseService.getDistinctSports();
+
+      // 2. Fallback Source: Live Odds API
+      if (!sports || sports.length === 0) {
+        console.warn('No sports found in DB, attempting live API fallback...');
+        // This is a simplified version; a real implementation might need to fetch all sports from the API
+        const liveGames = await oddsService.getSportOdds('upcoming'); 
+        if (liveGames && liveGames.length > 0) {
+            const sportSet = new Map();
+            liveGames.forEach(g => sportSet.set(g.sport_key, g.sport_title));
+            sports = Array.from(sportSet, ([sport_key, sport_title]) => ({ sport_key, sport_title }));
+        }
+      }
+
+      if (sports && sports.length > 0) {
+        await redis.set(cacheKey, JSON.stringify(sports), 'EX', CACHE_TTL);
+      }
+      
+      return sports || [];
     } catch (error) {
-      sentryService.captureError(error, { component: 'gamesService_getAvailableSports' });
+      sentryService.captureError(error, { component: 'games_service', operation: 'getAvailableSports' });
       return [];
     }
   }
 
   /**
-   * The core function. It gets upcoming games for a sport, prioritizing the database.
-   * @param {string} sportKey - The key for the sport (e.g., 'americanfootball_nfl').
-   * @returns {Promise<Array<object>>} A list of game objects.
+   * Gets a list of all upcoming games for a given sport.
+   * Strategy: Redis -> Database -> Live API Fallback
    */
   async getGamesForSport(sportKey) {
+    const redis = await redisClient;
+    const cacheKey = `games:sport:${sportKey}`;
+
     try {
-      const dbGames = await DatabaseService.getUpcomingGamesBySport(sportKey);
-      
-      if (dbGames.length > 0 && dbGames[0].last_odds_update) {
-        const firstGameUpdate = new Date(dbGames[0].last_odds_update);
-        const threshold = new Date(Date.now() - STALE_ODDS_THRESHOLD_MINUTES * 60 * 1000);
+      const cached = await redis.get(cacheKey);
+      if (cached) return JSON.parse(cached);
+    } catch (e) {
+      sentryService.captureError(e, { component: 'games_service', operation: 'getGamesForSport_cache_read' });
+    }
 
-        if (firstGameUpdate > threshold) {
-          console.log(`⚡️ Using fresh game data from Supabase for ${sportKey}.`);
-          return this.formatGamesFromDB(dbGames);
-        }
+    try {
+      // 1. Primary Source: Database
+      let games = await databaseService.getGamesBySport(sportKey);
+
+      // 2. Fallback Source: Live Odds API
+      if (!games || games.length === 0) {
+        console.warn(`No games for ${sportKey} in DB, attempting live API fallback...`);
+        games = await oddsService.getSportOdds(sportKey);
       }
 
-      console.log(`⚠️ DB data for ${sportKey} is stale or missing. Fetching live from Odds Service.`);
-      const liveGames = await OddsService.getSportOdds(sportKey);
-      
-      // Asynchronously update our database with this new data for the next user.
-      if (liveGames.length > 0) {
-        DatabaseService.upsertGamesBatch(liveGames)
-          .then(() => console.log(`✅ Updated stale DB records for ${sportKey}.`))
-          .catch(err => sentryService.captureError(err, { component: 'gamesService_async_upsert' }));
+      if (games && games.length > 0) {
+        await redis.set(cacheKey, JSON.stringify(games), 'EX', CACHE_TTL);
       }
-      
-      return liveGames;
 
+      return games || [];
     } catch (error) {
-      sentryService.captureError(error, { component: 'gamesService_getGamesForSport' });
-      // Final fallback: if anything above fails, try the live API directly.
-      return await OddsService.getSportOdds(sportKey);
+      sentryService.captureError(error, { component: 'games_service', operation: 'getGamesForSport' });
+      return [];
     }
   }
 
   /**
-   * Fetches the full details of a single game, prioritizing the database.
-   * @param {string} eventId - The unique ID of the game.
-   * @returns {Promise<object|null>} A single formatted game object.
+   * Gets the full details for a single game by its ID.
+   * Strategy: Redis -> Database (No API fallback for specific ID lookups)
    */
-  async getGameDetails(eventId) {
-    try {
-        const dbGame = await DatabaseService.getGameDetails(eventId);
-        if (dbGame) {
-            return this.formatGamesFromDB([dbGame])[0];
-        }
-        return null; // Should ideally never be hit if the eventId comes from our lists
-    } catch (error) {
-        sentryService.captureError(error, { component: 'gamesService_getGameDetails' });
-        return null;
-    }
-  }
+  async getGameDetails(gameId) {
+    const redis = await redisClient;
+    const cacheKey = `games:details:${gameId}`;
 
-  /**
-   * Utility to ensure the game object structure is consistent, whether from DB or API.
-   */
-  formatGamesFromDB(dbGames) {
-      if (!dbGames || !Array.isArray(dbGames)) return [];
-      
-      return dbGames.map(game => ({
-          id: game.event_id,
-          sport_key: game.sport_key,
-          sport_title: game.league_key, // We use league_key as the display title
-          home_team: game.home_team,
-          away_team: game.away_team,
-          commence_time: game.commence_time,
-          // Extract the bookmaker data from the JSONB field, ensuring it's an array
-          bookmakers: game.market_data?.bookmakers || [],
-      }));
+    try {
+      const cached = await redis.get(cacheKey);
+      if (cached) return JSON.parse(cached);
+    } catch (e) {
+      sentryService.captureError(e, { component: 'games_service', operation: 'getGameDetails_cache_read' });
+    }
+
+    try {
+      // For specific ID lookups, the database is the only source of truth.
+      const game = await databaseService.getGameById(gameId);
+
+      if (game) {
+        await redis.set(cacheKey, JSON.stringify(game), 'EX', CACHE_TTL * 2); // Cache details for longer
+      }
+
+      return game;
+    } catch (error) {
+      sentryService.captureError(error, { component: 'games_service', operation: 'getGameDetails' });
+      return null;
+    }
   }
 }
 
-export default new GamesDataService();
+const gamesServiceInstance = new GamesService();
+export default gamesServiceInstance;
