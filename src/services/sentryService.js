@@ -1,8 +1,8 @@
-// src/services/sentryService.js — ENTERPRISE-GRADE ERROR + PROFILING (ESM-safe)
+// src/services/sentryService.js — ENTERPRISE-GRADE ERROR + PROFILING (simplified, no new env vars)
 import * as Sentry from '@sentry/node';
 import env, { isProduction } from '../config/env.js';
 
-// Import @sentry/profiling-node using CommonJS interop pattern for ESM [web:759]
+// Import @sentry/profiling-node using CommonJS interop pattern for ESM
 import profilingPkg from '@sentry/profiling-node';
 const { nodeProfilingIntegration } = profilingPkg;
 
@@ -14,45 +14,40 @@ class EnterpriseSentryService {
   }
 
   initializeSentry() {
-    // Allow override via SENTRY_ENABLED, default true; still require DSN and prod by default.
-    const enabled = (env.SENTRY_ENABLED ?? 'true').toString().toLowerCase() !== 'false';
-    if (!enabled || !env.SENTRY_DSN || !isProduction) {
-      console.warn('🚨 Sentry disabled (no DSN, not production, or SENTRY_ENABLED=false).');
+    // Keep original logic: just check DSN and production like before
+    if (!env.SENTRY_DSN || !isProduction) {
+      console.warn('🚨 Sentry is disabled (DSN not found or not in production).');
       return;
     }
 
-    const enableProfiling = (env.SENTRY_ENABLE_PROFILING ?? 'true').toString().toLowerCase() !== 'false';
+    // Check optional profiling flag directly from process.env (bypass envalid)
+    const enableProfiling = process.env.SENTRY_ENABLE_PROFILING !== 'false';
 
     try {
       Sentry.init({
         dsn: env.SENTRY_DSN,
-        environment: env.SENTRY_ENVIRONMENT || env.NODE_ENV || 'production',
+        environment: env.NODE_ENV,
         release: `parlay-bot@${process.env.npm_package_version || '1.0.0'}`,
-
-        // Modern integrations API for Node/Express + optional profiling [web:705]
+        
         integrations: [
-          Sentry.httpIntegration(), // inbound/outbound HTTP instrumentation [web:705]
-          // Capture global unhandled rejections with configurable mode (warn|strict|none) [web:706]
-          Sentry.onUnhandledRejectionIntegration?.({
-            mode: env.SENTRY_UNHANDLED_REJECTION_MODE || 'warn',
-          }),
-          Sentry.onUncaughtExceptionIntegration?.(), // capture uncaught exceptions [web:705]
-          ...(enableProfiling ? [nodeProfilingIntegration()] : []), // CPU profiles attached to traces [web:727][web:728]
+          Sentry.httpIntegration(),                                                   // HTTP instrumentation
+          Sentry.onUnhandledRejectionIntegration?.(),                                // unhandled rejections  
+          Sentry.onUncaughtExceptionIntegration?.(),                                 // uncaught exceptions
+          ...(enableProfiling ? [nodeProfilingIntegration()] : []),                 // optional profiling
         ].filter(Boolean),
 
-        // Performance + profiling sampling
-        tracesSampleRate: Number(env.TRACES_SAMPLE_RATE ?? env.SENTRY_TRACES_SAMPLE_RATE ?? 1.0), // 100% by default; tune in prod [web:705]
-        // profilesSampleRate remains supported in Node SDK; optional newer fields: profileSessionSampleRate/profileLifecycle [web:728]
-        profilesSampleRate: Number(env.PROFILES_SAMPLE_RATE ?? env.SENTRY_PROFILES_SAMPLE_RATE ?? 1.0), // 100% profiles by default [web:728]
-
+        // Use existing env vars that are already validated
+        tracesSampleRate: env.SENTRY_TRACES_SAMPLE_RATE,
+        // Use process.env directly for optional profiling rate (bypass envalid)
+        profilesSampleRate: Number(process.env.PROFILES_SAMPLE_RATE || process.env.SENTRY_PROFILES_SAMPLE_RATE || 1.0),
+        
         attachStacktrace: true,
         sendDefaultPii: false,
         maxBreadcrumbs: 100,
-
         beforeSend: (event) => this.beforeSendEvent(event),
       });
 
-      // Redundant process-level safety nets for silent async failures [web:706]
+      // Global process-level safety nets
       process.on('unhandledRejection', (reason) => {
         Sentry.captureException(reason instanceof Error ? reason : new Error(String(reason)));
         console.error('UnhandledRejection:', reason);
@@ -63,25 +58,24 @@ class EnterpriseSentryService {
       });
 
       this.initialized = true;
-      console.log(`✅ Sentry Enterprise Monitoring Initialized (${enableProfiling ? 'Profiler Enabled' : 'Profiler Disabled'})`);
+      console.log(`✅ Sentry Enterprise Monitoring Initialized (${enableProfiling ? 'Profiler Enabled' : 'Profiler Disabled for Compatibility'})`);
     } catch (error) {
       console.error('❌ Sentry initialization failed:', error);
     }
   }
 
-  // Mount BEFORE routes: requestHandler + tracingHandler [web:705]
+  // Mount BEFORE routes: requestHandler + tracingHandler
   attachExpressPreRoutes(app) {
     if (!this.initialized) return;
-    if (Sentry.Handlers?.requestHandler) app.use(Sentry.Handlers.requestHandler()); // per-request scope [web:705]
-    if (Sentry.Handlers?.tracingHandler) app.use(Sentry.Handlers.tracingHandler()); // request traces [web:705]
+    if (Sentry.Handlers?.requestHandler) app.use(Sentry.Handlers.requestHandler());
+    if (Sentry.Handlers?.tracingHandler) app.use(Sentry.Handlers.tracingHandler());
   }
 
-  // Mount AFTER routes: errorHandler (configurable which errors to send) [web:705]
+  // Mount AFTER routes: errorHandler
   attachExpressPostRoutes(app, options = {}) {
     if (!this.initialized) return;
     const errMw = Sentry.Handlers?.errorHandler?.({
       shouldHandleError(error) {
-        // Capture 5xx by default; optionally 404s too
         if (error?.status >= 500) return true;
         if (options.capture404 && error?.status === 404) return true;
         return false;
@@ -95,7 +89,7 @@ class EnterpriseSentryService {
 
   captureError(error, context = {}) {
     if (!this.initialized) {
-      console.error('Sentry Capture (disabled):', error, context);
+      console.error('Sentry Capture:', error, context);
       return;
     }
     Sentry.captureException(error, { extra: context });
@@ -103,8 +97,8 @@ class EnterpriseSentryService {
 
   captureMessage(message, level = 'info', context = {}) {
     if (!this.initialized) {
-      console.log(`Sentry Message (disabled) [${level}]:`, message, context);
-      return;
+        console.log(`Sentry Message [${level}]:`, message, context);
+        return;
     }
     Sentry.captureMessage(message, { level, extra: context });
   }
@@ -115,15 +109,16 @@ class EnterpriseSentryService {
   }
 
   startTransaction(options) {
-    if (!this.initialized) return { finish: () => {}, setStatus: () => {} };
-    return Sentry.startTransaction(options);
+      if (!this.initialized) {
+          return { finish: () => {}, setStatus: () => {} };
+      }
+      return Sentry.startTransaction(options);
   }
-
+  
   beforeSendEvent(event) {
-    // Scrub sensitive request payload fields
     if (event.request?.data) {
-      delete event.request.data.password;
-      delete event.request.data.token;
+        delete event.request.data.password;
+        delete event.request.data.token;
     }
     return event;
   }
