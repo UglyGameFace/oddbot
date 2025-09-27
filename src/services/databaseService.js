@@ -1,187 +1,151 @@
-// src/services/databaseService.js - INSTITUTIONAL DATABASE ENGINE (FINAL & COMPLETE VERSION)
+// src/services/databaseService.js
 
 import { createClient } from '@supabase/supabase-js';
 import env from '../config/env.js';
-import sentryService from './sentryService.js';
+import { sentryService } from './sentryService.js';
+
+let supabaseClient = null;
+
+/**
+ * Initializes and returns a singleton Supabase client instance.
+ * This ensures we don't create multiple connections.
+ */
+function getSupabaseClient() {
+  if (supabaseClient) {
+    return supabaseClient;
+  }
+  
+  // Use the SUPABASE_ANON_KEY as it's the standard for client-side access.
+  // The SERVICE_KEY should only be used in highly secure backend processes if needed.
+  if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) {
+    console.error('❌ Supabase URL or Anon Key is not configured. Database service will be disabled.');
+    // Return a mock client that will always fail, preventing crashes elsewhere.
+    return {
+        from: () => ({
+            select: () => ({ error: { message: 'Supabase not configured' } }),
+            upsert: () => ({ error: { message: 'Supabase not configured' } }),
+        })
+    };
+  }
+  
+  supabaseClient = createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY);
+  console.log('✅ Supabase client initialized.');
+  return supabaseClient;
+}
+
 
 class DatabaseService {
   constructor() {
-    this.supabase = createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY);
-    this.serviceRoleClient = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY, { auth: { autoRefreshToken: false, persistSession: false } });
-    console.log('✅ Institutional Database Engine Initialized.');
+    this.supabase = getSupabaseClient();
   }
 
-  // --- Methods from your original file (restored) ---
-
-  async getActiveGames() {
+  /**
+   * Performs an "upsert" operation on the 'games' table.
+   * It inserts new games or updates existing ones based on their unique 'id'.
+   * @param {Array<Object>} gamesData - An array of game objects from the odds service.
+   * @returns {Object} An object containing the upserted data and any potential error.
+   */
+  async upsertGames(gamesData) {
+    if (!gamesData || gamesData.length === 0) {
+      return { data: [], error: null };
+    }
+    
     try {
       const { data, error } = await this.supabase
         .from('games')
-        .select('*')
-        .in('status', ['scheduled', 'in_progress'])
-        .gt('commence_time', new Date().toISOString())
-        .order('commence_time', { ascending: true });
+        .upsert(gamesData, { onConflict: 'id' })
+        .select();
+        
       if (error) throw error;
-      return data;
+      return { data, error: null };
     } catch (error) {
-      sentryService.captureError(error, { component: 'db_getActiveGames' });
-      return [];
+      console.error('Supabase upsert error:', error.message);
+      sentryService.captureError(error, { component: 'database_service', operation: 'upsertGames' });
+      return { data: null, error };
     }
   }
 
-  async getRecentlyCompletedGames() {
-    try {
-      const twelveHoursAgo = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
-      const { data, error } = await this.supabase
-        .from('games')
-        .select('*')
-        .eq('status', 'completed')
-        .gte('commence_time', twelveHoursAgo)
-        .order('commence_time', { ascending: false })
-        .limit(50);
-      if (error) throw error;
-      return data;
-    } catch (error) {
-      sentryService.captureError(error, { component: 'db_getRecentlyCompletedGames' });
-      return [];
-    }
-  }
-
-  async getParlaysByGame(gameId) {
-    try {
-      const { data, error } = await this.supabase
-        .from('parlays')
-        .select('*, users(*)')
-        .contains('legs', [{ event_id: gameId }]);
-      if (error) throw error;
-      return data;
-    } catch (error) {
-      sentryService.captureError(error, { component: 'db_getParlaysByGame' });
-      return [];
-    }
-  }
-
-  async updateParlay(updateData) {
-    try {
-      const { error } = await this.supabase
-        .from('parlays')
-        .update(updateData)
-        .eq('parlay_id', updateData.parlay_id);
-      if (error) throw error;
-    } catch (error) {
-      sentryService.captureError(error, { component: 'db_updateParlay' });
-    }
-  }
-  
-  async batchUpdateParlayStatus(batch) {
-    try {
-        const updates = batch.map(item => ({
-            parlay_id: item.parlayId,
-            status: item.newStatus,
-        }));
-        const { error } = await this.supabase
-            .from('parlays')
-            .upsert(updates, { onConflict: 'parlay_id' });
-        if (error) throw error;
-    } catch (error) {
-        sentryService.captureError(error, { component: 'db_batchUpdateParlayStatus' });
-    }
-  }
-  
-  async getUserByParlayId(parlayId) {
-    try {
-      const { data: parlay, error } = await this.supabase
-        .from('parlays')
-        .select('user_tg_id')
-        .eq('parlay_id', parlayId)
-        .single();
-      if (error) throw error;
-      return this.getUser(parlay.user_tg_id);
-    } catch (error) {
-      sentryService.captureError(error, { component: 'db_getUserByParlayId' });
-      return null;
-    }
-  }
-
-  async updateUserBettingStats(userId, result) {
-    // This is a complex read-modify-write operation best handled by a db function (RPC)
-    // to avoid race conditions. We'll log for now as a placeholder for that future implementation.
-    console.log(`Updating betting stats for user ${userId} with result: ${result}`);
-  }
-
-  // --- New methods added for new services & workers ---
-
-  async healthCheck() {
-    const { error } = await this.supabase.from('games').select('event_id').limit(1);
-    if (error) throw new Error(`Database health check failed: ${error.message}`);
-    return true;
-  }
-
-  async upsertGamesBatch(games) {
-    const formattedGames = games.map(g => ({
-        event_id: g.id, sport_key: g.sport_key, league_key: g.sport_title, commence_time: g.commence_time,
-        home_team: g.home_team, away_team: g.away_team, market_data: { bookmakers: g.bookmakers },
-        last_odds_update: new Date().toISOString(), status: 'scheduled'
-    }));
-    const { error } = await this.serviceRoleClient.from('games').upsert(formattedGames, { onConflict: 'event_id' });
-    if (error) {
-        sentryService.captureError(error, { component: 'db_upsertGamesBatch' });
-        throw error;
-    }
-  }
-
-  async getUpcomingGamesBySport(sportKey) {
-    const { data, error } = await this.supabase
-        .from('games').select('*').eq('sport_key', sportKey).eq('status', 'scheduled')
-        .gt('commence_time', new Date().toISOString())
-        .order('commence_time', { ascending: true }).limit(20);
-    if (error) {
-        sentryService.captureError(error, { component: 'db_getUpcomingGamesBySport' });
-        throw error;
-    }
-    return data || [];
-  }
-
-  async getGameDetails(eventId) {
-    const { data, error } = await this.supabase.from('games').select('*').eq('event_id', eventId).single();
-    if (error) {
-        sentryService.captureError(error, { component: 'db_getGameDetails' });
-        throw error;
-    }
-    return data;
-  }
-  
+  /**
+   * Fetches a list of all distinct sports available in the 'games' table.
+   * @returns {Array<Object>} An array of objects, each with sport_key and sport_title.
+   */
   async getDistinctSports() {
-    const { data, error } = await this.supabase.rpc('get_distinct_sports');
-    if (error) {
-        sentryService.captureError(error, { component: 'db_getDistinctSports' });
-        throw error;
-    }
-    return data;
-  }
-
-  async getUser(tg_id) {
     try {
-      const { data, error } = await this.supabase.from('users').select('*').eq('tg_id', tg_id).single();
-      if (error && error.code !== 'PGRST116') throw error; // Ignore "Row not found"
+      // This RPC call is more efficient than a large SELECT DISTINCT query.
+      // You need to create this function in your Supabase SQL editor.
+      const { data, error } = await this.supabase.rpc('get_distinct_sports');
+      if (error) throw error;
       return data;
     } catch (error) {
-      sentryService.captureError(error, { component: 'db_getUser' });
-      return null;
+      console.error('Supabase getDistinctSports error:', error.message);
+      sentryService.captureError(error, { component: 'database_service', operation: 'getDistinctSports' });
+      return [];
     }
   }
-
-  async updateUser(tg_id, updateData) {
+  
+  /**
+   * Fetches all upcoming games for a specific sport key.
+   * @param {string} sportKey - The sport key to filter by (e.g., 'basketball_nba').
+   * @returns {Array<Object>} An array of game objects.
+   */
+  async getGamesBySport(sportKey) {
     try {
-        const { error } = await this.supabase
-            .from('users')
-            .update({ ...updateData, updated_at: new Date().toISOString() })
-            .eq('tg_id', tg_id);
+        const { data, error } = await this.supabase
+            .from('games')
+            .select('*')
+            .eq('sport_key', sportKey)
+            // Filter for games that haven't started yet
+            .gte('commence_time', new Date().toISOString()) 
+            .order('commence_time', { ascending: true });
+        
         if (error) throw error;
-    } catch(error) {
-        sentryService.captureError(error, { component: 'db_updateUser' });
+        return data;
+    } catch (error) {
+        console.error(`Supabase getGamesBySport error for ${sportKey}:`, error.message);
+        sentryService.captureError(error, { component: 'database_service', operation: 'getGamesBySport', sportKey });
+        return [];
     }
+  }
+  
+  /**
+   * Fetches the detailed information for a single game by its ID.
+   * @param {string} gameId - The unique ID of the game.
+   * @returns {Object|null} A single game object or null if not found.
+   */
+  async getGameById(gameId) {
+    try {
+        const { data, error } = await this.supabase
+            .from('games')
+            .select('*')
+            .eq('id', gameId)
+            .single(); // .single() is efficient for fetching one row
+        
+        if (error && error.code !== 'PGRST116') throw error; // Ignore "range not found" errors
+        return data;
+    } catch (error) {
+        console.error(`Supabase getGameById error for ${gameId}:`, error.message);
+        sentryService.captureError(error, { component: 'database_service', operation: 'getGameById', gameId });
+        return null;
+    }
+  }
+  
+  /**
+   * Gets the count of games for each sport. Required for the /tools command.
+   * @returns {Array<Object>} An array of objects with sport_title and game_count.
+   */
+  async getSportGameCounts() {
+      try {
+        const { data, error } = await this.supabase.rpc('get_sport_game_counts');
+        if (error) throw error;
+        return data;
+      } catch (error) {
+          console.error('Supabase getSportGameCounts error:', error.message);
+          sentryService.captureError(error, { component: 'database_service', operation: 'getSportGameCounts' });
+          return [];
+      }
   }
 }
 
-export default new DatabaseService();
+// Export a single, memoized instance of the service
+const databaseServiceInstance = new DatabaseService();
+export default databaseServiceInstance;
