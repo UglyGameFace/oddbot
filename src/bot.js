@@ -1,8 +1,10 @@
 // src/bot.js
+
 import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
 import { sentryService } from './services/sentryService.js';
+// --- Your handler/module imports
 import { registerAnalytics } from './bot/handlers/analytics.js';
 import { registerModel } from './bot/handlers/model.js';
 import { registerCacheHandler } from './bot/handlers/cache.js';
@@ -34,12 +36,20 @@ if (!TOKEN) {
 const APP_URL = env.APP_URL || '';
 const WEBHOOK_SECRET = (env.WEBHOOK_SECRET || env.TELEGRAM_WEBHOOK_SECRET || env.TG_WEBHOOK_SECRET || '').trim();
 const USE_WEBHOOK = (env.USE_WEBHOOK === true) || APP_URL.startsWith('https');
+const PORT = Number(process.env.PORT) || Number(env.PORT) || 3000; // strictly bind to process.env.PORT for Railway, fallback only for local dev
+const HOST = env.HOST || '0.0.0.0';
 
 const bot = new TelegramBot(TOKEN, { polling: !USE_WEBHOOK });
+
+// Health endpoints for Railway activation
+app.get('/', (_req, res) => res.status(200).send('OK'));
+app.get('/health', (_req, res) => res.sendStatus(200));
+app.head('/health', (_req, res) => res.sendStatus(200));
+
 let server;
 
 async function main() {
-  console.log('Registering all bot handlers...');
+  // Register all core handlers (your existing logic)
   registerAnalytics(bot); registerModel(bot); registerCacheHandler(bot);
   registerCustom(bot); registerCustomCallbacks(bot);
   registerAI(bot); registerAICallbacks(bot); registerQuant(bot);
@@ -47,27 +57,12 @@ async function main() {
   registerSettings(bot); registerSettingsCallbacks(bot);
   registerSystem(bot); registerSystemCallbacks(bot);
   registerTools(bot); registerCommonCallbacks(bot);
-  console.log('✅ All handlers registered.');
 
-  console.log('Setting up Express server and middleware...');
   app.use(express.json());
   sentryService.attachExpressPreRoutes?.(app);
 
-  // Health endpoints for Railway activation
-  app.get('/', (_req, res) => res.status(200).send('OK'));         // GET /
-  app.get('/health', (_req, res) => res.sendStatus(200));          // GET /health
-  app.head('/health', (_req, res) => res.sendStatus(200));         // HEAD /health
-
-  const PORT = Number(process.env.PORT) || 3000;                    // bind to injected PORT [web:420]
-  const HOST = '0.0.0.0';                                          // listen on all interfaces [web:66]
-  server = app.listen(PORT, HOST, () => {
-    console.log(`🚀 Server listening on ${HOST}:${PORT}. Bot is starting in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`);
-  });
-
   if (USE_WEBHOOK) {
     const webhookPath = `/webhook/${TOKEN}`;
-
-    // Register the webhook route with optional secret verification
     app.post(
       webhookPath,
       (req, res, next) => {
@@ -82,8 +77,6 @@ async function main() {
         res.sendStatus(200);
       }
     );
-
-    console.log('Setting webhook...');
     await bot.setWebHook(`${APP_URL}${webhookPath}`, {
       secret_token: WEBHOOK_SECRET || undefined,
     });
@@ -92,7 +85,10 @@ async function main() {
 
   sentryService.attachExpressPostRoutes?.(app);
 
-  console.log('Setting bot commands in Telegram...');
+  server = app.listen(PORT, HOST, () => {
+    console.log(`🚀 Server listening on ${HOST}:${PORT}. Bot is starting in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`);
+  });
+
   const commands = [
     { command: 'ai', description: 'Launch the AI Parlay Builder' },
     { command: 'custom', description: 'Manually build a parlay slip' },
