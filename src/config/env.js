@@ -1,4 +1,4 @@
-// src/config/env.js - ENTERPRISE ENVIRONMENT MANAGEMENT WITH SENTRY INTEGRATION
+// src/config/env.js - ENTERPRISE ENVIRONMENT MANAGEMENT WITH SENTRY INTEGRATION (strict prod checks)
 import dotenv from 'dotenv';
 import { cleanEnv, str, num, url, bool } from 'envalid';
 import * as Sentry from '@sentry/node';
@@ -8,7 +8,7 @@ dotenv.config();
 // Pre-validation Sentry (non-breaking; mock DSN fallback)
 Sentry.init({
   dsn: process.env.SENTRY_DSN || 'https://mock@sentry.io/0',
-  environment: process.env.NODE_ENV || 'development',
+  environment: process.env.NODE_ENV || 'production',
   beforeSend: (event) => {
     // Ignore validation-time “Environment variable …” noise
     if (event.exception?.values?.[0]?.value?.includes('Environment variable')) return null;
@@ -34,7 +34,7 @@ const env = cleanEnv(
     // Sentry
     SENTRY_DSN: str(),
     SENTRY_TRACES_SAMPLE_RATE: num({ default: 0.2 }),
-    // New: safe profiling flags so later code can read them without envalid errors
+    // Safe profiling flags so runtime can read without envalid errors
     SENTRY_ENABLE_PROFILING: bool({ default: false }),
     PROFILES_SAMPLE_RATE: num({ default: 0.25 }),
 
@@ -99,13 +99,16 @@ const env = cleanEnv(
 );
 
 // Post-validation: avoid full Sentry app init here; Sentry is initialized in the dedicated service per best practice
-// This prevents double initialization and keeps Express middleware ordering correct in the main entrypoint. [Sentry docs]
+// This prevents double initialization and keeps Express middleware ordering correct in the main entrypoint. [web:705]
 
 // --- UTILITY HELPERS ---
 export const isProduction = env.NODE_ENV === 'production';
 export const isDevelopment = env.NODE_ENV === 'development';
 export const isStaging = env.NODE_ENV === 'staging';
 export const isTest = env.NODE_ENV === 'test';
+
+// Default set Telegram updates your webhook/poller should accept
+export const ALLOWED_UPDATES = Object.freeze(['message', 'callback_query']); // used by webhook/polling setup [web:20]
 
 export function getFeatureFlags() {
   return {
@@ -118,31 +121,46 @@ export function getFeatureFlags() {
 
 export function validateServiceConfiguration() {
   const warnings = [];
+  const fatals = [];
 
   if (isProduction) {
-    if (env.ENCRYPTION_KEY.includes('default')) {
-      warnings.push('SECURITY WARNING: Using default encryption key in production');
+    // Enforce a real public HTTPS URL for Telegram webhooks (Telegram requires HTTPS) [Bot API]
+    if (!env.APP_URL.startsWith('https://') || env.APP_URL.includes('localhost')) {
+      fatals.push('APP_URL must be a public HTTPS URL (not localhost) in production for Telegram webhooks.');
     }
-    if (env.JWT_SECRET.includes('default')) {
-      warnings.push('SECURITY WARNING: Using default JWT secret in production');
+    // Require a secret to verify Telegram’s X-Telegram-Bot-Api-Secret-Token header [Bot API]
+    if (!env.TELEGRAM_WEBHOOK_SECRET) {
+      fatals.push('TELEGRAM_WEBHOOK_SECRET is required in production to verify Telegram webhook requests.');
     }
-    if (env.APP_URL.includes('localhost')) {
-      warnings.push('APP_URL points to localhost in production; set public https:// URL for webhook');
+    // Encourage Sentry DSN presence in production for observability
+    if (!env.SENTRY_DSN) {
+      warnings.push('SENTRY_DSN is empty in production; Sentry monitoring will be disabled.');
     }
   }
 
   if (env.TELEGRAM_BOT_TOKEN.length < 30) {
-    warnings.push('Telegram bot token appears invalid');
+    warnings.push('Telegram bot token appears invalid (length check).');
   }
 
-  if (warnings.length > 0) {
-    warnings.forEach((warning) => {
-      console.warn('⚠️', warning);
-      // Defer real Sentry capture to the main Sentry service to avoid double init
-    });
+  // Emit warnings
+  for (const msg of warnings) {
+    console.warn('⚠️', msg);
   }
 
-  return warnings;
+  // Emit fatals via Sentry and exit
+  if (fatals.length) {
+    const message = `ENV FATAL: ${fatals.join(' | ')}`;
+    console.error(message);
+    try {
+      if (env.SENTRY_DSN) {
+        Sentry.captureException(new Error(message), { tags: { type: 'environment_config' } });
+      }
+    } finally {
+      process.exit(1);
+    }
+  }
+
+  return { warnings, fatals };
 }
 
 // Run config validation once
