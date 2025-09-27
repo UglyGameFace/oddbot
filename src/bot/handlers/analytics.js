@@ -10,7 +10,9 @@ export function registerAnalytics(bot) {
     const chatId = msg.chat.id;
     try {
       const oddsData = await oddsService.getSportOdds(sportKey);
-      if (!oddsData || !oddsData.length) return bot.sendMessage(chatId, `No odds data available for ${sportKey}.`);
+      if (!oddsData || !oddsData.length) {
+        return bot.sendMessage(chatId, `No odds data available for ${sportKey}.\n\n_Run /cache to fetch the latest odds._`, { parse_mode: 'Markdown' });
+      }
 
       const aiValidation = await aiService.validateOdds(oddsData);
       if (!aiValidation.valid) return bot.sendMessage(chatId, `AI validation failed for ${sportKey} data.`);
@@ -18,7 +20,7 @@ export function registerAnalytics(bot) {
       const quantReport = analyzeQuantitative(oddsData);
       const psychoReport = await psychometric.profileUser(chatId);
 
-      const reportText = `*📊 Quantitative Insights for ${sportKey}:*\n\`\`\`json\n${JSON.stringify(quantReport, null, 2)}\n\`\`\`\n\n*🧠 Behavioral Insights for your profile:*\n\`\`\`json\n${JSON.stringify(psychoReport, null, 2)}\n\`\`\``;
+      const reportText = `*📊 Quantitative Insights for ${sportKey}:*\n\`\`\`json\n${JSON.stringify(quantReport, null, 2)}\n\`\`\`\n\n*🧠 Behavioral Insights for your profile:*\n\`\`\`json\n${JSON.stringify(psychoReport, null, 2)}\n\`\`\`\n\n_Note: Data is based on the last manual cache refresh. Run /cache for the latest odds._`;
       await bot.sendMessage(chatId, reportText, { parse_mode: 'Markdown' });
     } catch (e) {
       console.error('Analytics handler error:', e);
