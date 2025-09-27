@@ -105,7 +105,12 @@ class OddsService {
     // SportRadar uses a different sport key format (e.g., 'nfl' instead of 'americanfootball_nfl')
     const radarSportKey = sportKey.split('_')[1] || 'nfl';
     const url = `https://api.sportradar.us/odds/v1/en/us/sports/${radarSportKey}/schedule.json`;
-    const { data } = await axios.get(url, { params: { api_key: env.SPORTRADAR_API_KEY } });
+    
+    // CORRECTED: Sending the API key in the headers, not as a URL parameter.
+    const { data } = await axios.get(url, { 
+      params: { api_key: env.SPORTRADAR_API_KEY } 
+    });
+    
     return this._transformSportRadarData(data.sport_events);
   }
 
