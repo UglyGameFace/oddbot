@@ -14,128 +14,84 @@ import { registerSettings, registerSettingsCallbacks } from './bot/handlers/sett
 import { registerSystem, registerSystemCallbacks } from './bot/handlers/system.js';
 import { registerTools, registerCommonCallbacks } from './bot/handlers/tools.js';
 
-// --- CATCH SILENT ERRORS ---
+// --- Global Error Catcher ---
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ UNHANDLED REJECTION AT:', promise, 'REASON:', reason);
+  sentryService.captureError(reason);
 });
 
 const app = express();
-
-// --- Health Checks & Basic Middleware ---
-app.get('/liveness', (_req, res) => res.sendStatus(200));
-const healthOk = (_req, res) => res.status(200).send('OK');
-['/', '/health', '/healthz'].forEach((path) => app.get(path, healthOk));
-
-sentryService.attachExpressPreRoutes?.(app);
-app.use(express.json());
-
-// --- Bot Initialization ---
 const TOKEN = env.TELEGRAM_BOT_TOKEN;
 const USE_WEBHOOK = env.APP_URL && env.APP_URL.startsWith('https');
-const bot = new TelegramBot(TOKEN, {
-    polling: !USE_WEBHOOK,
-    request: { timeout: 20000 }
-});
 
-// --- Handler Registration ---
-async function wireHandlers() {
-  console.log('Wiring all application handlers...');
-  registerAnalytics(bot);
-  registerModel(bot);
-  registerCacheHandler(bot);
-  registerCustom(bot);
-  registerCustomCallbacks(bot);
-  registerAI(bot);
-  registerAICallbacks(bot);
-  registerQuant(bot);
-  registerPlayer(bot);
-  registerPlayerCallbacks(bot);
-  registerSettings(bot);
-  registerSettingsCallbacks(bot);
-  registerSystem(bot);
-  registerSystemCallbacks(bot);
-  registerTools(bot);
-  registerCommonCallbacks(bot);
+// --- Bot Initialization ---
+const bot = new TelegramBot(TOKEN, { polling: !USE_WEBHOOK });
+
+// --- Main Application Start ---
+async function main() {
+  // 1. Register all bot command and callback handlers
+  registerAnalytics(bot); registerModel(bot); registerCacheHandler(bot);
+  registerCustom(bot); registerCustomCallbacks(bot);
+  registerAI(bot); registerAICallbacks(bot); registerQuant(bot);
+  registerPlayer(bot); registerPlayerCallbacks(bot);
+  registerSettings(bot); registerSettingsCallbacks(bot);
+  registerSystem(bot); registerSystemCallbacks(bot);
+  registerTools(bot); registerCommonCallbacks(bot);
   console.log('✅ All handlers registered.');
-}
 
-// --- Webhook Setup ---
-async function startWebhook() {
-  const webhookPath = `/webhook/${Buffer.from(TOKEN).toString('hex').slice(0, 32)}`;
-  app.post(webhookPath, (req, res) => {
-    if (env.TELEGRAM_WEBHOOK_SECRET && req.headers['x-telegram-bot-api-secret-token'] !== env.TELEGRAM_WEBHOOK_SECRET) {
-      return res.status(401).send('Unauthorized');
-    }
-    bot.processUpdate(req.body || {});
-    res.sendStatus(200);
-  });
-  const fullWebhookUrl = `${env.APP_URL.replace(/\/+$/, '')}${webhookPath}`;
-  await bot.setWebHook(fullWebhookUrl, {
-      secret_token: env.TELEGRAM_WEBHOOK_SECRET || undefined,
-      allowed_updates: ['message', 'callback_query']
-  });
-  console.log(`Webhook successfully set to: ${fullWebhookUrl}`);
-}
-
-sentryService.attachExpressPostRoutes?.(app);
-
-// --- Application Start (WITH TRACER LOGS) ---
-async function initialize() {
-  console.log('[Tracer] Step 1: Starting wireHandlers()...');
-  await wireHandlers();
-  console.log('[Tracer] Step 1: COMPLETED.');
+  // 2. Set up Express server and Sentry middleware
+  app.use(express.json());
+  sentryService.attachExpressPreRoutes?.(app);
+  
+  // 3. Define Health Check and Webhook routes
+  app.get('/liveness', (_req, res) => res.sendStatus(200));
+  ['/', '/health', '/healthz'].forEach(path => app.get(path, (_req, res) => res.send('OK')));
 
   if (USE_WEBHOOK) {
-    console.log('[Tracer] Step 2: Starting startWebhook()...');
-    await startWebhook();
-    console.log('[Tracer] Step 2: COMPLETED.');
+    const webhookPath = `/webhook/${TOKEN}`;
+    app.post(webhookPath, (req, res) => {
+      bot.processUpdate(req.body);
+      res.sendStatus(200);
+    });
+    await bot.setWebHook(`${env.APP_URL}${webhookPath}`);
+    console.log(`Webhook successfully set to: ${env.APP_URL}${webhookPath}`);
   }
 
-  console.log('[Tracer] Step 3: Starting setMyCommands()...');
+  // 4. Attach Sentry's post-request error handler
+  sentryService.attachExpressPostRoutes?.(app);
+
+  // 5. Set the command list in Telegram
   const commands = [
     { command: 'ai', description: 'Launch the AI Parlay Builder' },
     { command: 'custom', description: 'Manually build a parlay slip' },
     { command: 'player', description: 'Find props for a specific player' },
-    { command: 'settings', description: 'Configure your bot preferences' },
-    { command: 'status', description: 'Check the bot\'s operational status' },
+    { command: 'settings', description: 'Configure bot preferences' },
+    { command: 'status', description: 'Check bot operational status' },
     { command: 'tools', description: 'Access admin tools' },
     { command: 'help', description: 'Show the command guide' },
   ];
-
-  try {
-    await bot.setMyCommands(commands);
-    console.log('[Tracer] Step 3: COMPLETED.');
-  } catch (error) {
-    console.error('[Tracer] Step 3: FAILED.', error);
-    throw error; // Re-throw to ensure it's caught by the main handler
-  }
+  await bot.setMyCommands(commands);
+  console.log('Bot commands have been set in Telegram.');
   
-  console.log('[Tracer] Step 4: Starting getMe()...');
+  // 6. Final confirmation
   const me = await bot.getMe();
-  console.log('[Tracer] Step 4: COMPLETED.');
-
-  console.log(`🚀 Bot @${me.username} is now online in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`);
+  console.log(`✅ Bot @${me.username} fully initialized.`);
+  
+  // 7. Start the server LAST, only after everything is ready.
+  const PORT = process.env.PORT || 8080;
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Server listening on port ${PORT}. Bot is online in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`);
+  });
 }
 
-const PORT = process.env.PORT || 8080;
-const HOST = process.env.HOST || '0.0.0.0';
-app.listen(PORT, HOST, () => {
-  console.log(`HTTP server listening on [${HOST}]:${PORT}. Initializing bot...`);
-  initialize().catch((e) => {
-    console.error('❌ Fatal Bot Initialization Error:', e?.message || e);
-    process.exit(1);
-  });
+// --- Run the application ---
+main().catch((e) => {
+  console.error('❌ Fatal Bot Initialization Error:', e);
+  process.exit(1);
 });
 
-// --- Graceful Shutdown ---
-const shutdown = (signal) => {
-  console.log(`\n${signal} received. Shutting down gracefully...`);
-  process.exit(0);
-};
+// --- Graceful Shutdown & Keep-Alive ---
+const shutdown = (signal) => process.exit(0);
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
-
-// --- Keep Process Alive ---
-// This timer prevents the Node.js process from exiting if it incorrectly
-// believes its event loop is empty. This is a workaround for the silent shutdown issue.
 setInterval(() => {}, 1 << 30);
