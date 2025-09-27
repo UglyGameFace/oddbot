@@ -5,7 +5,6 @@ import {
   getParlaySlip, setParlaySlip,
   saveToken, loadToken,
 } from '../state.js';
-// FIX: Import gamesService, which is the correct service for fetching game data.
 import gamesService from '../../services/gamesService.js';
 import redis from '../../services/redisService.js';
 import {
@@ -16,9 +15,44 @@ import {
 } from '../../utils/enterpriseUtilities.js';
 
 const tz = env.TIMEZONE || 'America/New_York';
-const getSportEmoji = (key) => (key.includes('americanfootball') ? '🏈' : key.includes('basketball') ? '🏀' : key.includes('baseball') ? '⚾' : key.includes('icehockey') ? '🏒' : key.includes('soccer') ? '⚽' : '🏆');
 
-// This function is correct.
+// Human-friendly fallback titles to avoid null labels
+const SPORT_TITLES = {
+  basketball_nba: 'NBA',
+  basketball_wnba: 'WNBA',
+  baseball_mlb: 'MLB',
+  football_nfl: 'NFL',
+  hockey_nhl: 'NHL',
+  icehockey_nhl: 'NHL',
+  football_ncaaf: 'NCAAF',
+  americanfootball_ncaaf: 'NCAAF', // The Odds API sport key
+};
+
+// Prefer College Football first; move NHL last when present
+const PREFERRED_FIRST = ['football_ncaaf', 'americanfootball_ncaaf'];
+const DEPRIORITIZE_LAST = ['hockey_nhl', 'icehockey_nhl'];
+
+const getSportEmoji = (key) =>
+  key.includes('americanfootball') ? '🏈'
+    : key.includes('basketball') ? '🏀'
+    : key.includes('baseball') ? '⚾'
+    : key.includes('icehockey') || key.includes('hockey') ? '🏒'
+    : key.includes('soccer') ? '⚽'
+    : '🏆';
+
+// Safe sort to prioritize CFB and de-emphasize NHL
+function sortSports(sports) {
+  const rank = (k) => {
+    if (PREFERRED_FIRST.includes(k)) return -100;
+    if (DEPRIORITIZE_LAST.includes(k)) return 100;
+    return 0;
+  };
+  return [...(sports || [])].sort(
+    (a, b) => rank(a?.sport_key || '') - rank(b?.sport_key || '')
+  );
+}
+
+// This function is correct (kept intact)
 function applyFilters(games, { cutoffHours, excludedTeams }) {
   const ex = (excludedTeams || []).map((t) => t.toLowerCase());
   const now = Date.now();
@@ -35,15 +69,15 @@ function applyFilters(games, { cutoffHours, excludedTeams }) {
   });
 }
 
-// These redis functions are correct.
+// These redis functions are correct (kept intact)
 async function getCustomSelectedSports(chatId) {
-    const redisClient = await redis;
-    const s = await redisClient.get(`custom:sports:${chatId}`);
-    return s ? JSON.parse(s) : [];
+  const redisClient = await redis;
+  const s = await redisClient.get(`custom:sports:${chatId}`);
+  return s ? JSON.parse(s) : [];
 }
 async function setCustomSelectedSports(chatId, arr) {
-    const redisClient = await redis;
-    await redisClient.set(`custom:sports:${chatId}`, JSON.stringify(arr), 'EX', 3600);
+  const redisClient = await redis;
+  await redisClient.set(`custom:sports:${chatId}`, JSON.stringify(arr), 'EX', 3600);
 }
 
 export function registerCustom(bot) {
@@ -59,6 +93,7 @@ export function registerCustomCallbacks(bot) {
     try { await bot.answerCallbackQuery(cbq.id); } catch {}
 
     if (data === 'cback_sports') return sendCustomSportSelection(bot, chatId, message.message_id);
+
     if (data.startsWith('csp_')) {
       const tok = data.substring(4);
       const payload = await loadToken('csp', tok);
@@ -127,16 +162,27 @@ export function registerCustomCallbacks(bot) {
 }
 
 async function sendCustomSportSelection(bot, chatId, messageId = null) {
-  // FIX: Called gamesService.getAvailableSports(), which is the correct method.
-  const sports = await gamesService.getAvailableSports();
-  if (!sports?.length) return bot.sendMessage(chatId, 'No upcoming games found. Please try again later.');
+  // Correct service call
+  const sportsRaw = await gamesService.getAvailableSports();
+  const sports = sortSports(
+    (sportsRaw || [])
+      .filter(s => s?.sport_key) // ensure valid keys for buttons
+  );
+  if (!sports?.length) {
+    return bot.sendMessage(chatId, 'No upcoming games found. Please try again later.');
+  }
 
   const chosen = new Set(await getCustomSelectedSports(chatId));
   const rows = [];
   for (const s of sports) {
     const active = chosen.has(s.sport_key);
     const tok = await saveToken('csp', { sport_key: s.sport_key });
-    rows.push([{ text: `${active ? '✅' : '☑️'} ${getSportEmoji(s.sport_key)} ${s.sport_title}`, callback_data: `csp_${tok}` }]);
+
+    // Safe, non-null label: title -> fallback map -> key
+    const safeTitle = (s?.sport_title ?? SPORT_TITLES[s.sport_key] ?? s.sport_key);
+    const text = `${active ? '✅' : '☑️'} ${getSportEmoji(s.sport_key)} ${safeTitle}`;
+
+    rows.push([{ text, callback_data: `csp_${tok}` }]);
   }
   rows.push([{ text: 'Proceed with selected', callback_data: 'custom_sports_proceed' }]);
 
@@ -148,10 +194,10 @@ async function sendCustomSportSelection(bot, chatId, messageId = null) {
 
 async function sendCustomGamesFromSelected(bot, chatId, messageId) {
   const selected = await getCustomSelectedSports(chatId);
-  // FIX: Called gamesService.getAvailableSports(), which is the correct method.
-  const sports = selected.length ? selected : (await gamesService.getAvailableSports()).map((s) => s.sport_key);
+  const sports = selected.length
+    ? selected
+    : (await gamesService.getAvailableSports()).map((s) => s.sport_key);
   const b = await getBuilderConfig(chatId);
-  // FIX: Called gamesService.getGamesForSport(k), which is the correct method.
   const perSport = await Promise.all(sports.map((k) => gamesService.getGamesForSport(k)));
   const pooled = applyFilters(perSport.flat(), { cutoffHours: b.cutoffHours, excludedTeams: b.excludedTeams });
 
@@ -159,15 +205,19 @@ async function sendCustomGamesFromSelected(bot, chatId, messageId) {
     return bot.editMessageText('No upcoming games found for your selections/filters.', { chat_id: chatId, message_id: messageId });
   }
 
-  const rows = pooled.slice(0, 10).map((g) => [{ text: `${g.away_team} @ ${g.home_team} — ${formatGameTimeTZ(g.commence_time)}`, callback_data: `cg_${g.id}` }]);
+  const rows = pooled.slice(0, 10).map((g) => [{
+    text: `${g.away_team} @ ${g.home_team} — ${formatGameTimeTZ(g.commence_time)}`,
+    callback_data: `cg_${g.id}`
+  }]);
   rows.push([{ text: '« Back to Sports', callback_data: 'cback_sports' }]);
   await bot.editMessageText('Select a game:', { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: rows } });
 }
 
 async function sendMarketSelection(bot, chatId, gameId, messageId) {
-  // FIX: Called gamesService.getGameDetails(gameId), which is the correct method.
   const g = await gamesService.getGameDetails(gameId);
-  if (!g?.bookmakers?.length) return bot.editMessageText('Could not find market data.', { chat_id: chatId, message_id: messageId });
+  if (!g?.bookmakers?.length) {
+    return bot.editMessageText('Could not find market data.', { chat_id: chatId, message_id: messageId });
+  }
 
   const keys = g.bookmakers[0].markets.map((m) => m.key);
   const row = [];
@@ -175,16 +225,19 @@ async function sendMarketSelection(bot, chatId, gameId, messageId) {
   if (keys.includes('spreads')) row.push({ text: 'Spreads', callback_data: `cm_${g.id}_spreads` });
   if (keys.includes('totals')) row.push({ text: 'Totals', callback_data: `cm_${g.id}_totals` });
   const rows = [row, [{ text: '« Back to Games', callback_data: 'custom_sports_proceed' }]];
-  await bot.editMessageText(`*${g.away_team} @ ${g.home_team}*\n${formatGameTimeTZ(g.commence_time)}\n\nSelect a market:`, {
-    parse_mode: 'Markdown', chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: rows }
-  });
+
+  await bot.editMessageText(
+    `*${g.away_team} @ ${g.home_team}*\n${formatGameTimeTZ(g.commence_time)}\n\nSelect a market:`,
+    { parse_mode: 'Markdown', chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: rows } }
+  );
 }
 
 async function sendPickSelection(bot, chatId, gameId, marketKey, messageId) {
-  // FIX: Called gamesService.getGameDetails(gameId), which is the correct method.
   const g = await gamesService.getGameDetails(gameId);
   const m = g?.bookmakers?.[0]?.markets?.find((x) => x.key === marketKey);
-  if (!m) return bot.editMessageText('Market not available.', { chat_id: chatId, message_id: messageId });
+  if (!m) {
+    return bot.editMessageText('Market not available.', { chat_id: chatId, message_id: messageId });
+  }
 
   const rows = [];
   for (const o of m.outcomes || []) {
@@ -246,7 +299,6 @@ async function renderParlaySlip(bot, chatId) {
     if (!groups[p.game]) groups[p.game] = { commence_time: p.commence_time || null, picks: [] };
     groups[p.game].picks.push(p);
     if (!groups[p.game].commence_time && p.gameId) {
-      // FIX: Called gamesService.getGameDetails(p.gameId), which is the correct method.
       const det = await gamesService.getGameDetails(p.gameId);
       groups[p.game].commence_time = det?.commence_time || groups[p.game].commence_time;
     }
