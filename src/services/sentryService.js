@@ -4,30 +4,36 @@ import * as Sentry from '@sentry/node';
 import env from '../config/env.js';
 
 let profilingIntegration = null;
-try {
-  // Dynamically import to avoid issues if @sentry/profiling-node is not installed
-  const { NodeProfiler } = await import('@sentry/profiling-node');
-  profilingIntegration = new NodeProfiler();
-} catch (e) {
-  // Profiling support may not be enabled, which is acceptable.
-  console.log('Sentry profiling integration not available.');
+
+// FIX: Only attempt to import and enable the profiler if it's explicitly turned on.
+// This prevents the native module from running and crashing the application in incompatible environments.
+if (env.SENTRY_ENABLE_PROFILING) {
+  try {
+    // Dynamically import to avoid issues if @sentry/profiling-node is not installed
+    const { NodeProfiler } = await import('@sentry/profiling-node');
+    profilingIntegration = new NodeProfiler();
+    console.log('Sentry profiling integration has been enabled.');
+  } catch (e) {
+    // Profiling support may not be enabled, which is acceptable.
+    console.log('Sentry profiling integration could not be loaded.');
+  }
 }
 
 if (env.SENTRY_DSN) {
   Sentry.init({
     dsn: env.SENTRY_DSN,
     environment: env.NODE_ENV,
-    tracesSampleRate: 1.0,
-    profilesSampleRate: 1.0, // Enable profiling
+    tracesSampleRate: env.SENTRY_TRACES_SAMPLE_RATE,
+    // FIX: Use the correct environment variable for the profiles sample rate.
+    profilesSampleRate: env.PROFILES_SAMPLE_RATE,
     integrations: [
+      // This will now correctly add the integration only if it was successfully loaded and enabled.
       ...(profilingIntegration ? [profilingIntegration] : [])
     ],
   });
   console.log('✅ Sentry Initialized.');
 }
 
-// FIX: Changed "export default" to "export const sentryService ="
-// This creates a named export that matches the import statements in all your other files.
 export const sentryService = {
   attachExpressPreRoutes(app) {
     if (Sentry.Handlers?.requestHandler) {
