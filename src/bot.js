@@ -26,7 +26,6 @@ process.on('uncaughtException', (error) => {
 });
 
 const app = express();
-
 const TOKEN = env.TELEGRAM_BOT_TOKEN;
 if (!TOKEN) {
   console.error('TELEGRAM_BOT_TOKEN is required');
@@ -39,7 +38,6 @@ const USE_WEBHOOK = env.USE_WEBHOOK === true;
 const bot = new TelegramBot(TOKEN, { polling: !USE_WEBHOOK });
 let server;
 
-// Main
 async function main() {
   console.log('Registering all bot handlers...');
   registerAnalytics(bot); registerModel(bot); registerCacheHandler(bot);
@@ -55,13 +53,13 @@ async function main() {
   app.use(express.json());
   sentryService.attachExpressPreRoutes?.(app);
 
-  // Liveness: fast, unauthenticated 200
-  app.get('/', (_req, res) => res.status(200).send('OK'));
-  app.get('/health', (_req, res) => res.sendStatus(200));
-  app.head('/health', (_req, res) => res.sendStatus(200));
-  app.get('/liveness', (_req, res) => res.sendStatus(200));
+  // Liveness: fast, unauthenticated 200s for platform probe
+  app.get('/', (_req, res) => res.status(200).send('OK'));        // GET /
+  app.get('/health', (_req, res) => res.sendStatus(200));         // GET /health
+  app.head('/health', (_req, res) => res.sendStatus(200));        // HEAD /health
+  app.get('/liveness', (_req, res) => res.sendStatus(200));       // legacy path if configured
 
-  // Start server BEFORE webhook calls so healthcheck can pass quickly
+  // Start server BEFORE external calls so healthcheck can pass immediately
   const PORT = Number(process.env.PORT) || Number(env.PORT) || 8080;
   const HOST = '0.0.0.0';
   server = app.listen(PORT, HOST, () => {
@@ -71,7 +69,7 @@ async function main() {
   if (USE_WEBHOOK) {
     const webhookPath = `/webhook/${TOKEN}`;
 
-    // Verify Telegram secret only on webhook route
+    // Verify Telegram secret only on the webhook route
     app.post(
       webhookPath,
       (req, res, next) => {
@@ -114,7 +112,6 @@ async function main() {
   console.log('Application startup sequence complete. Process will now run indefinitely.');
 }
 
-// Graceful shutdown
 const shutdown = async (signal) => {
   console.log(`\nReceived ${signal}. Shutting down gracefully...`);
   try {
