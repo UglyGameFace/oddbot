@@ -1,8 +1,8 @@
 // src/bot/handlers/ai.js
 import env from '../config/env.js';
-import AIService from '../../services/aiService.js';
+import AIService from './services/aiService.js';
 import { getAIConfig, setAIConfig, getBuilderConfig } from '../state.js';
-import oddsService from '../../services/oddsService.js';
+import oddsService from './services/oddsService.js';
 
 const tz = env.TIMEZONE || 'America/New_York';
 const formatGameTimeTZ = (iso) => new Date(iso).toLocaleString('en-US', {
