@@ -16,7 +16,7 @@ async function refreshCache() {
   // await redisService.flushAll(); // use with caution!
 }
 
-export function registerCacheHandler(bot) { ... }
+export function registerCacheHandler(bot) {
   // On-demand cache refresh command
   bot.onText(/^\/cache refresh$/, async (msg) => {
     const chatId = msg.chat.id;
