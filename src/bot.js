@@ -35,7 +35,7 @@ async function wireHandlers() {
   console.log('Wiring handlers...');
   registerAnalytics(bot);
   registerModel(bot);
-  registerCache(bot);
+  registerCacheHandler(bot);
   // Register any other modules/handlers here
   console.log('✅ All handlers registered.');
 }
