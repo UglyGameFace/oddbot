@@ -1,198 +1,117 @@
-// src/services/oddsService.js - PROVEN ODDS SERVICE WITH DYNAMIC SPORT SUPPORT + ESM named exports
-
+// src/services/oddsService.js
 import axios from 'axios';
 import env from '../config/env.js';
 import redis from './redisService.js';
-import sentryService from './sentryService.js';
+import sentry from './sentryService.js';
 
-// Secondary index TTL for game-by-id lookups used by handlers (seconds)
-const GAMEIDX_TTL = 120;
+const API_KEY = env.ODDS_API_KEY;
+const API_KEY_RADAR = env.SPORTRADAR_API_KEY;
+const BASE_URL = 'https://api.the-odds-api.com/v4/sports';
+const BASE_URL_RADAR = 'https://api.sportradar.us/odds/v1/en/us/sports';
+
+const CACHE_TTL = 3600; // 1 hour
 
 class ProvenOddsService {
   constructor() {
-    this.providers = [];
-    if (env.THE_ODDS_API_KEY) {
-      this.providers.push({
-        name: 'the-odds-api',
-        url: 'https://api.the-odds-api.com/v4/sports',
-        apiKey: env.THE_ODDS_API_KEY
-      });
-    }
-    if (env.SPORTRADAR_API_KEY) {
-      this.providers.push({
-        name: 'sportradar',
-        url: 'https://api.sportradar.com',
-        apiKey: env.SPORTRADAR_API_KEY
-      });
-    }
-    console.log('✅ Proven Odds Service Initialized:', this.providers.map(p => p.name).join(', '));
+    this.providers = [
+      this.fetchFromOddsAPI.bind(this),
+      this.fetchFromSportRadar.bind(this)
+    ];
   }
 
-  /**
-   * Fetches a list of all available sports from provider and caches for 24 hours.
-   * Returns [{ key, title }]
-   */
-  async getSupportedSports() {
-    const cacheKey = 'supported_sports_list';
-    const CACHE_TTL = 86400; // 24h
-
-    try {
-      const cachedData = await redis.get(cacheKey);
-      if (cachedData) return JSON.parse(cachedData);
-    } catch (e) {
-      sentryService.captureError(e, { component: 'odds_sports_cache_read' });
-    }
-
-    const provider = this.providers.find(p => p.name === 'the-odds-api');
-    if (!provider) {
-        console.error('The Odds API provider not configured for dynamic sport fetching.');
-        return [];
-    }
-
-    try {
-      const response = await axios.get(provider.url, { params: { apiKey: provider.apiKey } });
-
-      if (response.data && Array.isArray(response.data)) {
-        const sports = response.data
-          .filter(sport => sport.active === true) // in-season sports
-          .map(sport => ({ key: sport.key, title: sport.title }));
-
-        await redis.set(cacheKey, JSON.stringify(sports), 'EX', CACHE_TTL);
-        return sports;
-      }
-      return [];
-    } catch (error) {
-      sentryService.captureError(error, { component: 'odds_fetch_supported_sports' });
-      console.error('Failed to fetch supported sports from API:', error.message);
-      return [];
-    }
-  }
-
-  /**
-   * Returns the best provider's odds for the sportKey, with caching/fallbacks.
-   * Normalized fields: id, home_team, away_team, commence_time, sport_key, sport_title, bookmakers
-   */
   async getSportOdds(sportKey) {
-    const cacheKey = `odds_${sportKey}`;
+    const redisClient = await redis; // FIX: await the redis connection
+    const cacheKey = `odds:${sportKey}`;
+
     try {
-      const cachedData = await redis.get(cacheKey);
-      if (cachedData) return JSON.parse(cachedData);
+      const cachedData = await redisClient.get(cacheKey);
+      if (cachedData) {
+        console.log(` CACHE HIT for ${sportKey}`);
+        return JSON.parse(cachedData);
+      }
     } catch (e) {
-      sentryService.captureError(e, { component: 'odds_cache_read', sportKey });
+      console.error('Redis GET error:', e?.message || e);
+      sentry.captureError(e, { component: 'odds_service_cache_read' });
     }
 
-    for (const provider of this.providers) {
+    console.log(` CACHE MISS for ${sportKey}, fetching fresh data...`);
+    let combinedOdds = [];
+    for (const fetchFn of this.providers) {
       try {
-        let games = [];
-        if (provider.name === 'the-odds-api') {
-          const res = await axios.get(`${provider.url}/${sportKey}/odds`, {
-            params: {
-              apiKey: provider.apiKey,
-              regions: 'us',
-              markets: 'h2h,spreads,totals',
-              oddsFormat: 'american'
-            }
-          });
-          if (Array.isArray(res.data) && res.data.length) {
-            games = res.data.map(g => ({
-              id: g.id,
-              home_team: g.home_team,
-              away_team: g.away_team,
-              commence_time: g.commence_time,
-              sport_key: g.sport_key,
-              sport_title: g.sport_title,
-              bookmakers: g.bookmakers
-            }));
-            await redis.set(cacheKey, JSON.stringify(games), 'EX', 300); // 5 minutes
-            return games;
-          }
-        } else if (provider.name === 'sportradar') {
-          // Example stub; adapt to your Sportradar package/feeds if used
-          const endpoint = `${provider.url}/odds/${sportKey}/live.json?api_key=${provider.apiKey}`;
-          const res = await axios.get(endpoint);
-          if (res.data && Array.isArray(res.data.games) && res.data.games.length) {
-            games = res.data.games.map(g => ({
-              id: g.id,
-              home_team: g.home_name,
-              away_team: g.away_name,
-              commence_time: g.scheduled,
-              sport_key: sportKey,
-              sport_title: g.sport || sportKey,
-              bookmakers: g.odds
-            }));
-            await redis.set(cacheKey, JSON.stringify(games), 'EX', 300);
-            return games;
-          }
+        const odds = await fetchFn(sportKey);
+        if (odds && odds.length) {
+          combinedOdds = this.mergeOdds(combinedOdds, odds);
         }
-      } catch (err) {
-        sentryService.captureError(err, { component: `odds_${provider.name}_fetch`, sportKey });
-        console.warn(`Odds fetch failed for provider ${provider.name} sportKey ${sportKey}: ${err?.message || 'Unknown error'}`);
+      } catch (error) {
+        console.error(`Odds fetch failed for provider ${fetchFn.name} sportKey ${sportKey}: ${error.message}`);
       }
     }
-    await redis.set(cacheKey, '[]', 'EX', 60); // Cache empty for 1 minute to avoid thrash
-    return [];
-  }
 
-  /**
-   * Aggregates/normalizes across sports and deduplicates by game identity.
-   */
-  async getAllSportsOdds() {
-    const sports = await this.getSupportedSports();
-    const allSupportedKeys = sports.map(s => s.key);
-
-    const results = await Promise.allSettled(allSupportedKeys.map(k => this.getSportOdds(k)));
-
-    const allOdds = results
-      .filter(res => res.status === 'fulfilled' && Array.isArray(res.value) && res.value.length > 0)
-      .flatMap(res => res.value);
-
-    return this.processAndDeduplicateOdds(allOdds);
-  }
-
-  processAndDeduplicateOdds(games) {
-    const deduped = new Map();
-    for (const g of games) {
-      const key = `${g.home_team}_${g.away_team}_${g.commence_time}`;
-      if (!deduped.has(key)) deduped.set(key, g);
+    if (combinedOdds.length > 0) {
+      try {
+        await redisClient.set(cacheKey, JSON.stringify(combinedOdds), 'EX', CACHE_TTL);
+      } catch (e) {
+        console.error('Redis SET error:', e?.message || e);
+        sentry.captureError(e, { component: 'odds_service_cache_write' });
+      }
     }
-    const uniqueGames = Array.from(deduped.values());
-    uniqueGames.sort((a, b) => new Date(a.commence_time) - new Date(b.commence_time));
-    return uniqueGames;
+    return combinedOdds;
   }
-}
 
-// Instantiate and export default (keeps your existing API)
-const provenService = new ProvenOddsService();
-export default provenService;
+  mergeOdds(existing, fresh) {
+    const map = new Map();
+    existing.forEach(item => map.set(item.id, item));
+    fresh.forEach(item => map.set(item.id, item));
+    return Array.from(map.values());
+  }
 
-// ===== Named exports expected by handlers (ESM strict) =====
-// Expose sports list as { sport_key, sport_title } to match handler imports
-export async function getAvailableSportsCached() {
-  // The Odds API v4 sports endpoint returns active (in-season) sports used in downstream odds endpoints
-  // This maps to handler-expected names and keeps cache behavior centralized in the service methods
-  const sports = await provenService.getSupportedSports();
-  return (sports || []).map(s => ({
-    sport_key: s.key,
-    sport_title: s.title || s.key,
-  }));
-}
-
-// Expose per-sport games and build a secondary Redis index by game id for detail lookups
-export async function getGamesForSportCached(sportKey) {
-  // v4 per-sport odds (with US region and featured markets) is what handlers expect to iterate
-  const games = await provenService.getSportOdds(sportKey);
-  for (const g of games || []) {
-    if (g?.id) {
-      await redis.set(`odds:game:${g.id}`, JSON.stringify(g), 'EX', GAMEIDX_TTL);
+  async fetchFromOddsAPI(sportKey) {
+    try {
+      const { data } = await axios.get(`${BASE_URL}/${sportKey}/odds`, {
+        params: { apiKey: API_KEY, regions: 'us', markets: 'h2h,spreads', oddsFormat: 'american' }
+      });
+      return this.transformOddsAPI(data);
+    } catch (error) {
+      sentry.captureError(error, { component: 'the_odds_api' });
+      throw error;
     }
   }
-  return games || [];
+
+  async fetchFromSportRadar(sportKey) {
+    const radarSport = sportKey.split('_')[1] || 'nfl';
+    const endpoint = `${BASE_URL_RADAR}/${radarSport}/schedule.json`;
+    try {
+      const { data } = await axios.get(endpoint, { params: { api_key: API_KEY_RADAR } });
+      return this.transformSportRadar(data.sport_events);
+    } catch (error) {
+      sentry.captureError(error, { component: 'sportradar_api' });
+      throw error;
+    }
+  }
+
+  transformOddsAPI(data) {
+    return (data || []).map(d => ({
+      id: d.id,
+      sport_key: d.sport_key,
+      sport_title: d.sport_title,
+      commence_time: d.commence_time,
+      home_team: d.home_team,
+      away_team: d.away_team,
+      bookmakers: d.bookmakers
+    }));
+  }
+
+  transformSportRadar(events) {
+    return (events || []).map(event => ({
+        id: `sr_${event.id}`,
+        sport_key: event.sport_event_context.competition.name.toLowerCase().replace(/ /g, '_'),
+        sport_title: event.sport_event_context.competition.name,
+        commence_time: event.start_time,
+        home_team: event.competitors.find(c => c.qualifier === 'home')?.name || 'N/A',
+        away_team: event.competitors.find(c => c.qualifier === 'away')?.name || 'N/A',
+        bookmakers: [] // SportRadar schedule does not include odds, needs another call
+    }));
+  }
 }
 
-// Expose latest game details by id via the secondary index; returns null if not seen recently
-export async function getGameDetailsCached(gameId) {
-  if (!gameId) return null;
-  const raw = await redis.get(`odds:game:${gameId}`);
-  if (!raw) return null;
-  try { return JSON.parse(raw); } catch { return null; }
-}
+export default new ProvenOddsService();
