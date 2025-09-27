@@ -1,87 +1,69 @@
-// src/services/healthService.js - ENTERPRISE HEALTH MONITORING (Corrected)
-import os from 'os';
-import pidusage from 'pidusage';
-import sentryService from './sentryService.js';
-import DatabaseService from './databaseService.js';
-import redis from './redisService.js';
+// src/services/healthService.js
 
-class EnterpriseHealthService {
-  // We pass the express app in the constructor
-  constructor(app) {
-    if (!app) {
-      throw new Error("HealthService requires an Express app instance.");
-    }
-    this.app = app;
-    // The setup is now called MANUALLY after all services are ready.
-  }
+import redisClient from './redisService.js';
+import databaseService from './databaseService.js';
+import { sentryService } from './sentryService.js';
 
-  // This will be called from bot.js
-  initializeHealthCheckEndpoints() {
-    this.app.get('/health/liveness', (_req, res) => {
-      res.status(200).json({ status: 'alive', timestamp: new Date().toISOString() });
-    });
+class HealthService {
+  
+  /**
+   * Checks the health of the Redis connection by sending a PING command.
+   * @returns {Promise<Object>} An object with the status and latency.
+   */
+  async _checkRedis() {
+    try {
+      const redis = await redisClient;
+      const startTime = Date.now();
+      const reply = await redis.ping();
+      const endTime = Date.now();
 
-    this.app.get('/health/readiness', async (_req, res) => {
-      const checks = await this.runAllChecks();
-      const isReady = checks.every(check => check.status === 'healthy');
-      
-      if (isReady) {
-        res.status(200).json({ status: 'ready', checks });
-      } else {
-        res.status(503).json({ status: 'not_ready', checks });
+      if (reply === 'PONG') {
+        return { ok: true, status: 'Connected', latency: `${endTime - startTime}ms` };
       }
-    });
-
-    this.app.get('/health/metrics', async (_req, res) => {
-        try {
-            const processStats = await pidusage(process.pid);
-            const metrics = {
-                timestamp: new Date().toISOString(),
-                uptime_seconds: process.uptime(),
-                cpu_usage_percent: processStats.cpu,
-                memory_usage_bytes: processStats.memory,
-            };
-            res.status(200).json(metrics);
-        } catch (error) {
-            res.status(500).json({ error: 'Failed to get process metrics' });
-        }
-    });
-    console.log('✅ Health Check Endpoints Initialized.');
-  }
-
-  async runAllChecks() {
-    const checkPromises = [
-      this.checkDatabase(),
-      this.checkRedis(),
-    ];
-    return Promise.all(checkPromises);
-  }
-
-  async checkDatabase() {
-    const startTime = Date.now();
-    try {
-      await DatabaseService.healthCheck();
-      return {
-        name: 'database',
-        status: 'healthy',
-        latency_ms: Date.now() - startTime,
-      };
+      return { ok: false, status: 'Unresponsive' };
     } catch (error) {
-      return { name: 'database', status: 'unhealthy', error: error.message };
+      sentryService.captureError(error, { component: 'health_service', check: 'redis' });
+      return { ok: false, status: 'Disconnected', error: error.message };
     }
   }
 
-  async checkRedis() {
-    const startTime = Date.now();
+  /**
+   * Checks the health of the Supabase connection by running a simple query.
+   * @returns {Promise<Object>} An object with the status.
+   */
+  async _checkDatabase() {
     try {
-      const pingResponse = await redis.ping();
-      if (pingResponse !== 'PONG') throw new Error('Invalid Redis ping response');
-      return { name: 'redis', status: 'healthy', latency_ms: Date.now() - startTime };
+      // We use a lightweight RPC call that we know exists.
+      // If it returns without error, the database is healthy.
+      const data = await databaseService.getDistinctSports();
+      if (data) { // Will be an array, even if empty
+        return { ok: true, status: 'Connected' };
+      }
+      // This case should ideally not be hit if the RPC call is set up
+      return { ok: false, status: 'Query Failed' };
     } catch (error) {
-      return { name: 'redis', status: 'unhealthy', error: error.message };
+      sentryService.captureError(error, { component: 'health_service', check: 'database' });
+      return { ok: false, status: 'Disconnected', error: error.message };
     }
+  }
+
+  /**
+   * Gathers health information from all critical services.
+   * @returns {Promise<Object>} A comprehensive health report.
+   */
+  async getHealth() {
+    const [redisHealth, databaseHealth] = await Promise.all([
+      this._checkRedis(),
+      this._checkDatabase()
+    ]);
+
+    return {
+      ok: redisHealth.ok && databaseHealth.ok,
+      redis: redisHealth,
+      database: databaseHealth,
+    };
   }
 }
 
-// IMPORTANT: We now export the class itself, not an instance.
-export default EnterpriseHealthService;
+const healthServiceInstance = new HealthService();
+export default healthServiceInstance;
