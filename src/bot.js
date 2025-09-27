@@ -102,9 +102,13 @@ async function initialize() {
   console.log(`Bot @${me.username} ready in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`);
 }
 
-// Bind to IPv4 by default; set HOST=:: to prefer IPv6 if needed
-const PORT = Number(process.env.PORT || env.PORT || 3000);
+// Replace your current PORT/HOST block with this:
+const isProd = process.env.NODE_ENV === 'production';
+const injectedPort = Number(process.env.PORT);
+const fallbackPort = Number(env.PORT || 3000);
+const PORT = isProd ? injectedPort : (injectedPort || fallbackPort); // force platform PORT in prod
 const HOST = process.env.HOST || '0.0.0.0';
+
 console.log(`Binding host ${HOST}, port ${PORT}`);
 app.listen(PORT, HOST, () => {
   console.log(`HTTP server listening on [${HOST}]:${PORT}. Initializing bot...`);
@@ -113,6 +117,7 @@ app.listen(PORT, HOST, () => {
     process.exit(1);
   });
 });
+
 
 // Console safety nets
 process.on('unhandledRejection', (e) => console.error('UnhandledRejection:', e));
