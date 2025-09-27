@@ -2,7 +2,7 @@
 
 import Redis from 'ioredis';
 import env from '../config/env.js';
-import { sentryService } from './sentryService.js'; // Corrected import
+import sentryService from './sentryService.js'; // Corrected import
 
 let redis;
 let isConnecting = false;
@@ -15,14 +15,11 @@ const connectToRedis = () => {
   if (redis || isConnecting) return;
   isConnecting = true;
   try {
-    // These options are optimized for cloud environments like Railway/Vercel
     const redisOptions = {
       maxRetriesPerRequest: 3,
       connectTimeout: 15000,
       lazyConnect: true,
-      // NEW: Tell the client not to wait for 'ready' state before processing commands
       enableReadyCheck: false,
-      // NEW: Keep the connection alive by sending a ping every 50 seconds
       keepAlive: 50000,
     };
 
