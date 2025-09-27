@@ -1,4 +1,4 @@
-# docker-compose.yaml - Run the complete application stack (v2 - Corrected)
+# docker-compose.yaml - Run the complete application stack (Corrected)
 version: '3.8'
 
 services:
@@ -8,7 +8,7 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    restart: unless-stopped # Ensures Redis comes back online if it crashes
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 30s
@@ -18,45 +18,44 @@ services:
   parlay-bot:
     build: 
       context: .
-    image: parlay-bot-app:latest # Give the built image a name
+    image: parlay-bot-app:latest
     command: npm start
     ports:
-      - "8080:8080" # Maps the container's port 8080 to your machine's port 8080
+      - "8080:8080"
     env_file:
       - .env
     environment:
-      - PORT=8080 # Tells the bot to listen on port 8080 inside the container
+      - PORT=8080
     depends_on:
       redis:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health/liveness"] # Updated to use the correct port
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/liveness"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 20s
 
   worker-odds:
-    image: parlay-bot-app:latest # REUSE the image built for the main bot
+    image: parlay-bot-app:latest
     command: npm run worker:odds
     env_file:
       - .env
     depends_on:
-      redis: # Workers usually only need the database, not the main app
+      redis:
         condition: service_healthy
     restart: unless-stopped
 
   worker-notifications:
-    image: parlay-bot-app:latest # REUSE the image built for the main bot
+    image: parlay-bot-app:latest
     command: npm run worker:notifications
     env_file:
       - .env
     depends_on:
-      redis: # Workers usually only need the database, not the main app
+      redis:
         condition: service_healthy
     restart: unless-stopped
 
 volumes:
   redis_data:
-
