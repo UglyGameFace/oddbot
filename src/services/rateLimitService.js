@@ -1,6 +1,7 @@
 // src/services/rateLimitService.js - ENTERPRISE-GRADE RATE LIMITING
 import redis from './redisService.js';
 import env from '../config/env.js';
+// FIX: Changed to a named import to match the export in sentryService.js
 import { sentryService } from './sentryService.js';
 
 class EnterpriseRateLimitService {
@@ -23,39 +24,43 @@ class EnterpriseRateLimitService {
    * @returns {Promise<object>} An object indicating if the action is allowed.
    */
   async checkRateLimit(identifier, type = 'user', context = '') {
-  const limitConfig = this.limits[type];
-  if (!limitConfig) return { allowed: true };
+    const limitConfig = this.limits[type];
+    if (!limitConfig) return { allowed: true }; // Fail open if no config
 
-  // Resolve the Redis client promise here
-  const redisClient = await redis; 
+    try {
+      // FIX: The 'redis' import is a promise. We must await it to get the client.
+      const redisClient = await redis;
 
-  const key = `ratelimit:${type}:${identifier}:${context}`;
-  const now = Date.now();
-  const windowStart = now - limitConfig.duration;
+      const key = `ratelimit:${type}:${identifier}:${context}`;
+      const now = Date.now();
+      const windowStart = now - limitConfig.duration;
 
-  try {
-    // Use the resolved client
-    const multi = redisClient.multi(); 
-    multi.zremrangebyscore(key, 0, windowStart);
-    multi.zadd(key, now, now);
-    multi.zcard(key);
-    multi.expire(key, Math.ceil(limitConfig.duration / 1000));
+      // Use the resolved client for Redis commands
+      const multi = redisClient.multi();
+      // Remove all timestamps outside the current window
+      multi.zremrangebyscore(key, 0, windowStart);
+      // Add the timestamp of the current request
+      multi.zadd(key, now, now);
+      // Count the number of requests in the current window
+      multi.zcard(key);
+      // Set the key to expire after the window duration to prevent memory leaks
+      multi.expire(key, Math.ceil(limitConfig.duration / 1000));
+      
+      const results = await multi.exec();
+      const requestCount = results[2][1]; // Result of the zcard command
 
-    const results = await multi.exec();
-    const requestCount = results[2][1];
+      if (requestCount > limitConfig.points) {
+        return { allowed: false, remaining: 0 };
+      }
 
-    if (requestCount > limitConfig.points) {
-      return { allowed: false, remaining: 0 };
+      return { allowed: true, remaining: limitConfig.points - requestCount };
+
+    } catch (error) {
+      sentryService.captureError(error, { component: 'rate_limiter' });
+      // Fail open: If Redis fails, allow the request but log the error.
+      return { allowed: true, remaining: Infinity };
     }
-
-    return { allowed: true, remaining: limitConfig.points - requestCount };
-
-  } catch (error) {
-    // This import now works correctly
-    sentryService.captureError(error, { component: 'rate_limiter' }); 
-    return { allowed: true, remaining: Infinity };
   }
-}
 }
 
 export default new EnterpriseRateLimitService();
