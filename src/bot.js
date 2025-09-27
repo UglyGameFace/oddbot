@@ -1,13 +1,11 @@
-// src/bot.js — FINAL: Sentry first, robust health, webhook with secret + allowed_updates, dual-stack listen
+// src/bot.js — FINAL: Sentry middleware, robust health, webhook with secret + allowed_updates, dual-stack listen
 import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
-
-// Initialize Sentry (expects your updated src/services/sentryService.js)
 import sentryService from './services/sentryService.js';
 
 const app = express();
-sentryService.attachExpressPreRoutes?.(app); // Sentry request + tracing middleware (pre-routes)
+sentryService.attachExpressPreRoutes?.(app); // Sentry request + tracing middleware (pre-routes) [Sentry docs]
 app.use(express.json());
 
 // Core config
@@ -26,15 +24,12 @@ const bot = new TelegramBot(TOKEN, { polling: false, filepath: false });
 
 // Health endpoints (serve GET and HEAD with 200)
 const healthOk = (_req, res) => res.status(200).send('OK');
-app.get('/', healthOk);                     app.head('/', healthOk);            // generic root 200 [web:569]
-app.get('/health', healthOk);               app.head('/health', healthOk);      // conventional health path [web:569]
-app.get('/healthz', healthOk);              app.head('/healthz', healthOk);     // alt convention [web:569]
-app.get('/health/readiness', healthOk);     app.head('/health/readiness', healthOk); // readiness [web:569]
-app.get('/health/liveness', healthOk);      app.head('/health/liveness', healthOk);  // liveness [web:569]
-app.get('/heath/readiness', healthOk);      app.head('/heath/readiness', healthOk);  // legacy typo coverage [web:569]
-
-// Optional: debug route to validate Sentry then remove/guard
-app.get('/debug-sentry', (_req, _res) => { throw new Error('Sentry debug test'); }); // [web:705]
+app.get('/', healthOk);                     app.head('/', healthOk);
+app.get('/health', healthOk);               app.head('/health', healthOk);
+app.get('/healthz', healthOk);              app.head('/healthz', healthOk);
+app.get('/health/readiness', healthOk);     app.head('/health/readiness', healthOk);
+app.get('/health/liveness', healthOk);      app.head('/health/liveness', healthOk);
+app.get('/heath/readiness', healthOk);      app.head('/heath/readiness', healthOk); // legacy typo coverage
 
 // Handler wiring
 async function wireHandlers() {
@@ -70,16 +65,6 @@ async function wireHandlers() {
     console.log(ok ? `  👍 Registered '${name}' listeners.` : `  ⚠️ No registration function in '${name}'.`);
   }
 
-  // Baseline listeners to verify message + callback flows
-  bot.on('message', (msg) => {
-    if (msg?.text?.trim().toLowerCase() === '/ping') bot.sendMessage(msg.chat.id, 'pong');
-  });
-  bot.on('callback_query', async (q) => {
-    try {
-      await bot.answerCallbackQuery(q.id, { text: '✓', cache_time: 0 }); // acknowledge tap to stop spinner [web:20]
-    } catch {}
-  });
-
   console.log('Handler wiring complete.');
 }
 
@@ -93,7 +78,7 @@ async function startWebhook() {
       return res.status(401).send('Unauthorized');
     }
     try {
-      bot.processUpdate(req.body || {}); // pass through to bot instance [web:20]
+      bot.processUpdate(req.body || {});
       res.sendStatus(200);
     } catch (e) {
       console.error('processUpdate failed:', e?.message || e);
@@ -103,9 +88,8 @@ async function startWebhook() {
 
   const fullWebhook = `${APP_URL.replace(/\/+$/, '')}${webhookPath}`;
   await bot.setWebHook(fullWebhook, {
-    secret_token: SECRET || undefined,                         // Telegram sends this back in header [web:20]
-    allowed_updates: ['message', 'callback_query'],            // ensure button taps are delivered [web:20]
-    // drop_pending_updates is supported at webhook set time via Bot API request; keep clean backlog if needed [web:752]
+    secret_token: SECRET || undefined,                         // Telegram returns this header [Telegram Bot API]
+    allowed_updates: ['message', 'callback_query'],            // ensure button callbacks are delivered [Telegram Bot API]
   });
   console.log(`Webhook set: ${fullWebhook}`);
 }
@@ -113,13 +97,13 @@ async function startWebhook() {
 async function startPolling() {
   try { await bot.deleteWebHook({ drop_pending_updates: true }); } catch {}
   await bot.startPolling({
-    params: { allowed_updates: ['message', 'callback_query'] }, // match webhook allowed updates [web:20]
+    params: { allowed_updates: ['message', 'callback_query'] },
   });
   console.log('Polling started.');
 }
 
-// Sentry error middleware AFTER routes
-sentryService.attachExpressPostRoutes?.(app, { capture404: true }); // capture 404/5xx as desired [web:705]
+// Mount Sentry error middleware AFTER routes
+sentryService.attachExpressPostRoutes?.(app);
 
 // Boot sequence and listen
 async function initialize() {
@@ -129,9 +113,9 @@ async function initialize() {
   console.log(`Bot @${me.username} ready in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`);
 }
 
-// Use platform PORT and dual-stack host for healthcheck reachability
+// Use platform PORT and dual-stack (override with HOST=0.0.0.0 if needed)
 const PORT = Number(process.env.PORT || env.PORT || 3000);
-const HOST = '::'; // IPv6 + IPv4 dual-stack binding for platform probes
+const HOST = process.env.HOST || '::';
 app.listen(PORT, HOST, () => {
   console.log(`HTTP server listening on [${HOST}]:${PORT}. Initializing bot...`);
   initialize().catch((e) => {
@@ -140,6 +124,6 @@ app.listen(PORT, HOST, () => {
   });
 });
 
-// Global safety nets (console-level)
+// Global safety nets
 process.on('unhandledRejection', (e) => console.error('UnhandledRejection:', e));
 process.on('uncaughtException', (e) => console.error('UncaughtException:', e));
