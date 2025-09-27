@@ -2,7 +2,8 @@
 import TelegramBot from 'node-telegram-bot-api';
 import redis from '../services/redisService.js';
 import env from '../config/env.js';
-import sentryService from './sentryService.js';
+// FIX: Corrected the import path and changed to a named import for sentryService.
+import { sentryService } from '../services/sentryService.js';
 
 const NOTIFICATION_QUEUE_KEY = 'notification_queue';
 
@@ -13,23 +14,25 @@ class EnterpriseNotificationEngine {
     this.initialize();
   }
 
-  initialize() {
+  async initialize() {
     if (env.TELEGRAM_BOT_TOKEN) {
         this.bot = new TelegramBot(env.TELEGRAM_BOT_TOKEN);
         this.isReady = true;
         console.log('✅ Enterprise Notification Engine initialized.');
-        this.startListening();
+        // FIX: The redis client is a promise, so we must await it.
+        const redisClient = await redis;
+        this.startListening(redisClient);
     } else {
         console.warn('🚨 Notification Engine disabled: TELEGRAM_BOT_TOKEN not set.');
     }
   }
 
-  async startListening() {
+  async startListening(redisClient) {
     console.log('...Notification worker listening for messages on Redis queue...');
     while (true) {
         try {
             // Blocking pop with a timeout of 0 to wait forever
-            const result = await redis.blpop(NOTIFICATION_QUEUE_KEY, 0);
+            const result = await redisClient.blpop(NOTIFICATION_QUEUE_KEY, 0);
             if (result) {
                 const notification = JSON.parse(result[1]);
                 await this.deliverNotification(notification);
