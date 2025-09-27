@@ -1,5 +1,5 @@
 // src/bot/handlers/ai.js
-import env from '../../config/env.js';
+import env from '../config/env.js';
 import AIService from '../../services/aiService.js';
 import { getAIConfig, setAIConfig, getBuilderConfig } from '../state.js';
 import oddsService from '../../services/oddsService.js';
