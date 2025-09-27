@@ -2,7 +2,6 @@
 import { loadToken } from './state.js';
 import { registerCustomCallbacks } from './handlers/custom.js';
 import { registerAICallbacks } from './handlers/ai.js';
-import { registerSlipCallbacks } from './handlers/custom.js'; // slip actions part of custom
 import { registerCommonCallbacks } from './handlers/tools.js'; // if any common callbacks
 
 export function registerRouter(bot) {
@@ -10,7 +9,6 @@ export function registerRouter(bot) {
   const handlers = [
     registerAICallbacks,
     registerCustomCallbacks,
-    registerSlipCallbacks,
     registerCommonCallbacks,
   ].filter(Boolean);
 
