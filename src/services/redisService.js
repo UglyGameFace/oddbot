@@ -2,7 +2,7 @@
 
 import Redis from 'ioredis';
 import env from '../config/env.js';
-import sentryService from './sentryService.js';
+import { sentryService } from './sentryService.js'; // Corrected import
 
 let redis;
 let isConnecting = false;
