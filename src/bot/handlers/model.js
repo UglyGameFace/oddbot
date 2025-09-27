@@ -3,7 +3,7 @@
 import oddsService from '../../services/oddsService.js'; // use the default export for oddsService methods
 import aiService from '../../services/aiService.js';
 import advancedOddsModel from '../../advancedOddsModel.js';
-import { formatGameTimeTZ, toDecimalFromAmerican, toAmerican, impliedProbability, groupLegsByGame } from '../../utils/enterpriseAdapters.js';
+import { formatGameTimeTZ, toDecimalFromAmerican, toAmerican, impliedProbability, groupLegsByGame } from '../../utils/enterpriseUtilities.js';
 
 export function registerModel(bot) {
   bot.onText(/^\/model(?: (.+))?/, async (msg, match) => {
