@@ -19,7 +19,6 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ UNHANDLED REJECTION AT:', promise, 'REASON:', reason);
   sentryService.captureError(new Error(`Unhandled Rejection: ${reason}`), { extra: { promise } });
 });
-
 process.on('uncaughtException', (error) => {
   console.error('❌ UNCAUGHT EXCEPTION:', error);
   sentryService.captureError(error);
@@ -34,17 +33,10 @@ if (!TOKEN) {
   console.error('TELEGRAM_BOT_TOKEN is required');
   process.exit(1);
 }
-
-// APP_URL should be https in production to enable webhook mode
 const APP_URL = env.APP_URL || '';
-
-// Normalize the webhook secret from env normalization (see env.js) or aliases
 const WEBHOOK_SECRET = (env.WEBHOOK_SECRET || env.TELEGRAM_WEBHOOK_SECRET || env.TG_WEBHOOK_SECRET || '').trim();
+const USE_WEBHOOK = env.USE_WEBHOOK === true;
 
-// Decide mode by URL scheme
-const USE_WEBHOOK = Boolean(APP_URL && APP_URL.startsWith('https'));
-
-// Initialize bot
 const bot = new TelegramBot(TOKEN, { polling: !USE_WEBHOOK });
 let server;
 
@@ -72,13 +64,12 @@ async function main() {
   ['/', '/health', '/healthz'].forEach((path) =>
     app.get(path, (_req, res) => res.status(200).send('OK'))
   );
-  // Some platforms probe with HEAD, respond 200 as well
   app.head('/health', (_req, res) => res.sendStatus(200));
 
   if (USE_WEBHOOK) {
     const webhookPath = `/webhook/${TOKEN}`;
 
-    // Verify Telegram secret header only when configured
+    // Verify Telegram secret header if configured
     app.post(
       webhookPath,
       (req, res, next) => {
@@ -96,7 +87,6 @@ async function main() {
 
     console.log('Setting webhook...');
     await bot.setWebHook(`${APP_URL}${webhookPath}`, {
-      // Telegram will include X-Telegram-Bot-Api-Secret-Token only if this is set
       secret_token: WEBHOOK_SECRET || undefined,
       // drop_pending_updates: false,
     });
