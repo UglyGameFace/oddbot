@@ -95,10 +95,8 @@ async function startPolling() {
 sentryService.attachExpressPostRoutes?.(app);
 
 // Unified, Railway- and local-friendly PORT/host binding
-const injected = Number(process.env.PORT);
-const local = Number(env.PORT);
-const PORT = process.env.PORT || 3000; // This is enough for Express/Node/Railway
-const HOST = '0.0.0.0';
+const PORT = process.env.PORT ? Number(process.env.PORT) : (env.PORT || 3000);
+const HOST = process.env.HOST || '0.0.0.0';
 
 // Boot + listen
 async function initialize() {
