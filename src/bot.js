@@ -1,192 +1,143 @@
-// src/bot.js — webhook if APP_URL present, else polling; no BOT_MODE access; Express binds 0.0.0.0:PORT
+// src/bot.js — FINAL VERSION
+// This version forces handlers to fire by explicitly setting allowed_updates
+// and adds logging to prove message receipt and handler registration.
 
 import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
 
-// Resolve required/env-configured values from strict envalid schema
-const TOKEN = env.TELEGRAM_BOT_TOKEN;                          // required in your schema
-const APP_URL = env.APP_URL;                                   // declared with default in your schema
-const SECRET = env.TELEGRAM_WEBHOOK_SECRET || '';              // declared with default '' in your schema
-const USE_WEBHOOK = Boolean(APP_URL && APP_URL.startsWith('http')); // derive mode from APP_URL only
+// 1. --- Core Setup (Validated from your env.js) ---
+const TOKEN = env.TELEGRAM_BOT_TOKEN;
+const APP_URL = env.APP_URL;
+const SECRET = (env.TELEGRAM_WEBHOOK_SECRET || '').trim(); // Trim to prevent whitespace errors
+const USE_WEBHOOK = Boolean(APP_URL && APP_URL.startsWith('http'));
 
 if (!TOKEN) {
-  console.error('Missing TELEGRAM_BOT_TOKEN');
+  console.error('FATAL: Missing TELEGRAM_BOT_TOKEN in environment. Aborting.');
   process.exit(1);
 }
 
-// Single bot instance; start polling manually only if needed to avoid race with webhook removal
-const bot = new TelegramBot(TOKEN, { polling: false, filepath: false });
+const bot = new TelegramBot(TOKEN, { polling: !USE_WEBHOOK });
 
-// Wire handlers: prefer ./bot/main.js if present; otherwise best-effort register common handlers
+// 2. --- Hardened Handler Wiring (with verbose logging) ---
+// This function now logs each step to prove which handlers are being registered.
 async function wireHandlers() {
-  try {
-    const main = await import('./bot/main.js').catch(() => null);
-    if (main?.default) {
-      await main.default(bot);
-      return;
-    }
-  } catch {}
-  const tryImport = async (p) => {
-    try { return await import(p); } catch { return null; }
-  };
-  const mods = await Promise.all([
-    tryImport('./bot/handlers/system.js'),
-    tryImport('./bot/handlers/settings.js'),
-    tryImport('./bot/handlers/custom.js'),
-    tryImport('./bot/handlers/tools.js'),
-    tryImport('./bot/handlers/ai.js'),
-    tryImport('./bot/handlers/quant.js'),
-  ]);
-  for (const m of mods.filter(Boolean)) {
+  console.log('Wiring handlers...');
+  const tryImport = async (path) => {
     try {
-      if (typeof m.registerSystem === 'function') m.registerSystem(bot);
-      if (typeof m.registerSettings === 'function') m.registerSettings(bot);
-      if (typeof m.registerCustom === 'function') m.registerCustom(bot);
-      if (typeof m.registerTools === 'function') m.registerTools(bot);
-      if (typeof m.registerAI === 'function') m.registerAI(bot);
-      if (typeof m.registerQuant === 'function') m.registerQuant(bot);
-      if (typeof m.registerCallbacks === 'function') m.registerCallbacks(bot);
-      if (typeof m.registerCustomCallbacks === 'function') m.registerCustomCallbacks(bot);
-      if (typeof m.registerSlipCallbacks === 'function') m.registerSlipCallbacks(bot);
-      if (typeof m.registerAICallbacks === 'function') m.registerAICallbacks(bot);
+      const mod = await import(path);
+      console.log(`  ✅ Successfully imported ${path}`);
+      return mod;
     } catch (e) {
-      console.error('Handler wire error:', e?.message || e);
+      console.error(`  ❌ FAILED to import ${path}: ${e.message}`);
+      return null;
+    }
+  };
+
+  const mods = {
+    system: await tryImport('./handlers/system.js'),
+    settings: await tryImport('./handlers/settings.js'),
+    custom: await tryImport('./handlers/custom.js'),
+    tools: await tryImport('./handlers/tools.js'),
+    ai: await tryImport('./handlers/ai.js'),
+    quant: await tryImport('./handlers/quant.js'),
+  };
+
+  for (const [name, mod] of Object.entries(mods)) {
+    if (!mod) continue;
+    let registered = false;
+    if (typeof mod.register === 'function') { mod.register(bot); registered = true; }
+    if (typeof mod.registerSystem === 'function') { mod.registerSystem(bot); registered = true; }
+    if (typeof mod.registerSettings === 'function') { mod.registerSettings(bot); registered = true; }
+    if (typeof mod.registerCustom === 'function') { mod.registerCustom(bot); registered = true; }
+    if (typeof mod.registerTools === 'function') { mod.registerTools(bot); registered = true; }
+    if (typeof mod.registerAI === 'function') { mod.registerAI(bot); registered = true; }
+    if (typeof mod.registerQuant === 'function') { mod.registerQuant(bot); registered = true; }
+    if (typeof mod.registerCallbacks === 'function') { mod.registerCallbacks(bot); registered = true; }
+    if (typeof mod.registerCustomCallbacks === 'function') { mod.registerCustomCallbacks(bot); registered = true; }
+    if (typeof mod.registerSlipCallbacks === 'function') { mod.registerSlipCallbacks(bot); registered = true; }
+    if (typeof mod.registerAICallbacks === 'function') { mod.registerAICallbacks(bot); registered = true; }
+
+    if (registered) {
+      console.log(`  👍 Registered listeners for '${name}' handler.`);
+    } else {
+      console.warn(`  ⚠️ No known registration function found in '${name}'.`);
     }
   }
+  console.log('Handler wiring complete.');
 }
 
-// Always run an HTTP server so Railway marks the service healthy
+// 3. --- HTTP Server & Webhook Route (with diagnostic logging) ---
 const app = express();
 app.use(express.json());
+app.get('/healthz', (_req, res) => res.status(200).send('OK'));
 
-// Health endpoints
-app.get('/', (_req, res) => res.status(200).send('OK'));
-app.get('/healthz', (_req, res) => res.status(200).json({ ok: true, mode: USE_WEBHOOK ? 'webhook' : 'polling' }));
-
-// Webhook path and registration if APP_URL present
 const webhookPath = `/webhook/${Buffer.from(TOKEN).toString('hex').slice(0, 32)}`;
 
-async function startWebhook() {
-  // Route to receive Telegram updates; verify secret header only if configured
-  app.post(webhookPath, (req, res) => {
-    if (SECRET) {
-      const header = req.headers['x-telegram-bot-api-secret-token'];
-      if (!header || header !== SECRET) return res.status(401).send('unauthorized');
-    }
-    try {
-      bot.processUpdate(req.body);
-      res.status(200).send('OK');
-    } catch (e) {
-      console.error('processUpdate failed:', e?.message || e);
-      res.status(500).send('error');
-    }
-  });
+async function initialize() {
+  await wireHandlers(); // Ensure handlers are wired before starting
 
-  // Register webhook with Telegram
-  const fullWebhook = `${APP_URL.replace(/\/+$/, '')}${webhookPath}`;
-  try {
-    await bot.setWebHook(fullWebhook, SECRET ? { secret_token: SECRET } : undefined);
-    console.log('Webhook set:', fullWebhook);
-  } catch (err) {
-    console.error('Failed to set webhook:', err?.message || err);
-  }
-}
-
-async function startPolling() {
-  // Ensure no webhook conflicts and drop backlog before polling
-  try { await bot.deleteWebHook({ drop_pending_updates: true }); } catch {}
-  await bot.startPolling({
-    interval: env.TELEGRAM_POLLING_INTERVAL || 300,
-    params: { allowed_updates: ['message', 'callback_query'] },
-  });
-  console.log('Polling started.');
-}
-
-async function boot() {
-  // Wire handlers first
-  await wireHandlers();
-
-  // Start in the derived mode
-  if (USE_WEBHOOK) {
-    await startWebhook();
-  } else {
-    await startPolling();
-  }
-
-  // Optional: lightweight heartbeat
+  // THIS IS THE ULTIMATE TEST: A baseline listener. If this doesn't fire, the problem is deep.
   bot.on('message', (msg) => {
-    if (msg?.text === '/ping') bot.sendMessage(msg.chat.id, 'pong');
-  });
-
-  // Hardened pieces to paste into your existing src/bot.js
-
-// 1) Normalize secret to avoid whitespace mismatches
-const SECRET = (env.TELEGRAM_WEBHOOK_SECRET || '').trim();
-
-// 2) After setWebHook, fetch and log webhook info
-async function logWebhookInfo(stage = 'post-set') {
-  try {
-    const info = await fetch(`https://api.telegram.org/bot${TOKEN}/getWebhookInfo`).then(r => r.json());
-    console.log(`[webhook-info:${stage}]`, JSON.stringify(info));
-  } catch (e) {
-    console.error('Failed to getWebhookInfo:', e?.message || e);
-  }
-}
-
-// In startWebhook(), after await bot.setWebHook(...):
-await logWebhookInfo('post-set');
-
-// 3) Add minimal request logging and explicit 2xx on success
-app.post(webhookPath, (req, res) => {
-  const hdr = req.headers['x-telegram-bot-api-secret-token'] || '';
-  if (SECRET) {
-    if (hdr !== SECRET) {
-      console.warn('Webhook 401: secret mismatch', { haveHeader: Boolean(hdr) });
-      return res.status(401).send('unauthorized');
+    if (msg.text) {
+        console.log(`[Baseline Listener] Received text: "${msg.text}" from chat ${msg.chat.id}`);
+        // To avoid interfering with other commands, you can have it only reply to a specific keyword.
+        if (msg.text.toLowerCase() === '/ping') {
+            bot.sendMessage(msg.chat.id, 'pong');
+        }
     }
-  }
-  try {
-    bot.processUpdate(req.body);
-    // Return immediately; Telegram only needs a 200 quickly
-    return res.status(200).send('OK');
-  } catch (e) {
-    console.error('processUpdate failed:', e?.message || e);
-    return res.status(500).send('error');
-  }
-});
+  });
 
-// 4) Optional: secure debug route to inspect Telegram’s webhook status in production
-// Protect with a simple token to avoid exposing internals
-const DEBUG_TOKEN = (process.env.DEBUG_TOKEN || '').trim();
-app.get('/debug/webhookinfo', async (req, res) => {
-  if (!DEBUG_TOKEN || req.headers['x-debug-token'] !== DEBUG_TOKEN) return res.status(401).send('unauthorized');
-  try {
-    const info = await fetch(`https://api.telegram.org/bot${TOKEN}/getWebhookInfo`).then(r => r.json());
-    res.status(200).json(info);
-  } catch (e) {
-    res.status(500).json({ error: String(e?.message || e) });
-  }
-});
-  
 
-  // Diagnostics
-  try {
-    const me = await bot.getMe();
-    console.log(`Bot @${me.username} is up in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode`);
-  } catch {}
+  if (USE_WEBHOOK) {
+    // This log will prove Telegram is hitting your server.
+    app.post(webhookPath, (req, res) => {
+      const update = req.body || {};
+      const kind = update.message ? 'message' : (update.callback_query ? 'callback_query' : 'unknown');
+      console.log(`[Webhook] Received '${kind}' update from Telegram.`);
+
+      if (SECRET) {
+        const header = req.headers['x-telegram-bot-api-secret-token'];
+        if (!header || header !== SECRET) {
+          console.warn('[Webhook] Unauthorized: Secret token mismatch.');
+          return res.status(401).send('Unauthorized');
+        }
+      }
+      bot.processUpdate(update);
+      res.sendStatus(200); // Respond immediately
+    });
+
+    const fullWebhookUrl = `${APP_URL.replace(/\/+$/, '')}${webhookPath}`;
+    try {
+      // THIS IS THE KEY FIX: Explicitly tell Telegram to send both message and callback_query updates.
+      await bot.setWebHook(fullWebhookUrl, {
+        secret_token: SECRET || undefined,
+        allowed_updates: ["message", "callback_query"]
+      });
+      console.log(`Webhook set to ${fullWebhookUrl} with allowed_updates.`);
+    } catch (err) {
+      console.error('FATAL: setWebHook failed:', err.message);
+    }
+
+  } else {
+    try { await bot.deleteWebHook({ drop_pending_updates: true }); } catch {}
+    bot.startPolling();
+    console.log('Polling started.');
+  }
+
+  const me = await bot.getMe();
+  console.log(`Bot @${me.username} is fully initialized and ready.`);
 }
 
-// Bind to Railway PORT on all interfaces
-const PORT = Number(process.env.PORT || env.PORT || 3000);
+const PORT = env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`HTTP server listening on :${PORT} (${USE_WEBHOOK ? 'webhook' : 'polling'})`);
-  boot().catch((e) => {
-    console.error('Fatal boot error:', e?.message || e);
-    process.exit(1);
-  });
+  console.log(`HTTP server listening on :${PORT}. Initializing bot...`);
+  initialize();
 });
 
-// Global safety nets
-process.on('unhandledRejection', (e) => console.error('UnhandledRejection:', e));
-process.on('uncaughtException', (e) => console.error('UncaughtException:', e));
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+});
