@@ -6,12 +6,13 @@
         "buildCommand": "npm ci --omit=dev || npm install --omit=dev"
       },
       "deploy": {
-        "startCommand": "npm start",
-        "healthcheckPath": "/liveness",
-        "healthcheckTimeout": 120,
-        "restartPolicyType": "ON_FAILURE",
-        "restartPolicyMaxRetries": 3
-      },
+  "startCommand": "npm start",
+  "healthcheckPath": "/liveness",
+  "healthcheckTimeout": 120,
+  "healthcheckInitialDelay": 10,
+  "restartPolicyType": "ON_FAILURE",
+  "restartPolicyMaxRetries": 3
+},
       "variables": {
         "APP_URL": "https://parlay-bot-production-d099.up.railway.app",
         "TELEGRAM_BOT_TOKEN": "<YOUR_TELEGRAM_BOT_TOKEN>",
