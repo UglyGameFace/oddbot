@@ -4,7 +4,9 @@
   "description": "Fully-featured Telegram parlay bot with AI, analytics, ML, and scheduled caching",
   "main": "src/bot.js",
   "type": "module",
-  "engines": { "node": ">=20.0.0" },
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "start": "node src/bot.js",
     "dev": "NODE_ENV=development nodemon src/bot.js",
@@ -30,7 +32,7 @@
     "ml-pca": "^4.1.1",
     "ml-regression": "^6.3.0",
     "node-cron": "^3.0.3",
-    "node-telegram-bot-api": "^0.64.0",
+    "node-telegram-bot-api": "^0.63.0",
     "openai": "^4.0.0",
     "pg": "^8.10.0",
     "pidusage": "^3.0.2",
@@ -39,7 +41,7 @@
   "devDependencies": {
     "eslint": "^8.40.0",
     "eslint-config-prettier": "^9.1.0",
-    "nodemon": "^2.0.20",
+    "nodemon": "^3.1.10",
     "prettier": "^3.0.0"
   },
   "keywords": [
