@@ -13,7 +13,7 @@
         "restartPolicyMaxRetries": 3
       },
       "variables": {
-        "APP_URL": "https://parlay-bot-production-f403.up.railway.app",
+        "APP_URL": "parlay-bot-production-d099.up.railway.app",
         "TELEGRAM_BOT_TOKEN": "<YOUR_TELEGRAM_BOT_TOKEN>",
         "TELEGRAM_WEBHOOK_SECRET": "<YOUR_WEBHOOK_SECRET>",
         "SENTRY_DSN": "<YOUR_SENTRY_DSN>",
