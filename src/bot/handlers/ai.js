@@ -8,7 +8,7 @@ import { getSportEmoji } from '../../utils/enterpriseUtilities.js';
 export function registerAI(bot) {
   bot.onText(/^\/ai$/, async (msg) => {
     const chatId = msg.chat.id;
-    await setUserState(chatId, {}); 
+    await setUserState(chatId, {}); // Reset state
     sendSportSelection(bot, chatId);
   });
 }
@@ -21,7 +21,7 @@ export function registerAICallbacks(bot) {
     const chatId = message.chat.id;
     await bot.answerCallbackQuery(cbq.id);
 
-    const state = await getUserState(chatId) || {};
+    let state = await getUserState(chatId);
     const parts = data.split('_');
     const action = parts[1];
 
@@ -29,35 +29,27 @@ export function registerAICallbacks(bot) {
       state.sportKey = parts.slice(2).join('_');
       await setUserState(chatId, state);
       sendLegSelection(bot, chatId, message.message_id);
-    }
-
-    if (action === 'legs') {
+    } else if (action === 'legs') {
       state.numLegs = parseInt(parts[2], 10);
       await setUserState(chatId, state);
       sendModeSelection(bot, chatId, message.message_id);
-    }
-
-    if (action === 'mode') {
+    } else if (action === 'mode') {
       state.mode = parts[2];
       await setUserState(chatId, state);
       if (state.mode === 'web') {
         sendAiModelSelection(bot, chatId, message.message_id);
       } else {
-        executeAiRequest(bot, chatId, message.message_id, state);
+        executeAiRequest(bot, chatId, message.message_id);
       }
-    }
-    
-    if (action === 'model') {
-        state.aiModel = parts[2];
-        await setUserState(chatId, state);
-        executeAiRequest(bot, chatId, message.message_id, state);
-    }
-
-    if (action === 'back') {
-        const to = parts[2];
-        if (to === 'sport') sendSportSelection(bot, chatId, message.message_id);
-        if (to === 'legs') { delete state.sportKey; await setUserState(chatId, state); sendSportSelection(bot, chatId, message.message_id); }
-        if (to === 'mode') { delete state.numLegs; await setUserState(chatId, state); sendLegSelection(bot, chatId, message.message_id); }
+    } else if (action === 'model') {
+      state.aiModel = parts[2];
+      await setUserState(chatId, state);
+      executeAiRequest(bot, chatId, message.message_id);
+    } else if (action === 'back') {
+      const to = parts[2];
+      if (to === 'sport') sendSportSelection(bot, chatId, message.message_id);
+      if (to === 'legs') sendLegSelection(bot, chatId, message.message_id);
+      if (to === 'mode') sendModeSelection(bot, chatId, message.message_id);
     }
   });
 }
@@ -84,12 +76,12 @@ async function sendSportSelection(bot, chatId, messageId = null) {
 async function sendLegSelection(bot, chatId, messageId) {
   const state = await getUserState(chatId);
   const sportTitle = (state.sportKey || '').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-  const legOptions = [2, 3, 4, 5, 6, 7, 8, 9, 10]; 
+  const legOptions = [2, 3, 4, 5, 6, 7, 8, 9, 10];
   const buttons = legOptions.map(num => ({ text: `${num} Legs`, callback_data: `ai_legs_${num}` }));
 
   const keyboard = [];
   for (let i = 0; i < buttons.length; i += 3) keyboard.push(buttons.slice(i, i + 3));
-  keyboard.push([{ text: '« Back to Sports', callback_data: 'ai_back_legs' }]);
+  keyboard.push([{ text: '« Back to Sports', callback_data: 'ai_back_sport' }]);
 
   const text = `🤖 *AI Parlay Builder*\n\n*Step 2:* How many legs for your ${sportTitle} parlay?`;
   const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
@@ -102,7 +94,7 @@ async function sendModeSelection(bot, chatId, messageId) {
         [{ text: '🌐 Web Research Only', callback_data: 'ai_mode_web' }],
         [{ text: '📡 Live API Data (Best)', callback_data: 'ai_mode_live' }],
         [{ text: '💾 Database Only (Fallback)', callback_data: 'ai_mode_db' }],
-        [{ text: '« Back to Legs', callback_data: 'ai_back_mode' }]
+        [{ text: '« Back to Legs', callback_data: 'ai_back_legs' }]
     ];
     const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
     await bot.editMessageText(text, { ...opts, chat_id: chatId, message_id: messageId });
@@ -119,8 +111,14 @@ async function sendAiModelSelection(bot, chatId, messageId) {
     await bot.editMessageText(text, { ...opts, chat_id: chatId, message_id: messageId });
 }
 
-async function executeAiRequest(bot, chatId, messageId, state) {
+async function executeAiRequest(bot, chatId, messageId) {
+    const state = await getUserState(chatId);
     const { sportKey, numLegs, mode, aiModel = 'gemini' } = state;
+
+    if (!sportKey || !numLegs || !mode) {
+        return bot.editMessageText('Incomplete selection. Please start over using /ai.', { chat_id: chatId, message_id: messageId });
+    }
+
     let modeText = { web: 'Web Research', live: 'Live API Data', db: 'Database Only' }[mode];
     if (mode === 'web') modeText += ` via ${aiModel.charAt(0).toUpperCase() + aiModel.slice(1)}`;
 
@@ -130,7 +128,7 @@ async function executeAiRequest(bot, chatId, messageId, state) {
 
     try {
       const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel);
-      if (!parlay || !parlay.parlay_legs || parlay.parlay_legs.length === 0) throw new Error('AI returned an empty or invalid parlay.');
+      if (!parlay || !parlay.parlay_legs || !parlay.parlay_legs.length === 0) throw new Error('AI returned an empty or invalid parlay.');
 
       let response = `🧠 *AI-Generated ${numLegs}-Leg Parlay*\n*Mode: ${modeText}*\n*Confidence: ${Math.round((parlay.confidence_score || 0) * 100)}%*\n\n`;
       parlay.parlay_legs.forEach((leg, index) => {
