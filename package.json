@@ -8,7 +8,7 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "start": "node src/bot.js",
+    "start": "node src/bot.js || (echo '--- NPM DEBUG LOG ---' && cat /root/.npm/_logs/*-debug-0.log)",
     "dev": "NODE_ENV=development nodemon src/bot.js",
     "worker:odds": "node src/workers/oddsIngestion.js",
     "worker:notifications": "node src/workers/notificationWorker.js",
