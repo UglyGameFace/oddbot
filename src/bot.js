@@ -14,7 +14,6 @@ import { registerSettings, registerSettingsCallbacks } from './bot/handlers/sett
 import { registerSystem, registerSystemCallbacks } from './bot/handlers/system.js';
 import { registerTools, registerCommonCallbacks } from './bot/handlers/tools.js';
 
-// Global error catcher
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ UNHANDLED REJECTION AT:', promise, 'REASON:', reason);
   sentryService.captureError(new Error(`Unhandled Rejection: ${reason}`), { extra: { promise } });
@@ -26,6 +25,7 @@ process.on('uncaughtException', (error) => {
 });
 
 const app = express();
+
 const TOKEN = env.TELEGRAM_BOT_TOKEN;
 if (!TOKEN) {
   console.error('TELEGRAM_BOT_TOKEN is required');
@@ -33,7 +33,7 @@ if (!TOKEN) {
 }
 const APP_URL = env.APP_URL || '';
 const WEBHOOK_SECRET = (env.WEBHOOK_SECRET || env.TELEGRAM_WEBHOOK_SECRET || env.TG_WEBHOOK_SECRET || '').trim();
-const USE_WEBHOOK = env.USE_WEBHOOK === true;
+const USE_WEBHOOK = (env.USE_WEBHOOK === true) || APP_URL.startsWith('https');
 
 const bot = new TelegramBot(TOKEN, { polling: !USE_WEBHOOK });
 let server;
@@ -53,15 +53,13 @@ async function main() {
   app.use(express.json());
   sentryService.attachExpressPreRoutes?.(app);
 
-  // Liveness: fast, unauthenticated 200s for platform probe
-  app.get('/', (_req, res) => res.status(200).send('OK'));        // GET /
-  app.get('/health', (_req, res) => res.sendStatus(200));         // GET /health
-  app.head('/health', (_req, res) => res.sendStatus(200));        // HEAD /health
-  app.get('/liveness', (_req, res) => res.sendStatus(200));       // legacy path if configured
+  // Health endpoints for Railway activation
+  app.get('/', (_req, res) => res.status(200).send('OK'));         // GET /
+  app.get('/health', (_req, res) => res.sendStatus(200));          // GET /health
+  app.head('/health', (_req, res) => res.sendStatus(200));         // HEAD /health
 
-  // Start server BEFORE external calls so healthcheck can pass immediately
-  const PORT = Number(process.env.PORT) || Number(env.PORT) || 8080;
-  const HOST = '0.0.0.0';
+  const PORT = Number(process.env.PORT) || 3000;                    // bind to injected PORT [web:420]
+  const HOST = '0.0.0.0';                                          // listen on all interfaces [web:66]
   server = app.listen(PORT, HOST, () => {
     console.log(`🚀 Server listening on ${HOST}:${PORT}. Bot is starting in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`);
   });
@@ -69,7 +67,7 @@ async function main() {
   if (USE_WEBHOOK) {
     const webhookPath = `/webhook/${TOKEN}`;
 
-    // Verify Telegram secret only on the webhook route
+    // Register the webhook route with optional secret verification
     app.post(
       webhookPath,
       (req, res, next) => {
@@ -105,8 +103,6 @@ async function main() {
     { command: 'help', description: 'Show the command guide' },
   ];
   await bot.setMyCommands(commands);
-  console.log('✅ Bot commands have been set in Telegram.');
-
   const me = await bot.getMe();
   console.log(`✅ Bot @${me.username} fully initialized.`);
   console.log('Application startup sequence complete. Process will now run indefinitely.');
