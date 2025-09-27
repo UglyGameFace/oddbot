@@ -2,8 +2,8 @@
 
 import oddsService from '../../services/oddsService.js';
 import aiService from '../../services/aiService.js';
-import { analyzeQuantitative } from '../../quant.js';              // src/quant.js EXPORTS THIS
-import psychometric from '../../psychometric.js';                   // src/psychometric.js default export
+import { analyzeQuantitative } from '../../quant.js';
+import psychometric from '../../psychometric.js';
 
 // Optionally, add more imports as needed, always starting with '../../' for anything in /src/services/, /src/bot/, /src/utils/
 
