@@ -16,7 +16,6 @@ import {
 
 const tz = env.TIMEZONE || 'America/New_York';
 
-// Human-friendly fallback titles to avoid null labels
 const SPORT_TITLES = {
   basketball_nba: 'NBA',
   basketball_wnba: 'WNBA',
@@ -25,10 +24,9 @@ const SPORT_TITLES = {
   hockey_nhl: 'NHL',
   icehockey_nhl: 'NHL',
   football_ncaaf: 'NCAAF',
-  americanfootball_ncaaf: 'NCAAF', // The Odds API sport key
+  americanfootball_ncaaf: 'NCAAF',
 };
 
-// Prefer College Football first; move NHL last when present
 const PREFERRED_FIRST = ['football_ncaaf', 'americanfootball_ncaaf'];
 const DEPRIORITIZE_LAST = ['hockey_nhl', 'icehockey_nhl'];
 
@@ -40,7 +38,6 @@ const getSportEmoji = (key) =>
     : key.includes('soccer') ? '⚽'
     : '🏆';
 
-// Safe sort to prioritize CFB and de-emphasize NHL
 function sortSports(sports) {
   const rank = (k) => {
     if (PREFERRED_FIRST.includes(k)) return -100;
@@ -52,7 +49,6 @@ function sortSports(sports) {
   );
 }
 
-// This function is correct (kept intact)
 function applyFilters(games, { cutoffHours, excludedTeams }) {
   const ex = (excludedTeams || []).map((t) => t.toLowerCase());
   const now = Date.now();
@@ -69,7 +65,6 @@ function applyFilters(games, { cutoffHours, excludedTeams }) {
   });
 }
 
-// These redis functions are correct (kept intact)
 async function getCustomSelectedSports(chatId) {
   const redisClient = await redis;
   const s = await redisClient.get(`custom:sports:${chatId}`);
@@ -162,26 +157,17 @@ export function registerCustomCallbacks(bot) {
 }
 
 async function sendCustomSportSelection(bot, chatId, messageId = null) {
-  // Correct service call
   const sportsRaw = await gamesService.getAvailableSports();
-  const sports = sortSports(
-    (sportsRaw || [])
-      .filter(s => s?.sport_key) // ensure valid keys for buttons
-  );
-  if (!sports?.length) {
-    return bot.sendMessage(chatId, 'No upcoming games found. Please try again later.');
-  }
+  const sports = sortSports((sportsRaw || []).filter(s => s?.sport_key));
+  if (!sports?.length) return bot.sendMessage(chatId, 'No upcoming games found. Please try again later.');
 
   const chosen = new Set(await getCustomSelectedSports(chatId));
   const rows = [];
   for (const s of sports) {
     const active = chosen.has(s.sport_key);
     const tok = await saveToken('csp', { sport_key: s.sport_key });
-
-    // Safe, non-null label: title -> fallback map -> key
-    const safeTitle = (s?.sport_title ?? SPORT_TITLES[s.sport_key] ?? s.sport_key);
+    const safeTitle = s?.sport_title ?? SPORT_TITLES[s.sport_key] ?? s.sport_key;
     const text = `${active ? '✅' : '☑️'} ${getSportEmoji(s.sport_key)} ${safeTitle}`;
-
     rows.push([{ text, callback_data: `csp_${tok}` }]);
   }
   rows.push([{ text: 'Proceed with selected', callback_data: 'custom_sports_proceed' }]);
