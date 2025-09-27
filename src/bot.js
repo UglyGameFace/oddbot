@@ -1,18 +1,11 @@
-// src/bot.js — FINAL
-// Webhook if APP_URL present; otherwise polling. No BOT_MODE used.
-// Correct handler import paths: ./bot/handlers/*.js (from src/bot.js).
-// ESM requires file extensions and exact case on Linux.
-
+// src/bot.js — FINAL WITH MULTI-PATH HEALTHCHECKS
 import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
 
-// Required, declared in env.js schema
 const TOKEN = env.TELEGRAM_BOT_TOKEN;
 const APP_URL = env.APP_URL;
-// Optional secret; trimmed to avoid whitespace mismatch
 const SECRET = (env.TELEGRAM_WEBHOOK_SECRET || '').trim();
-// Derive mode solely from APP_URL presence
 const USE_WEBHOOK = Boolean(APP_URL && APP_URL.startsWith('http'));
 
 if (!TOKEN) {
@@ -20,24 +13,16 @@ if (!TOKEN) {
   process.exit(1);
 }
 
-// Create bot instance; for webhook, we will not start polling
 const bot = new TelegramBot(TOKEN, { polling: false, filepath: false });
 
-// --- Handler wiring with verbose logging ---
+// Handler wiring with correct paths and logging
 async function wireHandlers() {
   console.log('Wiring handlers...');
   const tryImport = async (path) => {
-    try {
-      const mod = await import(path);
-      console.log(`  ✅ Imported ${path}`);
-      return mod;
-    } catch (e) {
-      console.error(`  ❌ FAILED to import ${path}: ${e.message}`);
-      return null;
-    }
+    try { const m = await import(path); console.log(`  ✅ Imported ${path}`); return m; }
+    catch (e) { console.error(`  ❌ FAILED to import ${path}: ${e.message}`); return null; }
   };
 
-  // Correct paths relative to src/bot.js
   const mods = {
     system:   await tryImport('./bot/handlers/system.js'),
     settings: await tryImport('./bot/handlers/settings.js'),
@@ -49,51 +34,47 @@ async function wireHandlers() {
 
   for (const [name, mod] of Object.entries(mods)) {
     if (!mod) continue;
-    let registered = false;
-    if (typeof mod.register === 'function') { mod.register(bot); registered = true; }
-    if (typeof mod.registerSystem === 'function') { mod.registerSystem(bot); registered = true; }
-    if (typeof mod.registerSettings === 'function') { mod.registerSettings(bot); registered = true; }
-    if (typeof mod.registerCustom === 'function') { mod.registerCustom(bot); registered = true; }
-    if (typeof mod.registerTools === 'function') { mod.registerTools(bot); registered = true; }
-    if (typeof mod.registerAI === 'function') { mod.registerAI(bot); registered = true; }
-    if (typeof mod.registerQuant === 'function') { mod.registerQuant(bot); registered = true; }
-    if (typeof mod.registerCallbacks === 'function') { mod.registerCallbacks(bot); registered = true; }
-    if (typeof mod.registerCustomCallbacks === 'function') { mod.registerCustomCallbacks(bot); registered = true; }
-    if (typeof mod.registerSlipCallbacks === 'function') { mod.registerSlipCallbacks(bot); registered = true; }
-    if (typeof mod.registerAICallbacks === 'function') { mod.registerAICallbacks(bot); registered = true; }
-    if (registered) console.log(`  👍 Registered '${name}' listeners.`);
-    else console.warn(`  ⚠️ No registration function found in '${name}'.`);
+    let ok = false;
+    if (typeof mod.register === 'function') { mod.register(bot); ok = true; }
+    if (typeof mod.registerSystem === 'function') { mod.registerSystem(bot); ok = true; }
+    if (typeof mod.registerSettings === 'function') { mod.registerSettings(bot); ok = true; }
+    if (typeof mod.registerCustom === 'function') { mod.registerCustom(bot); ok = true; }
+    if (typeof mod.registerTools === 'function') { mod.registerTools(bot); ok = true; }
+    if (typeof mod.registerAI === 'function') { mod.registerAI(bot); ok = true; }
+    if (typeof mod.registerQuant === 'function') { mod.registerQuant(bot); ok = true; }
+    if (typeof mod.registerCallbacks === 'function') { mod.registerCallbacks(bot); ok = true; }
+    if (typeof mod.registerCustomCallbacks === 'function') { mod.registerCustomCallbacks(bot); ok = true; }
+    if (typeof mod.registerSlipCallbacks === 'function') { mod.registerSlipCallbacks(bot); ok = true; }
+    if (typeof mod.registerAICallbacks === 'function') { mod.registerAICallbacks(bot); ok = true; }
+    console.log(ok ? `  👍 Registered '${name}' listeners.` : `  ⚠️ No registration function in '${name}'.`);
   }
   console.log('Handler wiring complete.');
 
-  // Baseline listener: proves message updates reach the bot
+  // Baseline listener to confirm text events arrive
   bot.on('message', (msg) => {
-    if (msg?.text && msg.text.trim().toLowerCase() === '/ping') {
-      bot.sendMessage(msg.chat.id, 'pong');
-    }
+    if (msg?.text?.trim().toLowerCase() === '/ping') bot.sendMessage(msg.chat.id, 'pong');
   });
 }
 
-// --- HTTP server & webhook route ---
+// HTTP server with multi-path health endpoints
 const app = express();
 app.use(express.json());
 
-// Health endpoint for platform checks
-app.get('/healthz', (_req, res) => res.status(200).send('OK'));
+// Serve all common healthcheck paths as 200
+const healthOk = (_req, res) => res.status(200).send('OK');
+app.get('/', healthOk);
+app.get('/health', healthOk);
+app.get('/healthz', healthOk);
+app.get('/health/readiness', healthOk);
+app.get('/health/liveness', healthOk);
 
-// Webhook route path; token not required in URL because we use our own Express + processUpdate
 const webhookPath = `/webhook/${Buffer.from(TOKEN).toString('hex').slice(0, 32)}`;
 
 async function startWebhook() {
-  // Accept Telegram updates and return 200 immediately
   app.post(webhookPath, (req, res) => {
-    // Optional secret verification
     if (SECRET) {
       const header = req.headers['x-telegram-bot-api-secret-token'];
-      if (!header || header !== SECRET) {
-        console.warn('[Webhook] Unauthorized: secret mismatch.');
-        return res.status(401).send('unauthorized');
-      }
+      if (!header || header !== SECRET) return res.status(401).send('unauthorized');
     }
     try {
       const u = req.body || {};
@@ -107,7 +88,6 @@ async function startWebhook() {
     }
   });
 
-  // Register webhook with explicit allowed_updates to receive both text and button callbacks
   const fullWebhook = `${APP_URL.replace(/\/+$/, '')}${webhookPath}`;
   await bot.setWebHook(fullWebhook, {
     secret_token: SECRET || undefined,
@@ -117,7 +97,6 @@ async function startWebhook() {
 }
 
 async function startPolling() {
-  // Remove webhook to avoid conflicts and drop backlog
   try { await bot.deleteWebHook({ drop_pending_updates: true }); } catch {}
   await bot.startPolling({
     interval: env.TELEGRAM_POLLING_INTERVAL || 300,
@@ -128,18 +107,10 @@ async function startPolling() {
 
 async function initialize() {
   await wireHandlers();
-  if (USE_WEBHOOK) {
-    await startWebhook();
-  } else {
-    await startPolling();
-  }
-  try {
-    const me = await bot.getMe();
-    console.log(`Bot @${me.username} is fully initialized in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`);
-  } catch {}
+  if (USE_WEBHOOK) await startWebhook(); else await startPolling();
+  try { const me = await bot.getMe(); console.log(`Bot @${me.username} ready in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`); } catch {}
 }
 
-// Bind to Railway/host platform port on all interfaces
 const PORT = Number(process.env.PORT || env.PORT || 3000);
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`HTTP server listening on :${PORT}. Initializing bot...`);
@@ -149,6 +120,5 @@ app.listen(PORT, '0.0.0.0', () => {
   });
 });
 
-// Global safety
 process.on('unhandledRejection', (e) => console.error('UnhandledRejection:', e));
 process.on('uncaughtException', (e) => console.error('UncaughtException:', e));
