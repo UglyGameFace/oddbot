@@ -1,5 +1,5 @@
 import cron from 'node-cron';
-import '../../oddsCacheAdapters.js';
+import { cacheOdds, flushCache } from '../../utils/oddsCacheAdapters.js';
 import redisService from '../../services/redisService.js';
 
 export function someCacheHandler() {
