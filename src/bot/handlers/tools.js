@@ -2,6 +2,7 @@
 
 import redisClient from '../../services/redisService.js';
 import databaseService from '../../services/databaseService.js';
+import rateLimitService from '../../services/rateLimitService.js'; // Import the service
 import env from '../../config/env.js';
 import axios from 'axios';
 
@@ -38,7 +39,6 @@ export function registerCommonCallbacks(bot) {
     if (action === 'dbstats') {
       return handleDbStats(bot, chatId, messageId);
     }
-    // --- NEW: Handle the manual odds ingestion trigger ---
     if (action === 'ingest') {
       return handleManualIngest(bot, chatId, messageId);
     }
@@ -50,10 +50,10 @@ export function registerCommonCallbacks(bot) {
 async function sendToolsMenu(bot, chatId, messageId = null) {
   const text = '🛠️ *Admin Tools*\n\nSelect a tool to use:';
   const keyboard = [
-    [{ text: '🔄 Trigger Odds Ingestion', callback_data: 'tools_ingest' }], // <-- NEW BUTTON
+    [{ text: '🔄 Trigger Odds Ingestion', callback_data: 'tools_ingest' }],
     [{ text: '🧹 Clear Redis Cache', callback_data: 'tools_cache' }],
     [{ text: '📡 Check API Status', callback_data: 'tools_apistatus' }],
-    [{ text: '📊 Get Database Stats', callback_data: 'tools_dbstats' }]
+    [{ text: '📊 Get Database & Quota Stats', callback_data: 'tools_dbstats' }] // Updated button text
   ];
   const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
 
@@ -64,7 +64,6 @@ async function sendToolsMenu(bot, chatId, messageId = null) {
   }
 }
 
-// --- NEW HANDLER FUNCTION for manual ingestion ---
 async function handleManualIngest(bot, chatId, messageId) {
     try {
         const redis = await redisClient;
@@ -98,7 +97,7 @@ async function handleCacheClear(bot, chatId, messageId) {
   
   try {
     const redis = await redisClient;
-    const prefixes = ['odds:', 'player_props:', 'games:', 'user:state:', 'parlay:slip:', 'user:config:', 'token:'];
+    const prefixes = ['odds:', 'player_props:', 'games:', 'user:state:', 'parlay:slip:', 'user:config:', 'token:', 'quota:'];
     let clearedCount = 0;
     
     for (const prefix of prefixes) {
@@ -180,9 +179,11 @@ async function handleApiStatus(bot, chatId, messageId) {
   });
 }
 
+// Updated function to include API Quota stats
 async function handleDbStats(bot, chatId, messageId) {
-    await bot.editMessageText('📊 Fetching database statistics...', { chat_id: chatId, message_id: messageId });
+    await bot.editMessageText('📊 Fetching database and API quota statistics...', { chat_id: chatId, message_id: messageId });
     try {
+        // Fetch DB Stats
         const stats = await databaseService.getSportGameCounts();
         let statsText = '*📊 Database Game Counts*\n\n';
         if (stats && stats.length > 0) {
@@ -190,8 +191,24 @@ async function handleDbStats(bot, chatId, messageId) {
                 statsText += `• *${stat.sport_title}:* ${stat.game_count} games\n`;
             });
         } else {
-            statsText += 'No games found in the database. The ingestion worker may need to run.';
+            statsText += 'No games found in the database. The ingestion worker may need to run.\n';
         }
+
+        // Fetch API Quota Stats
+        statsText += '\n*📈 API Quota Status (Live)*\n\n';
+        const providers = ['theodds', 'sportradar', 'apisports'];
+        for (const provider of providers) {
+            const quota = await rateLimitService.getProviderQuota(provider);
+            statsText += `*${provider.toUpperCase()}*:\n`;
+            if (quota) {
+                statsText += `  - Remaining: ${quota.remaining ?? 'N/A'}\n`;
+                statsText += `  - Used: ${quota.used ?? 'N/A'}\n`;
+                statsText += `  - Window: ${quota.window ?? 'N/A'}\n`;
+            } else {
+                statsText += '  - _No quota data available._\n';
+            }
+        }
+
         await bot.editMessageText(statsText, {
             chat_id: chatId,
             message_id: messageId,
@@ -199,8 +216,8 @@ async function handleDbStats(bot, chatId, messageId) {
             reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] }
         });
     } catch (error) {
-        console.error('DB stats error:', error);
-        await bot.editMessageText('❌ Failed to fetch database stats.', {
+        console.error('DB/Quota stats error:', error);
+        await bot.editMessageText('❌ Failed to fetch database or quota stats.', {
             chat_id: chatId,
             message_id: messageId,
             reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] }
