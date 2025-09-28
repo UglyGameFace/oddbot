@@ -4,7 +4,6 @@ import DatabaseService from '../services/databaseService.js';
 import OddsService from '../services/oddsService.js';
 import { sentryService } from '../services/sentryService.js';
 import env from '../config/env.js';
-import gamesService from '../services/gamesService.js';
 import redisClient from '../services/redisService.js';
 
 process.on('unhandledRejection', (reason, promise) => {
@@ -59,13 +58,15 @@ class InstitutionalOddsIngestionEngine {
     let totalUpsertedCount = 0;
 
     try {
-      const sports = await gamesService.getAvailableSports();
+      const sports = await DatabaseService.getScheduledSports(); 
+      
       if (!sports || sports.length === 0) {
-        console.warn('ODDS WORKER: No sports available from GamesService. Cycle will try again later.');
+        console.warn('ODDS WORKER: No active sports found in sports_config with fetch_on_schedule=true. Cycle ending.');
         this.isJobRunning = false;
         return;
       }
       
+      console.log(`Found ${sports.length} scheduled sports to process.`);
       const batchSize = 5; 
       for (let i = 0; i < sports.length; i += batchSize) {
         const batch = sports.slice(i, i + batchSize);
@@ -78,6 +79,8 @@ class InstitutionalOddsIngestionEngine {
               console.log(`    -> Fetched ${oddsForSport.length} games for ${sport.sport_key}.`);
               await DatabaseService.upsertGames(oddsForSport);
               totalUpsertedCount += oddsForSport.length;
+            } else {
+              console.log(`    -> No new odds found for ${sport.sport_key}.`);
             }
           } catch (e) {
               console.error(`    -> Failed to process odds for ${sport.sport_key}:`, e.message);
@@ -94,7 +97,7 @@ class InstitutionalOddsIngestionEngine {
       if (totalUpsertedCount > 0) {
         console.log(`✅ Ingestion cycle complete. Total upserted games: ${totalUpsertedCount}.`);
       } else {
-        console.log('Ingestion cycle complete. No new odds were found across all sports.');
+        console.log('✅ Ingestion cycle complete. No new odds were found across all configured sports.');
       }
       
     } catch (error) {
