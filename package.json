@@ -1,7 +1,7 @@
 {
   "name": "institutional-ai-parlay-bot",
   "version": "3.0.0",
-  "description": "Fully-featured Telegram parlay bot with AI, analytics, ML, and scheduled caching",
+  "description": "Fully-featured Telegram parlay bot with AI, analytics, ML, and scheduled caching. Cache buster: 1",
   "main": "src/bot.js",
   "type": "module",
   "engines": {
