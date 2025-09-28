@@ -39,23 +39,17 @@ const APP_URL = env.APP_URL || '';
 const WEBHOOK_SECRET = (env.WEBHOOK_SECRET || env.TELEGRAM_WEBHOOK_SECRET || env.TG_WEBHOOK_SECRET || '').trim();
 const USE_WEBHOOK = (env.USE_WEBHOOK === true) || APP_URL.startsWith('https');
 
-// CRITICAL: bind to the platform-injected port for Railway activation
-// Use only process.env.PORT in production; keep a local dev fallback
-const PORT = Number(process.env.PORT) || 3000; // local-only fallback
+const PORT = Number(process.env.PORT) || 3000;
 const HOST = '0.0.0.0';
 
 const bot = new TelegramBot(TOKEN, { polling: !USE_WEBHOOK });
 
-// Health check state management (retained)
 let isServiceReady = false;
 let healthCheckCount = 0;
 const startupTime = Date.now();
 
-// Minimal, unconditional 200 health endpoint for activation probe
-// Railway only requires a 200 at startup; this prevents SIGTERM loops
-app.get('/health', (_req, res) => res.sendStatus(200)); // fast path [web:71]
+app.get('/health', (_req, res) => res.sendStatus(200));
 
-// Keep your richer health/observability endpoints
 app.get('/', (_req, res) => {
   healthCheckCount++;
   console.log(`✅ Root health check #${healthCheckCount}`);
@@ -69,7 +63,6 @@ app.get('/', (_req, res) => {
   });
 });
 
-// Advanced health detail (unchanged logic, moved to /healthz to avoid interfering with probe)
 app.get('/healthz', async (_req, res) => {
   healthCheckCount++;
   console.log(`✅ /healthz check #${healthCheckCount}`);
@@ -141,7 +134,6 @@ app.get('/readiness', async (_req, res) => {
   }
 });
 
-// Support HEAD on health endpoints (Railway/ELB can use HEAD)
 app.head('/health', (_req, res) => res.sendStatus(200));
 app.head('/liveness', (_req, res) => res.sendStatus(200));
 app.head('/readiness', (_req, res) => res.sendStatus(200));
@@ -152,8 +144,6 @@ let keepAliveInterval;
 async function main() {
   console.log('🚀 Starting ParlayBot initialization...');
 
-  // Register all core handlers
-  console.log('📝 Registering bot handlers...');
   registerAnalytics(bot); registerModel(bot); registerCacheHandler(bot);
   registerCustom(bot); registerCustomCallbacks(bot);
   registerAI(bot); registerAICallbacks(bot); registerQuant(bot);
