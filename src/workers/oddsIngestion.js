@@ -5,9 +5,8 @@ import OddsService from '../services/oddsService.js';
 import { sentryService } from '../services/sentryService.js';
 import env from '../config/env.js';
 import gamesService from '../services/gamesService.js';
-import redisClient from '../services/redisService.js'; // Import the Redis client
+import redisClient from '../services/redisService.js';
 
-// FIX: Added a top-level, process-wide error catcher.
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ UNHANDLED REJECTION IN ODDS WORKER:', reason);
   sentryService.captureError(new Error(`Unhandled Rejection in odds worker: ${reason}`), { extra: { promise } });
@@ -19,21 +18,18 @@ class InstitutionalOddsIngestionEngine {
   constructor() {
     this.isJobRunning = false;
     this.initializeScheduling();
-    this.initializeManualTrigger(); // <-- NEW: Initialize the manual trigger listener
+    this.initializeManualTrigger();
   }
 
   initializeScheduling() {
     cron.schedule('*/15 * * * *', () => this.runIngestionCycle('cron'), { timezone: env.TIMEZONE });
     console.log('✅ Odds Ingestion Engine scheduled to run every 15 minutes.');
-    // Run once on startup, after a brief delay.
     setTimeout(() => this.runIngestionCycle('startup'), 5000); 
   }
 
-  // --- NEW FUNCTION to listen for manual triggers via Redis ---
   async initializeManualTrigger() {
     try {
       const redis = await redisClient;
-      // Create a duplicate client for subscribing to avoid blocking other commands
       const subscriber = redis.duplicate(); 
       await subscriber.connect();
       
@@ -53,7 +49,6 @@ class InstitutionalOddsIngestionEngine {
     }
   }
 
-
   async runIngestionCycle(source = 'unknown') {
     if (this.isJobRunning) {
       console.warn(`Ingestion cycle skipped (source: ${source}): Previous cycle still running.`);
@@ -65,15 +60,13 @@ class InstitutionalOddsIngestionEngine {
 
     try {
       const sports = await gamesService.getAvailableSports();
-      
       if (!sports || sports.length === 0) {
         console.warn('ODDS WORKER: No sports available from GamesService. Cycle will try again later.');
         this.isJobRunning = false;
         return;
       }
-
-      // Process in batches to avoid rate limits
-      const batchSize = 5;
+      
+      const batchSize = 5; 
       for (let i = 0; i < sports.length; i += batchSize) {
         const batch = sports.slice(i, i + batchSize);
         console.log(` -> Processing batch ${Math.floor(i / batchSize) + 1} of ${Math.ceil(sports.length / batchSize)}...`);
