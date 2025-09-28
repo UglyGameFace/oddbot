@@ -19,7 +19,16 @@ async function safeEditMessage(bot, text, options) {
     }
 }
 
-const SPORT_TITLES = { /* ... your existing titles ... */ };
+const SPORT_TITLES = {
+  basketball_nba: 'NBA',
+  basketball_wnba: 'WNBA',
+  baseball_mlb: 'MLB',
+  football_nfl: 'NFL',
+  hockey_nhl: 'NHL',
+  icehockey_nhl: 'NHL',
+  football_ncaaf: 'NCAAF',
+  americanfootball_ncaaf: 'NCAAF',
+};
 const PREFERRED_FIRST = ['football_ncaaf', 'americanfootball_ncaaf'];
 const DEPRIORITIZE_LAST = ['hockey_nhl', 'icehockey_nhl'];
 const PAGE_SIZE = 10;
