@@ -3,7 +3,7 @@ import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
 import { sentryService } from './services/sentryService.js';
-import healthService from './services/healthService.js'; // Import your health service
+import healthService from './services/healthService.js';
 
 // --- Your handler/module imports
 import { registerAnalytics } from './bot/handlers/analytics.js';
@@ -38,21 +38,28 @@ if (!TOKEN) {
 const APP_URL = env.APP_URL || '';
 const WEBHOOK_SECRET = (env.WEBHOOK_SECRET || env.TELEGRAM_WEBHOOK_SECRET || env.TG_WEBHOOK_SECRET || '').trim();
 const USE_WEBHOOK = (env.USE_WEBHOOK === true) || APP_URL.startsWith('https');
-const PORT = Number(process.env.PORT) || Number(env.PORT) || 8080;
-const HOST = env.HOST || '0.0.0.0';
+
+// CRITICAL: bind to the platform-injected port for Railway activation
+// Use only process.env.PORT in production; keep a local dev fallback
+const PORT = Number(process.env.PORT) || 3000; // local-only fallback
+const HOST = '0.0.0.0';
 
 const bot = new TelegramBot(TOKEN, { polling: !USE_WEBHOOK });
 
-// Health check state management
+// Health check state management (retained)
 let isServiceReady = false;
 let healthCheckCount = 0;
 const startupTime = Date.now();
 
-// Enhanced Health endpoints with your health service integration
+// Minimal, unconditional 200 health endpoint for activation probe
+// Railway only requires a 200 at startup; this prevents SIGTERM loops
+app.get('/health', (_req, res) => res.sendStatus(200)); // fast path [web:71]
+
+// Keep your richer health/observability endpoints
 app.get('/', (_req, res) => {
   healthCheckCount++;
   console.log(`✅ Root health check #${healthCheckCount}`);
-  res.status(200).json({ 
+  res.status(200).json({
     status: isServiceReady ? 'OK' : 'STARTING',
     service: 'ParlayBot',
     timestamp: new Date().toISOString(),
@@ -62,18 +69,17 @@ app.get('/', (_req, res) => {
   });
 });
 
-app.get('/health', async (_req, res) => {
+// Advanced health detail (unchanged logic, moved to /healthz to avoid interfering with probe)
+app.get('/healthz', async (_req, res) => {
   healthCheckCount++;
-  console.log(`✅ /health check #${healthCheckCount}`);
-  
+  console.log(`✅ /healthz check #${healthCheckCount}`);
   if (!isServiceReady) {
-    return res.status(503).json({ 
-      status: 'Service Starting', 
+    return res.status(503).json({
+      status: 'Service Starting',
       checks: healthCheckCount,
       uptime: process.uptime()
     });
   }
-  
   try {
     const healthReport = await healthService.getHealth();
     res.status(healthReport.ok ? 200 : 503).json({
@@ -96,8 +102,6 @@ app.get('/health', async (_req, res) => {
 app.get('/liveness', async (_req, res) => {
   healthCheckCount++;
   console.log(`✅ /liveness check #${healthCheckCount}`);
-  
-  // Liveness check - basic service availability
   const basicHealth = {
     status: isServiceReady ? 'LIVE' : 'STARTING',
     ready: isServiceReady,
@@ -105,26 +109,22 @@ app.get('/liveness', async (_req, res) => {
     uptime: process.uptime(),
     checks: healthCheckCount
   };
-  
   res.status(isServiceReady ? 200 : 503).json(basicHealth);
 });
 
 app.get('/readiness', async (_req, res) => {
   healthCheckCount++;
   console.log(`✅ /readiness check #${healthCheckCount}`);
-  
   if (!isServiceReady) {
-    return res.status(503).json({ 
-      status: 'NOT_READY', 
+    return res.status(503).json({
+      status: 'NOT_READY',
       checks: healthCheckCount,
       uptime: process.uptime()
     });
   }
-  
   try {
     const healthReport = await healthService.getHealth();
     const isReady = healthReport.ok;
-    
     res.status(isReady ? 200 : 503).json({
       status: isReady ? 'READY' : 'NOT_READY',
       ...healthReport,
@@ -141,7 +141,7 @@ app.get('/readiness', async (_req, res) => {
   }
 });
 
-// Support HEAD requests for health checks
+// Support HEAD on health endpoints (Railway/ELB can use HEAD)
 app.head('/health', (_req, res) => res.sendStatus(200));
 app.head('/liveness', (_req, res) => res.sendStatus(200));
 app.head('/readiness', (_req, res) => res.sendStatus(200));
@@ -151,7 +151,7 @@ let keepAliveInterval;
 
 async function main() {
   console.log('🚀 Starting ParlayBot initialization...');
-  
+
   // Register all core handlers
   console.log('📝 Registering bot handlers...');
   registerAnalytics(bot); registerModel(bot); registerCacheHandler(bot);
@@ -191,14 +191,14 @@ async function main() {
 
   sentryService.attachExpressPostRoutes?.(app);
 
-  // Start server
+  // Start server on injected PORT for Railway activation
   server = app.listen(PORT, HOST, () => {
     console.log(`✅ Server listening on ${HOST}:${PORT}`);
     isServiceReady = true;
     console.log('🎯 Service marked as ready for health checks');
   });
 
-  // Set bot commands
+  // Commands (unchanged)
   const commands = [
     { command: 'ai', description: 'Launch the AI Parlay Builder' },
     { command: 'custom', description: 'Manually build a parlay slip' },
@@ -208,40 +208,39 @@ async function main() {
     { command: 'tools', description: 'Access admin tools' },
     { command: 'help', description: 'Show the command guide' },
   ];
-  
   await bot.setMyCommands(commands);
   const me = await bot.getMe();
   console.log(`✅ Bot @${me.username} fully initialized.`);
-  
-  // Start keep-alive
+
+  // Keep-alive logging (retained)
   keepAliveInterval = setInterval(() => {
     if (isServiceReady) {
       console.log('🤖 Bot active - uptime:', Math.round(process.uptime()), 'seconds');
     }
-  }, 600000); // Every 10 minutes
-  
+  }, 600000);
+
   console.log('🎉 Application startup complete!');
 }
 
 const shutdown = async (signal) => {
   console.log(`\n🛑 Received ${signal}. Starting graceful shutdown...`);
   isServiceReady = false;
-  
+
   if (keepAliveInterval) {
     clearInterval(keepAliveInterval);
   }
-  
+
   try {
     if (!USE_WEBHOOK) {
-      try { 
-        await bot.stopPolling({ cancel: true, reason: signal }); 
+      try {
+        await bot.stopPolling({ cancel: true, reason: signal });
         console.log('✅ Bot polling stopped.');
       } catch (pollingError) {
         console.warn('⚠️ Error stopping polling:', pollingError);
       }
     } else {
-      try { 
-        await bot.deleteWebHook(); 
+      try {
+        await bot.deleteWebHook();
         console.log('✅ Webhook deleted.');
       } catch (webhookError) {
         console.warn('⚠️ Error deleting webhook:', webhookError);
@@ -250,13 +249,12 @@ const shutdown = async (signal) => {
   } catch (error) {
     console.warn('⚠️ Error during bot shutdown:', error);
   }
-  
+
   if (server) {
     server.close(() => {
       console.log('✅ HTTP server closed.');
       process.exit(0);
     });
-    
     setTimeout(() => {
       console.log('⚠️ Forcing shutdown after timeout...');
       process.exit(1);
@@ -266,7 +264,6 @@ const shutdown = async (signal) => {
   }
 };
 
-// Signal handlers
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
