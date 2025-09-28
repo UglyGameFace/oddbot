@@ -4,6 +4,8 @@ import DatabaseService from '../services/databaseService.js';
 import OddsService from '../services/oddsService.js';
 import { sentryService } from '../services/sentryService.js';
 import env from '../config/env.js';
+// Import gamesService to dynamically fetch the list of all sports
+import gamesService from '../services/gamesService.js'; 
 import redisClient from '../services/redisService.js';
 
 process.on('unhandledRejection', (reason, promise) => {
@@ -29,8 +31,6 @@ class InstitutionalOddsIngestionEngine {
   async initializeManualTrigger() {
     try {
       const redis = await redisClient;
-      // The duplicate() command creates a new client instance that shares the same socket.
-      // It does not need to be connected again.
       const subscriber = redis.duplicate();
       
       const channel = 'odds_ingestion_trigger';
@@ -59,25 +59,39 @@ class InstitutionalOddsIngestionEngine {
     let totalUpsertedCount = 0;
 
     try {
-      const sports = await DatabaseService.getScheduledSports();
-      if (!sports || sports.length === 0) {
-        console.warn('ODDS WORKER: No active sports found in sports_config with fetch_on_schedule=true. Cycle ending.');
+      // ** THE FIX IS HERE **
+      // We now call the gamesService to get a fresh, complete list of all sports from the API.
+      const sportsToFetch = await gamesService.getAvailableSports();
+      
+      if (!sportsToFetch || !sportsToFetch.length) {
+        console.warn('ODDS WORKER: Could not fetch the list of available sports. Cycle ending.');
         this.isJobRunning = false;
         return;
       }
       
+      console.log(`Dynamically fetched ${sportsToFetch.length} sports to process.`);
       const batchSize = 5;
-      for (let i = 0; i < sports.length; i += batchSize) {
-        const batch = sports.slice(i, i + batchSize);
-        console.log(` -> Processing batch ${Math.floor(i / batchSize) + 1} of ${Math.ceil(sports.length / batchSize)}...`);
+      for (let i = 0; i < sportsToFetch.length; i += batchSize) {
+        const batch = sportsToFetch.slice(i, i + batchSize);
+        console.log(` -> Processing batch ${Math.floor(i / batchSize) + 1} of ${Math.ceil(sportsToFetch.length / batchSize)}...`);
         
         await Promise.all(batch.map(async (sport) => {
           try {
             const oddsForSport = await OddsService.getSportOdds(sport.sport_key);
             if (oddsForSport && oddsForSport.length > 0) {
               console.log(`    -> Fetched ${oddsForSport.length} games for ${sport.sport_key}.`);
-              await DatabaseService.upsertGames(oddsForSport);
-              totalUpsertedCount += oddsForSport.length;
+              const gamesToUpsert = oddsForSport.map(game => ({
+                  event_id: game.event_id,
+                  sport_key: game.sport_key,
+                  league_key: game.league_key,
+                  commence_time: game.commence_time,
+                  home_team: game.home_team,
+                  away_team: game.away_team,
+                  market_data: game.market_data,
+                  sport_title: game.sport_title
+              }));
+              await DatabaseService.upsertGames(gamesToUpsert);
+              totalUpsertedCount += gamesToUpsert.length;
             }
           } catch (e) {
               console.error(`    -> Failed to process odds for ${sport.sport_key}:`, e.message);
@@ -85,7 +99,7 @@ class InstitutionalOddsIngestionEngine {
           }
         }));
 
-        if (i + batchSize < sports.length) {
+        if (i + batchSize < sportsToFetch.length) {
             console.log(` -> Batch complete. Waiting for 2 seconds before next batch...`);
             await delay(2000);
         }
