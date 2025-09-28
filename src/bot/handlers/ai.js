@@ -5,7 +5,7 @@ import gamesService from '../../services/gamesService.js';
 import { setUserState, getUserState } from '../state.js';
 import { getSportEmoji, escapeMarkdownV2 } from '../../utils/enterpriseUtilities.js';
 
-// --- Helper: safe edit to avoid noisy "message is not modified" errors (kept)
+// ---- Safe edit helper ----
 async function safeEditMessage(bot, text, options) {
   try {
     await bot.editMessageText(text, options);
@@ -18,7 +18,6 @@ async function safeEditMessage(bot, text, options) {
   }
 }
 
-// --- Helper: toggle label for player props
 const propsToggleLabel = (on) => `${on ? '✅' : '☑️'} Include Player Props`;
 
 const SPORT_TITLES = {
@@ -46,8 +45,6 @@ function sortSports(sports) {
   );
 }
 function pageOf(arr, page) { const start = page * PAGE_SIZE; return arr.slice(start, start + PAGE_SIZE); }
-
-// --- Fallback local time formatting if only UTC is present in legs
 function formatLocalIfPresent(utc, tzLabel) {
   try {
     if (!utc) return '';
@@ -191,7 +188,6 @@ async function sendBetTypeSelection(bot, chatId, messageId) {
   const keyboard = [
     [{ text: '🔥 Player Props Only', callback_data: 'ai_bettype_props' }],
     [{ text: '🧩 Any Bet Type (Mixed)', callback_data: 'ai_bettype_mixed' }],
-    // NEW toggle row
     [{ text: propsToggleLabel(!!state.includeProps), callback_data: 'ai_toggle_props' }],
     [{ text: '« Back to Mode', callback_data: 'ai_back_mode' }]
   ];
@@ -234,13 +230,14 @@ async function executeAiRequest(bot, chatId, messageId) {
   );
 
   try {
+    // Pass the player props toggle into aiService
     const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, { includeProps });
     if (!parlay || !parlay.parlay_legs || parlay.parlay_legs.length === 0) {
       throw new Error('AI returned an empty or invalid parlay.');
     }
 
     const legs = parlay.parlay_legs;
-    const tzLabel = 'America/New_York'; // or surface env value if wired through
+    const tzLabel = 'America/New_York';
     const headerLine = legs.every(l => l.game_date_local || l.game_date_utc)
       ? `Timezone: ${escapeMarkdownV2(tzLabel)}`
       : null;
