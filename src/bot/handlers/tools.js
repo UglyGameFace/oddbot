@@ -21,7 +21,7 @@ export function registerCommonCallbacks(bot) {
 
     const chatId = message.chat.id;
     const messageId = message.message_id;
-    await bot.answerCallbackQuery(cbq.id, { cache_time: 2 }); // Short cache time for status updates
+    await bot.answerCallbackQuery(cbq.id, { cache_time: 2 });
 
     const parts = data.split('_');
     const action = parts[1];
@@ -38,6 +38,10 @@ export function registerCommonCallbacks(bot) {
     if (action === 'dbstats') {
       return handleDbStats(bot, chatId, messageId);
     }
+    // --- NEW: Handle the manual odds ingestion trigger ---
+    if (action === 'ingest') {
+      return handleManualIngest(bot, chatId, messageId);
+    }
   });
 }
 
@@ -46,6 +50,7 @@ export function registerCommonCallbacks(bot) {
 async function sendToolsMenu(bot, chatId, messageId = null) {
   const text = '🛠️ *Admin Tools*\n\nSelect a tool to use:';
   const keyboard = [
+    [{ text: '🔄 Trigger Odds Ingestion', callback_data: 'tools_ingest' }], // <-- NEW BUTTON
     [{ text: '🧹 Clear Redis Cache', callback_data: 'tools_cache' }],
     [{ text: '📡 Check API Status', callback_data: 'tools_apistatus' }],
     [{ text: '📊 Get Database Stats', callback_data: 'tools_dbstats' }]
@@ -59,6 +64,32 @@ async function sendToolsMenu(bot, chatId, messageId = null) {
   }
 }
 
+// --- NEW HANDLER FUNCTION for manual ingestion ---
+async function handleManualIngest(bot, chatId, messageId) {
+    try {
+        const redis = await redisClient;
+        const channel = 'odds_ingestion_trigger';
+        const message = 'run';
+        await redis.publish(channel, message);
+
+        const responseText = `✅ Successfully sent a manual trigger to the odds ingestion worker. Check the worker's logs to monitor its progress.`;
+        await bot.editMessageText(responseText, {
+            chat_id: chatId,
+            message_id: messageId,
+            reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] }
+        });
+
+    } catch (error) {
+        console.error('Failed to publish manual ingest trigger:', error);
+        await bot.editMessageText('❌ Failed to send trigger to the worker. Please check the logs.', {
+            chat_id: chatId,
+            message_id: messageId,
+            reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] }
+        });
+    }
+}
+
+
 async function handleCacheClear(bot, chatId, messageId) {
   await bot.editMessageText('Clearing all known Redis keys (odds, props, state)...', {
     chat_id: chatId,
@@ -67,7 +98,6 @@ async function handleCacheClear(bot, chatId, messageId) {
   
   try {
     const redis = await redisClient;
-    // A safer way to clear is to scan and delete keys with known prefixes
     const prefixes = ['odds:', 'player_props:', 'games:', 'user:state:', 'parlay:slip:', 'user:config:', 'token:'];
     let clearedCount = 0;
     
@@ -119,7 +149,6 @@ async function handleApiStatus(bot, chatId, messageId) {
         headers: { Authorization: `Bearer ${env.PERPLEXITY_API_KEY}` },
         timeout: 5000
     });
-    // Perplexity will return 400 for empty request, but that means it's online
     statuses['Perplexity AI'] = '✅ Online';
   } catch (e) {
     if (e.response && (e.response.status === 400 || e.response.status === 401)) {
