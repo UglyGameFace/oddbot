@@ -113,31 +113,31 @@ export function registerAICallbacks(bot) {
 }
 
 async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
-  const sportsRaw = await gamesService.getAvailableSports();
-  const sports = sortSports((sportsRaw || []).filter(s => s?.sport_key));
-  if (!sports?.length) return bot.sendMessage(chatId, 'No games in DB to analyze.');
+    const sportsRaw = await gamesService.getAvailableSports();
+    const sports = sortSports((sportsRaw || []).filter(s => s?.sport_key));
+    if (!sports?.length) return bot.sendMessage(chatId, 'No games in DB to analyze.');
 
-  const totalPages = Math.max(1, Math.ceil(sports.length / PAGE_SIZE));
-  page = Math.min(Math.max(0, page), totalPages - 1);
+    const totalPages = Math.max(1, Math.ceil(sports.length / PAGE_SIZE));
+    page = Math.min(Math.max(0, page), totalPages - 1);
 
-  const slice = pageOf(sports, page).map(s => {
-    const title = s?.sport_title ?? SPORT_TITLES[s.sport_key] ?? s.sport_key;
-    return { text: `${getSportEmoji(s.sport_key)} ${title}`, callback_data: `ai_sport_${s.sport_key}` };
-  });
+    const slice = pageOf(sports, page).map(s => {
+        const title = s?.sport_title ?? SPORT_TITLES[s.sport_key] ?? s.sport_key;
+        return { text: `${getSportEmoji(s.sport_key)} ${title}`, callback_data: `ai_sport_${s.sport_key}` };
+    });
 
-  const rows = [];
-  for (let i = 0; i < slice.length; i += 2) rows.push(slice.slice(i, i + 2));
+    const rows = [];
+    for (let i = 0; i < slice.length; i += 2) rows.push(slice.slice(i, i + 2));
 
-  const nav = [];
-  if (page > 0) nav.push({ text: '‹ Prev', callback_data: `ai_page_${page - 1}` });
-  if (page < totalPages - 1) nav.push({ text: 'Next ›', callback_data: `ai_page_${page + 1}` });
-  if (nav.length) rows.push(nav);
+    const nav = [];
+    if (page > 0) nav.push({ text: '‹ Prev', callback_data: `ai_page_${page - 1}` });
+    if (page < totalPages - 1) nav.push({ text: 'Next ›', callback_data: `ai_page_${page + 1}` });
+    if (nav.length) rows.push(nav);
 
-  const text = '🤖 *AI Parlay Builder*\n\n*Step 1:* Select a sport.';
-  const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } };
+    const text = '🤖 *AI Parlay Builder*\n\n*Step 1:* Select a sport.';
+    const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } };
 
-  if (messageId) await safeEditMessage(bot, text, { ...opts, chat_id: chatId, message_id: messageId });
-  else await bot.sendMessage(chatId, text, opts);
+    if (messageId) await safeEditMessage(bot, text, { ...opts, chat_id: chatId, message_id: messageId });
+    else await bot.sendMessage(chatId, text, opts);
 }
 
 async function sendLegSelection(bot, chatId, messageId) {
