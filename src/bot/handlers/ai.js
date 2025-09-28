@@ -174,56 +174,56 @@ async function sendAiModelSelection(bot, chatId, messageId) {
 }
 
 async function executeAiRequest(bot, chatId, messageId) {
-  const state = await getUserState(chatId);
-  const { sportKey, numLegs, mode, betType, aiModel = 'gemini' } = state;
+    const state = await getUserState(chatId);
+    const { sportKey, numLegs, mode, betType, aiModel = 'gemini' } = state;
 
-  if (!sportKey || !numLegs || !mode || !betType) {
-    return bot.editMessageText('Incomplete selection. Please start over using /ai.', { chat_id: chatId, message_id: messageId });
-  }
+    if (!sportKey || !numLegs || !mode || !betType) {
+        return bot.editMessageText('Incomplete selection. Please start over using /ai.', { chat_id: chatId, message_id: messageId });
+    }
 
-  let modeText = { web: 'Web Research', live: 'Live API Data', db: 'Database Only' }[mode];
-  if (mode === 'web') modeText += ` via ${aiModel.charAt(0).toUpperCase() + aiModel.slice(1)}`;
-  const betTypeText = betType === 'props' ? 'Player Props Only' : 'Mixed';
-  
-  // Escape dynamic text before sending
-  const safeSportKey = escapeMarkdownV2(sportKey);
-  const safeModeText = escapeMarkdownV2(modeText);
-  const safeBetTypeText = escapeMarkdownV2(betTypeText);
+    let modeText = { web: 'Web Research', live: 'Live API Data', db: 'Database Only' }[mode];
+    if (mode === 'web') modeText += ` via ${aiModel.charAt(0).toUpperCase() + aiModel.slice(1)}`;
+    const betTypeText = betType === 'props' ? 'Player Props Only' : 'Mixed';
 
-  await bot.editMessageText(
-    `🤖 Accessing advanced analytics\\.\\.\\.\n\n*Sport:* ${safeSportKey}\n*Legs:* ${numLegs}\n*Mode:* ${safeModeText}\n*Type:* ${safeBetTypeText}\n\nThis may take a moment\\.`,
-    { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: null }
-  );
+    const safeSportKey = escapeMarkdownV2(sportKey);
+    const safeModeText = escapeMarkdownV2(modeText);
+    const safeBetTypeText = escapeMarkdownV2(betTypeText);
 
-  try {
-    const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType);
-    if (!parlay || !parlay.parlay_legs || !parlay.parlay_legs.length === 0) throw new Error('AI returned an empty or invalid parlay.');
+    await bot.editMessageText(
+        `🤖 Accessing advanced analytics\\.\\.\\.\n\n*Sport:* ${safeSportKey}\n*Legs:* ${numLegs}\n*Mode:* ${safeModeText}\n*Type:* ${safeBetTypeText}\n\nThis may take a moment\\.`,
+        { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: null }
+    );
 
-    let response = `🧠 *AI-Generated ${numLegs}-Leg Parlay*\n*Mode: ${safeModeText}*\n*Type: ${safeBetTypeText}*\n*Confidence: ${Math.round((parlay.confidence_score || 0) * 100)}%*\n\n`;
-    parlay.parlay_legs.forEach((leg, index) => {
-      // Escape all dynamic parts of the parlay response
-      const safeGame = escapeMarkdownV2(leg.game);
-      const safePick = escapeMarkdownV2(leg.pick);
-      const safeMarket = escapeMarkdownV2(leg.market);
-      const safeBook = escapeMarkdownV2(leg.sportsbook);
-      const safeJustification = escapeMarkdownV2(leg.justification);
-      
-      response += `*Leg ${index + 1}:* ${safeGame}\n*Pick:* *${safePick}* \\(${safeMarket}\\)\n`;
-      if (leg.sportsbook) response += `*Book:* ${safeBook}\n`;
-      response += `*Justification:* ${safeJustification}\n\n`;
-    });
+    try {
+        const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType);
+        if (!parlay || !parlay.parlay_legs || !parlay.parlay_legs.length === 0) {
+            throw new Error('AI returned an empty or invalid parlay.');
+        }
 
-    const finalKeyboard = [[{ text: 'Build Another AI Parlay', callback_data: 'ai_back_sport' }]];
-    await bot.editMessageText(response, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: finalKeyboard } });
-  
-  } catch (error) {
-    console.error('AI handler execution error:', error);
-    const safeError = escapeMarkdownV2(error.message);
-    await bot.editMessageText(`❌ I encountered a critical error: \`${safeError}\`\\.\nPlease try again later\\.`, {
-      chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2',
-      reply_markup: { inline_keyboard: [[{ text: 'Start Over', callback_data: 'ai_back_sport' }]] }
-    });
-  } finally {
-    await setUserState(chatId, {});
-  }
+        let response = `🧠 *AI\\-Generated ${numLegs}\\-Leg Parlay*\n*Mode: ${safeModeText}*\n*Type: ${safeBetTypeText}*\n*Confidence: ${Math.round((parlay.confidence_score || 0) * 100)}%*\n\n`;
+        parlay.parlay_legs.forEach((leg, index) => {
+            const safeGame = escapeMarkdownV2(leg.game);
+            const safePick = escapeMarkdownV2(leg.pick);
+            const safeMarket = escapeMarkdownV2(leg.market);
+            const safeBook = escapeMarkdownV2(leg.sportsbook);
+            const safeJustification = escapeMarkdownV2(leg.justification);
+            
+            response += `*Leg ${index + 1}:* ${safeGame}\n*Pick:* *${safePick}* \\(${safeMarket}\\)\n`;
+            if (leg.sportsbook) response += `*Book:* ${safeBook}\n`;
+            response += `*Justification:* ${safeJustification}\n\n`;
+        });
+
+        const finalKeyboard = [[{ text: 'Build Another AI Parlay', callback_data: 'ai_back_sport' }]];
+        await bot.editMessageText(response, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: finalKeyboard } });
+
+    } catch (error) {
+        console.error('AI handler execution error:', error);
+        const safeError = escapeMarkdownV2(error.message);
+        await bot.editMessageText(`❌ I encountered a critical error: \`${safeError}\`\\.\nPlease try again later\\.`, {
+            chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2',
+            reply_markup: { inline_keyboard: [[{ text: 'Start Over', callback_data: 'ai_back_sport' }]] }
+        });
+    } finally {
+        await setUserState(chatId, {});
+    }
 }
