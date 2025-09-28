@@ -16,7 +16,7 @@ services:
       retries: 3
 
   parlay-bot:
-    build: 
+    build:
       context: .
     image: parlay-bot-app:latest
     command: npm start
