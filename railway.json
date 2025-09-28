@@ -7,7 +7,7 @@
       "buildCommand": "npm install --omit=dev",
       "startCommand": "npm start",
       "envVars": {
-        "PORT": "8080"
+        "PORT": "8088"
       },
       "deploy": {
         "restartPolicyType": "ON_FAILURE",
