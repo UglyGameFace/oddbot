@@ -24,13 +24,13 @@ const withTimeout = (p, ms, label) =>
 class DatabaseService {
   get client() { return supabaseClient || (supabaseClient = buildClient()); }
 
-  // --- Game Functions ---
+  // --- Game Functions (Corrected for new schema) ---
   async upsertGames(gamesData) {
     if (!this.client || !gamesData?.length) return { data: [], error: null };
     try {
-      // NOTE: Your schema uses 'game_id_provider' as the conflict key, not 'id'.
+      // FIX: Your 'games' table uses 'event_id' as the primary key for conflicts.
       const { data, error } = await withTimeout(
-        this.client.from('games').upsert(gamesData, { onConflict: 'game_id_provider' }).select(),
+        this.client.from('games').upsert(gamesData, { onConflict: 'event_id' }).select(),
         5000, 'upsertGames'
       );
       if (error) throw error;
@@ -45,9 +45,9 @@ class DatabaseService {
   async getGamesBySport(sportKey) {
     if (!this.client) return [];
     try {
-        // Mapped 'sport' column from schema
+        // FIX: Using correct column names 'sport_key' and 'commence_time'.
         const { data, error } = await withTimeout(
-            this.client.from('games').select('*').eq('sport', sportKey).gte('start_time', new Date().toISOString()).order('start_time', { ascending: true }),
+            this.client.from('games').select('*').eq('sport_key', sportKey).gte('commence_time', new Date().toISOString()).order('commence_time', { ascending: true }),
             5000, 'getGamesBySport'
         );
         if (error) throw error;
@@ -59,14 +59,31 @@ class DatabaseService {
     }
   }
 
-  // --- User & Settings Functions (NEW) ---
+  async getGameById(eventId) {
+    if (!this.client) return null;
+    try {
+      // FIX: Querying by 'event_id' as per your schema.
+      const { data, error } = await withTimeout(
+        this.client.from('games').select('*').eq('event_id', eventId).single(),
+        4000, 'getGameById'
+      );
+      if (error && error.code !== 'PGRST116') throw error; // Ignore 'not found' errors
+      return data ?? null;
+    } catch (error) {
+      console.error(`Supabase getGameById error for ${eventId}:`, error.message);
+      return null;
+    }
+  }
+
+  // --- User & Settings Functions (Corrected for new schema) ---
   async findOrCreateUser(telegramId, firstName = '', username = '') {
       if (!this.client) return null;
       try {
-          let { data: user, error } = await this.client.from('users').select('*').eq('telegram_id', telegramId).single();
+          // FIX: Your 'users' table primary key is 'tg_id'.
+          let { data: user, error } = await this.client.from('users').select('*').eq('tg_id', telegramId).single();
           if (error && error.code === 'PGRST116') { // Not found
               const { data: newUser, error: insertError } = await this.client.from('users').insert({
-                  telegram_id: telegramId,
+                  tg_id: telegramId,
                   first_name: firstName,
                   username: username
               }).select().single();
@@ -85,15 +102,17 @@ class DatabaseService {
 
   async getUserSettings(telegramId) {
     const user = await this.findOrCreateUser(telegramId);
-    return user?.settings || {};
+    // FIX: Settings are stored in the 'preferences' column.
+    return user?.preferences || {};
   }
 
   async updateUserSettings(telegramId, newSettings) {
       if (!this.client) return null;
       try {
+          // FIX: Updating the 'preferences' and 'updated_at' columns.
           const { data, error } = await this.client.from('users')
-              .update({ settings: newSettings, last_updated: new Date().toISOString() })
-              .eq('telegram_id', telegramId)
+              .update({ preferences: newSettings, updated_at: new Date().toISOString() })
+              .eq('tg_id', telegramId)
               .select()
               .single();
           if (error) throw error;
@@ -105,44 +124,15 @@ class DatabaseService {
       }
   }
 
-  // --- Sports Config Functions (NEW) ---
-  async getScheduledSports() {
-    if (!this.client) return [];
-    try {
-        const { data, error } = await withTimeout(
-            this.client.from('sports_config').select('*').eq('is_active', true).eq('fetch_on_schedule', true),
-            5000, 'getScheduledSports'
-        );
-        if (error) throw error;
-        return data ?? [];
-    } catch (error) {
-        console.error('Supabase getScheduledSports error:', error.message);
-        sentryService.captureError(error, { component: 'database_service', operation: 'getScheduledSports' });
-        return [];
-    }
-  }
-  
-  // --- Existing Unchanged Functions ---
-  async getGameById(gameId) {
-    if (!this.client) return null;
-    try {
-      const { data, error } = await withTimeout(
-        this.client.from('games').select('*').eq('id', gameId).single(),
-        4000, 'getGameById'
-      );
-      if (error && error.code !== 'PGRST116') throw error;
-      return data ?? null;
-    } catch (error) {
-      console.error(`Supabase getGameById error for ${gameId}:`, error.message);
-      return null;
-    }
-  }
+  // --- REMOVED `getScheduledSports` ---
+  // This function was removed because the 'sports_config' table does not exist in your schema.
 
+  // --- Utility Functions ---
   async getDistinctSports() {
-      // This could now be simplified to query `sports_config` instead of the large `games` table
       if (!this.client) return [];
       try {
-          const { data, error } = await withTimeout(this.client.from('sports_config').select('sport_key, sport_name as sport_title').eq('is_active', true), 4000, 'getDistinctSports');
+          // FIX: This now queries the 'games' table to find which sports are actually present.
+          const { data, error } = await withTimeout(this.client.rpc('get_distinct_sports'), 4000, 'getDistinctSports');
           if (error) throw error;
           return data ?? [];
       } catch (error) {
