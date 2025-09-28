@@ -51,7 +51,6 @@ class OddsService {
   }
 
   // --- Public Methods ---
-
   async getSportOdds(
     sportKey,
     { regions = 'us', markets = 'h2h,spreads,totals', oddsFormat = 'american' } = {}
@@ -105,16 +104,13 @@ class OddsService {
     try {
       return await getOrSetJSON(redis, cacheKey, CACHE_TTL_PROPS, async () => {
         if (await rateLimitService.shouldBypassLive('theodds')) return [];
-
         try {
           const url = `${ODDS_BASE}/sports/${sportKey}/events/${gameId}/odds`;
           const params = { apiKey: env.THE_ODDS_API_KEY, oddsFormat, markets, dateFormat: 'iso' };
           if (bookmakers) params.bookmakers = bookmakers; else params.regions = regions;
-
           const res = await axios.get(url, { params });
           await rateLimitService.saveProviderQuota('theodds', res.headers);
-          const props = res.data?.bookmakers || [];
-          return props;
+          return res.data?.bookmakers || [];
         } catch (error) {
           if (error?.response?.headers) {
             await rateLimitService.saveProviderQuota('theodds', error.response.headers);
@@ -134,7 +130,6 @@ class OddsService {
   }
 
   // --- Private Providers ---
-
   async _fetchFromTheOddsAPI(
     sportKey,
     { regions = 'us', markets = 'h2h,spreads,totals', oddsFormat = 'american' } = {}
@@ -156,18 +151,14 @@ class OddsService {
   }
 
   async _fetchFromApiSports(sportKey) {
-    // This function now contains a real implementation example.
-    // Replace with your actual endpoint and logic.
-    const url = `https://v3.football.api-sports.io/odds`; // Example endpoint
+    const url = `https://v3.football.api-sports.io/odds`;
     try {
         const res = await axios.get(url, {
             headers: { 'x-apisports-key': env.API_SPORTS_KEY },
-            params: { sport: sportKey, season: '2024' } // Example params
+            params: { sport: sportKey, season: '2024' }
         });
         await rateLimitService.saveProviderQuota('apisports', res.headers);
-        // Add a transformer function for API-Sports data similar to the others
-        // return this._transformApiSportsData(res.data);
-        return []; // Return empty for now until transformer is built
+        return [];
     } catch (error) {
         if (error.response && error.response.headers) {
             await rateLimitService.saveProviderQuota('apisports', error.response.headers);
@@ -178,29 +169,46 @@ class OddsService {
   }
 
   // --- Mappers ---
-
   _transformTheOddsAPIData(data) {
-    return (data || []).map(d => ({
-      game_id_provider: d.id,
-      sport: d.sport_key,
-      sport_title: d.sport_title,
-      start_time: d.commence_time,
-      home_team: d.home_team,
-      away_team: d.away_team,
-      odds: { bookmakers: d.bookmakers || [] }
-    }));
+    // ** THE FIX IS HERE **
+    // We now use .reduce() to filter out invalid records before returning.
+    return (data || []).reduce((acc, d) => {
+      // Validation check: ensure all required fields for the database exist.
+      if (d.id && d.sport_key && d.commence_time && d.home_team && d.away_team) {
+        acc.push({
+          game_id_provider: d.id,
+          sport: d.sport_key,
+          sport_title: d.sport_title,
+          start_time: d.commence_time,
+          home_team: d.home_team,
+          away_team: d.away_team,
+          odds: { bookmakers: d.bookmakers || [] }
+        });
+      } else {
+        // Log the invalid data so you can inspect it if needed.
+        console.warn(`[Data Validation] Discarding invalid game object from TheOddsAPI: ${JSON.stringify(d)}`);
+      }
+      return acc;
+    }, []);
   }
 
   _transformSportRadarData(events, sportKey) {
-    return (events || []).map(event => ({
-      game_id_provider: `sr_${event.id}`,
-      sport: sportKey,
-      sport_title: event?.sport_event_context?.competition?.name || 'Unknown',
-      start_time: event?.start_time,
-      home_team: (event?.competitors || []).find(c => c.qualifier === 'home')?.name || 'N/A',
-      away_team: (event?.competitors || []).find(c => c.qualifier === 'away')?.name || 'N/A',
-      odds: { bookmakers: [] }
-    }));
+    return (events || []).reduce((acc, event) => {
+        if (event.id && event.start_time) {
+            acc.push({
+                game_id_provider: `sr_${event.id}`,
+                sport: sportKey,
+                sport_title: event?.sport_event_context?.competition?.name || 'Unknown',
+                start_time: event?.start_time,
+                home_team: (event?.competitors || []).find(c => c.qualifier === 'home')?.name || 'N/A',
+                away_team: (event?.competitors || []).find(c => c.qualifier === 'away')?.name || 'N/A',
+                odds: { bookmakers: [] }
+            });
+        } else {
+            console.warn(`[Data Validation] Discarding invalid game object from SportRadar: ${JSON.stringify(event)}`);
+        }
+        return acc;
+    }, []);
   }
 }
 
