@@ -17,11 +17,12 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 class InstitutionalOddsIngestionEngine {
   constructor() {
     this.isJobRunning = false;
-    // The automatic scheduling call has been removed.
+    // FIX: The automatic scheduling call has been removed to prevent startup/timed runs.
+    // this.initializeScheduling(); 
     this.initializeManualTrigger();
   }
 
-  // This function is no longer called in the constructor, disabling automatic runs.
+  // The contents of this function are commented out to disable automatic runs.
   initializeScheduling() {
     // cron.schedule('*/15 * * * *', () => this.runIngestionCycle('cron'), { timezone: env.TIMEZONE });
     // console.log('✅ Odds Ingestion Engine scheduled to run every 15 minutes.');
