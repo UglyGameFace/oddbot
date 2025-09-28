@@ -23,14 +23,15 @@ class InstitutionalOddsIngestionEngine {
   initializeScheduling() {
     cron.schedule('*/15 * * * *', () => this.runIngestionCycle('cron'), { timezone: env.TIMEZONE });
     console.log('✅ Odds Ingestion Engine scheduled to run every 15 minutes.');
-    setTimeout(() => this.runIngestionCycle('startup'), 5000); 
+    setTimeout(() => this.runIngestionCycle('startup'), 5000);
   }
 
   async initializeManualTrigger() {
     try {
       const redis = await redisClient;
-      const subscriber = redis.duplicate(); 
-      await subscriber.connect();
+      // The duplicate() command creates a new client instance that shares the same socket.
+      // It does not need to be connected again.
+      const subscriber = redis.duplicate();
       
       const channel = 'odds_ingestion_trigger';
       await subscriber.subscribe(channel);
@@ -58,16 +59,14 @@ class InstitutionalOddsIngestionEngine {
     let totalUpsertedCount = 0;
 
     try {
-      const sports = await DatabaseService.getScheduledSports(); 
-      
+      const sports = await DatabaseService.getScheduledSports();
       if (!sports || sports.length === 0) {
         console.warn('ODDS WORKER: No active sports found in sports_config with fetch_on_schedule=true. Cycle ending.');
         this.isJobRunning = false;
         return;
       }
       
-      console.log(`Found ${sports.length} scheduled sports to process.`);
-      const batchSize = 5; 
+      const batchSize = 5;
       for (let i = 0; i < sports.length; i += batchSize) {
         const batch = sports.slice(i, i + batchSize);
         console.log(` -> Processing batch ${Math.floor(i / batchSize) + 1} of ${Math.ceil(sports.length / batchSize)}...`);
@@ -79,8 +78,6 @@ class InstitutionalOddsIngestionEngine {
               console.log(`    -> Fetched ${oddsForSport.length} games for ${sport.sport_key}.`);
               await DatabaseService.upsertGames(oddsForSport);
               totalUpsertedCount += oddsForSport.length;
-            } else {
-              console.log(`    -> No new odds found for ${sport.sport_key}.`);
             }
           } catch (e) {
               console.error(`    -> Failed to process odds for ${sport.sport_key}:`, e.message);
@@ -97,7 +94,7 @@ class InstitutionalOddsIngestionEngine {
       if (totalUpsertedCount > 0) {
         console.log(`✅ Ingestion cycle complete. Total upserted games: ${totalUpsertedCount}.`);
       } else {
-        console.log('✅ Ingestion cycle complete. No new odds were found across all configured sports.');
+        console.log('Ingestion cycle complete. No new odds were found across all sports.');
       }
       
     } catch (error) {
