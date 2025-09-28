@@ -4,22 +4,22 @@ import axios from 'axios';
 import env from '../config/env.js';
 import redisClient from './redisService.js';
 import { sentryService } from './sentryService.js';
+import rateLimitService from './rateLimitService.js';
 
 // CONFIG
-const CACHE_TTL_ODDS = 60;     // 1 minute for live featured markets
-const CACHE_TTL_PROPS = 120;   // 2 minutes for props (slower-changing)
-const LOCK_MS = 8000;          // short lock to prevent stampede
+const CACHE_TTL_ODDS = 60;     // seconds
+const CACHE_TTL_PROPS = 120;   // seconds
+const LOCK_MS = 8000;          // ms
 const RETRY_MS = 150;
 
 const ODDS_BASE = 'https://api.the-odds-api.com/v4';
 
-// Small helper for lock + TTL cache to prevent stampedes [web:606][web:609]
+// Cache-aside with short lock to prevent stampede
 async function getOrSetJSON(redis, key, ttlSec, loader) {
   const cached = await redis.get(key);
   if (cached) return JSON.parse(cached);
 
   const lockKey = `lock:${key}`;
-  // SET NX + PX (ms) basic lock; see Redis locking pattern [web:614]
   const gotLock = await redis.set(lockKey, '1', { NX: true, PX: LOCK_MS });
   if (gotLock) {
     try {
@@ -36,7 +36,6 @@ async function getOrSetJSON(redis, key, ttlSec, loader) {
       const again = await redis.get(key);
       if (again) return JSON.parse(again);
     }
-    // last resort: load once to avoid deadlock
     const data = await loader();
     await redis.set(key, JSON.stringify(data), { EX: ttlSec });
     return data;
@@ -46,48 +45,56 @@ async function getOrSetJSON(redis, key, ttlSec, loader) {
 class OddsService {
   constructor() {
     this.apiProviders = [
-      this._fetchFromTheOddsAPI,
-      this._fetchFromSportRadar,
+      this._fetchFromTheOddsAPI.bind(this),
+      this._fetchFromSportRadar.bind(this),
     ];
   }
 
   // --- Public Methods ---
 
-  /**
-   * Fetches game odds for a given sport with cache-aside and provider fallback.
-   * Uses featured markets only (h2h, spreads, totals) for speed and quota efficiency. [web:363][web:617]
-   */
-  async getSportOdds(sportKey, { regions = 'us', markets = 'h2h,spreads,totals', oddsFormat = 'american' } = {}) {
+  // Featured markets (h2h, spreads, totals) with quota-aware fallback
+  async getSportOdds(
+    sportKey,
+    { regions = 'us', markets = 'h2h,spreads,totals', oddsFormat = 'american' } = {}
+  ) {
     const redis = await redisClient;
     const cacheKey = `odds:${sportKey}:${regions}:${markets}:${oddsFormat}`;
 
     try {
       return await getOrSetJSON(redis, cacheKey, CACHE_TTL_ODDS, async () => {
-        // Try providers in order; first success wins
+        let rows = [];
         for (const provider of this.apiProviders) {
           try {
-            const oddsData = await provider.call(this, sportKey, { regions, markets, oddsFormat });
-            if (oddsData && oddsData.length > 0) return oddsData;
+            // Skip live The Odds API if snapshot says remaining === 0
+            if (provider === this._fetchFromTheOddsAPI && await rateLimitService.shouldBypassLive('theodds')) {
+              // Try next provider (e.g., Sportradar) without wasting credits
+              continue;
+            }
+            rows = await provider(sportKey, { regions, markets, oddsFormat });
+            if (rows && rows.length) return rows;
           } catch (error) {
-            console.error(`API provider ${provider.name} failed for ${sportKey}:`, error.message);
-            sentryService.captureError(error, { component: 'odds_service_provider_failure', provider: provider.name, sportKey });
+            // Record headers if present (captures x-requests-remaining etc.)
+            if (provider === this._fetchFromTheOddsAPI && error?.response?.headers) {
+              await rateLimitService.saveProviderQuota('theodds', error.response.headers);
+            }
+            // On 429 stop hitting this provider; will fall through to next or cache
+            if (error?.response?.status === 429) break;
+            sentryService.captureError(error, {
+              component: 'odds_service_provider_failure',
+              provider: provider.name,
+              sportKey,
+            });
           }
         }
-        console.warn(`All API providers failed to return data for ${sportKey}.`);
-        return [];
+        return rows || [];
       });
     } catch (e) {
-      console.error(`getSportOdds error for ${sportKey}:`, e.message);
       sentryService.captureError(e, { component: 'odds_service_cache', sportKey });
       return [];
     }
   }
 
-  /**
-   * Fetches detailed player prop markets for a specific game.
-   * IMPORTANT: Uses event-odds endpoint and player_* markets; regions OR bookmakers must be set. [web:363][web:385]
-   * Returns array of bookmakers payload (pass-through) or [] on failure.
-   */
+  // Player props for one event with quota-aware fallback
   async getPlayerPropsForGame(
     sportKey,
     gameId,
@@ -99,51 +106,61 @@ class OddsService {
 
     try {
       return await getOrSetJSON(redis, cacheKey, CACHE_TTL_PROPS, async () => {
-        console.log(`CACHE MISS for player props: ${gameId}. Fetching...`);
+        // If quota exhausted, return empty (or whatever is already cached by getOrSetJSON)
+        if (await rateLimitService.shouldBypassLive('theodds')) return [];
+
         try {
-          const url = `${ODDS_BASE}/sports/${sportKey}/events/${gameId}/odds`; // event-odds endpoint [web:363]
+          const url = `${ODDS_BASE}/sports/${sportKey}/events/${gameId}/odds`;
           const params = { apiKey: env.THE_ODDS_API_KEY, oddsFormat, markets, dateFormat: 'iso' };
           if (bookmakers) params.bookmakers = bookmakers; else params.regions = regions;
-          const { data } = await axios.get(url, { params });
 
-          const props = data?.bookmakers || [];
+          const res = await axios.get(url, { params });
+          await rateLimitService.saveProviderQuota('theodds', res.headers);
+          const props = res.data?.bookmakers || [];
           return props;
         } catch (error) {
-          // 422 = unprocessable (invalid event id, markets not supported, etc.) [web:559]
-          console.error(`Failed to fetch player props for game ${gameId}:`, error.message);
-          sentryService.captureError(error, { component: 'odds_service_player_props', sportKey, gameId, regions, bookmakers, markets });
+          if (error?.response?.headers) {
+            await rateLimitService.saveProviderQuota('theodds', error.response.headers);
+          }
+          // On 429 return [] to avoid burning credits; cache layer will keep prior value if any
+          if (error?.response?.status === 429) return [];
+          sentryService.captureError(error, {
+            component: 'odds_service_player_props',
+            sportKey, gameId, regions, bookmakers, markets
+          });
           return [];
         }
       });
     } catch (e) {
-      console.error(`Redis cache error for player props ${gameId}:`, e.message);
       sentryService.captureError(e, { component: 'odds_service_player_props_cache', gameId });
       return [];
     }
   }
 
-  // --- Private API Fetching and Transformation Logic ---
+  // --- Private Providers ---
 
-  /**
-   * The Odds API featured markets (fast path). [web:363][web:617]
-   */
-  async _fetchFromTheOddsAPI(sportKey, { regions = 'us', markets = 'h2h,spreads,totals', oddsFormat = 'american' } = {}) {
+  // The Odds API featured markets (captures quota headers on success)
+  async _fetchFromTheOddsAPI(
+    sportKey,
+    { regions = 'us', markets = 'h2h,spreads,totals', oddsFormat = 'american' } = {}
+  ) {
     const url = `${ODDS_BASE}/sports/${sportKey}/odds`;
-    const { data } = await axios.get(url, {
+    const res = await axios.get(url, {
       params: { apiKey: env.THE_ODDS_API_KEY, regions, markets, oddsFormat, dateFormat: 'iso' }
     });
-    return this._transformTheOddsAPIData(data);
+    await rateLimitService.saveProviderQuota('theodds', res.headers);
+    return this._transformTheOddsAPIData(res.data);
   }
 
-  /**
-   * Sportradar schedule fallback (structure kept; transformation uses existing mapper).
-   */
+  // Sportradar schedule fallback (no quota headers assumed)
   async _fetchFromSportRadar(sportKey) {
     const radarSportKey = sportKey.split('_')[1] || 'nfl';
     const url = `https://api.sportradar.us/odds/v1/en/us/sports/${radarSportKey}/schedule.json`;
-    const { data } = await axios.get(url, { params: { api_key: env.SPORTRADAR_API_KEY } });
-    return this._transformSportRadarData(data.sport_events, sportKey);
+    const res = await axios.get(url, { params: { api_key: env.SPORTRADAR_API_KEY } });
+    return this._transformSportRadarData(res.data?.sport_events, sportKey);
   }
+
+  // --- Mappers ---
 
   _transformTheOddsAPIData(data) {
     return (data || []).map(d => ({
