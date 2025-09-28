@@ -10,7 +10,7 @@
   "scripts": {
       "start": "NODE_OPTIONS='--max-old-space-size=192' node src/bot.js",
     "dev": "NODE_ENV=development nodemon src/bot.js",
-    "worker:odds": "NODE_OPTIONS='--max-old-space-size=128' node src/workers/oddsWorker.js",
+    "worker:odds": "NODE_OPTIONS='--max-old-space-size=128' node src/workers/oddsIngestion.js"
     "worker:notifications": "NODE_OPTIONS='--max-old-space-size=128' node src/workers/notificationWorker.js",
     "lint": "eslint . --ext .js",
     "format": "prettier --write \"src/**/*.js\""
