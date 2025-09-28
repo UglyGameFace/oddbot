@@ -54,7 +54,7 @@ class AIService {
 
   async _generateWithGemini(sportKey, numLegs, mode, betType) {
     // FIX #1: Corrected model name for this SDK version.
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-pro', safetySettings, generationConfig: { maxOutputTokens: 4096 } });
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.0-pro', safetySettings, generationConfig: { maxOutputTokens: 4096 } });
     let finalPrompt;
 
     const betTypeInstruction = betType === 'props'
