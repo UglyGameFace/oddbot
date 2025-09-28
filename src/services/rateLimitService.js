@@ -58,25 +58,57 @@ class EnterpriseRateLimitService {
     const h = headers || {};
 
     if (provider === 'theodds') {
-      // The Odds API response headers
-      // x-requests-remaining, x-requests-used, x-requests-last
       return {
         provider,
         remaining: num(h['x-requests-remaining']),
         used: num(h['x-requests-used']),
         limit: null,
         reset: null,
-        window: null,
+        window: 'monthly',
         raw: pick(h, ['x-requests-remaining','x-requests-used','x-requests-last']),
       };
     }
+	
+    if (provider === 'sportradar') {
+      // SportRadar does not seem to provide standard rate limit headers per call.
+      // Quotas are viewed in the user account dashboard. This will return nulls.
+      return {
+        provider,
+        remaining: null,
+        used: null,
+        limit: '1,000 requests/month (Trial)', // Manually noted from docs
+        reset: 'Rolling 30-day',
+        window: '1 QPS',
+        raw: {},
+      };
+    }
 
-    // Generic X-RateLimit-* or RateLimit draft headers
-    // X-RateLimit-Remaining, X-RateLimit-Limit, X-RateLimit-Reset, RateLimit, RateLimit-Policy
+    if (provider === 'apisports') {
+      // API-Sports uses X-RateLimit headers
+      // https://www.api-football.com/documentation-v3#section/Information/Rate-Limit
+      const remaining = num(h['x-ratelimit-requests-remaining'] ?? h['X-RateLimit-Remaining']);
+      const limit = num(h['x-ratelimit-requests-limit'] ?? h['X-RateLimit-Limit']);
+      return {
+        provider,
+        remaining,
+        used: limit != null && remaining != null ? limit - remaining : null,
+        limit: limit,
+        reset: null,
+        window: 'Per Day / Per Minute',
+        raw: pick(h, [
+            'x-ratelimit-requests-remaining',
+            'x-ratelimit-requests-limit',
+            'X-RateLimit-Remaining',
+            'X-RateLimit-Limit'
+        ]),
+      };
+    }
+
+    // Generic fallback for any other provider
     const remaining = num(h['x-ratelimit-remaining'] ?? h['x-rate-limit-remaining']);
     const limit = num(h['x-ratelimit-limit'] ?? h['x-rate-limit-limit']);
     const reset = num(h['x-ratelimit-reset'] ?? h['x-rate-limit-reset']);
-    const window = h['ratelimit-policy'] ?? h['ratelimit'] ?? null; // draft fields
+    const window = h['ratelimit-policy'] ?? h['ratelimit'] ?? null;
     return {
       provider,
       remaining,
