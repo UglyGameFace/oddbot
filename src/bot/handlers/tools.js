@@ -10,7 +10,6 @@ import axios from 'axios';
 
 export function registerTools(bot) {
   bot.onText(/^\/tools$/, async (msg) => {
-    // In a production bot, you might add a check here to ensure msg.from.id is an admin
     await sendToolsMenu(bot, msg.chat.id);
   });
 }
@@ -42,6 +41,10 @@ export function registerCommonCallbacks(bot) {
     if (action === 'ingest') {
       return handleManualIngest(bot, chatId, messageId);
     }
+    // **NEW:** Handle the odds freshness check
+    if (action === 'freshness') {
+        return handleOddsFreshness(bot, chatId, messageId);
+    }
   });
 }
 
@@ -51,9 +54,10 @@ async function sendToolsMenu(bot, chatId, messageId = null) {
   const text = '🛠️ *Admin Tools*\n\nSelect a tool to use:';
   const keyboard = [
     [{ text: '🔄 Trigger Odds Ingestion', callback_data: 'tools_ingest' }],
+    [{ text: '📊 Odds Freshness', callback_data: 'tools_freshness' }], // <-- NEW BUTTON
     [{ text: '🧹 Clear Redis Cache', callback_data: 'tools_cache' }],
     [{ text: '📡 Check API Status', callback_data: 'tools_apistatus' }],
-    [{ text: '📊 Get Database & Quota Stats', callback_data: 'tools_dbstats' }]
+    [{ text: '📈 Get Database & Quota Stats', callback_data: 'tools_dbstats' }]
   ];
   const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
 
@@ -64,6 +68,49 @@ async function sendToolsMenu(bot, chatId, messageId = null) {
   }
 }
 
+// **NEW:** Handler function for the odds freshness report
+async function handleOddsFreshness(bot, chatId, messageId) {
+    await bot.editMessageText('📊 Checking odds data freshness...', { chat_id: chatId, message_id: messageId });
+    try {
+        const redis = await redisClient;
+        const lastIngestISO = await redis.get('meta:last_successful_ingestion');
+        const dateRange = await databaseService.getOddsDateRange();
+
+        let freshnessText = '*📊 Odds Data Freshness Report*\n\n';
+
+        if (lastIngestISO) {
+            const lastIngestDate = new Date(lastIngestISO);
+            freshnessText += `*Last Successful Refresh:*\n${lastIngestDate.toLocaleString('en-US', { timeZone: 'America/New_York' })}\n\n`;
+        } else {
+            freshnessText += `*Last Successful Refresh:*\n_No successful run has been recorded yet._\n\n`;
+        }
+
+        if (dateRange && dateRange.min_date && dateRange.max_date) {
+            const minDate = new Date(dateRange.min_date);
+            const maxDate = new Date(dateRange.max_date);
+            freshnessText += `*Game Dates in Database:*\nFrom: ${minDate.toLocaleDateString()}\nTo:     ${maxDate.toLocaleDateString()}`;
+        } else {
+            freshnessText += `*Game Dates in Database:*\n_No games found in the database._`;
+        }
+
+        await bot.editMessageText(freshnessText, {
+            chat_id: chatId,
+            message_id: messageId,
+            parse_mode: 'Markdown',
+            reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] }
+        });
+
+    } catch (error) {
+        console.error('Odds freshness error:', error);
+        await bot.editMessageText('❌ Failed to generate freshness report.', {
+            chat_id: chatId,
+            message_id: messageId,
+            reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] }
+        });
+    }
+}
+
+// ... (all your other existing good code remains here)
 async function handleManualIngest(bot, chatId, messageId) {
     try {
         const redis = await redisClient;
@@ -94,7 +141,7 @@ async function handleCacheClear(bot, chatId, messageId) {
   
   try {
     const redis = await redisClient;
-    const prefixes = ['odds:', 'player_props:', 'games:', 'user:state:', 'parlay:slip:', 'user:config:', 'token:', 'quota:'];
+    const prefixes = ['odds:', 'player_props:', 'games:', 'user:state:', 'parlay:slip:', 'user:config:', 'token:', 'quota:', 'meta:'];
     let clearedCount = 0;
     
     for (const prefix of prefixes) {
@@ -180,7 +227,7 @@ async function handleDbStats(bot, chatId, messageId) {
         let statsText = '📊 *Database Game Counts*\n\n';
         if (stats && stats.length > 0) {
             stats.forEach(stat => {
-                const title = stat.sport_title || 'Unknown/Other'; // Handles null titles gracefully
+                const title = stat.sport_title || 'Unknown/Other';
                 statsText += `• *${title}:* ${stat.game_count} games\n`;
             });
         } else {
