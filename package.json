@@ -1,7 +1,7 @@
 {
   "name": "institutional-ai-parlay-bot",
   "version": "3.0.0",
-  "description": "Fully-featured Telegram parlay bot with AI, analytics, ML, and scheduled caching",
+  "description": "Fully-featured Telegram parlay bot with AI, analytics, ML, and scheduled caching. Cache buster: 2",
   "main": "src/bot.js",
   "type": "module",
   "engines": {
@@ -38,7 +38,7 @@
     "pidusage": "^3.0.2"
   },
   "devDependencies": {
-    "eslint": "^8.40.0",
+    "eslint": "^8.4.0",
     "eslint-config-prettier": "^9.1.0",
     "nodemon": "^3.1.10",
     "prettier": "^3.0.0"
