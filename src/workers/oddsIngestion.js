@@ -5,64 +5,96 @@ import OddsService from '../services/oddsService.js';
 import { sentryService } from '../services/sentryService.js';
 import env from '../config/env.js';
 import gamesService from '../services/gamesService.js';
+import redisClient from '../services/redisService.js'; // Import the Redis client
 
-// FIX: Added a top-level, process-wide error catcher. This is the definitive fix.
-// It will catch any unhandled promise rejection that might crash the worker silently.
+// FIX: Added a top-level, process-wide error catcher.
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ UNHANDLED REJECTION IN ODDS WORKER:', reason);
   sentryService.captureError(new Error(`Unhandled Rejection in odds worker: ${reason}`), { extra: { promise } });
-  // Optionally, you can decide to exit the process after a critical failure
-  // process.exit(1); 
 });
+
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 class InstitutionalOddsIngestionEngine {
   constructor() {
     this.isJobRunning = false;
-    try {
-      this.initializeScheduling();
-    } catch (error) {
-      console.error('❌ FATAL: Failed to initialize the odds ingestion engine scheduling.', error);
-      sentryService.captureError(error, { component: 'odds_ingestion_worker_initialization' });
-    }
+    this.initializeScheduling();
+    this.initializeManualTrigger(); // <-- NEW: Initialize the manual trigger listener
   }
 
   initializeScheduling() {
-    cron.schedule('*/15 * * * *', () => this.runIngestionCycle(), { timezone: env.TIMEZONE });
+    cron.schedule('*/15 * * * *', () => this.runIngestionCycle('cron'), { timezone: env.TIMEZONE });
     console.log('✅ Odds Ingestion Engine scheduled to run every 15 minutes.');
     // Run once on startup, after a brief delay.
-    setTimeout(() => this.runIngestionCycle(), 5000); 
+    setTimeout(() => this.runIngestionCycle('startup'), 5000); 
   }
 
-  async runIngestionCycle() {
+  // --- NEW FUNCTION to listen for manual triggers via Redis ---
+  async initializeManualTrigger() {
+    try {
+      const redis = await redisClient;
+      // Create a duplicate client for subscribing to avoid blocking other commands
+      const subscriber = redis.duplicate(); 
+      await subscriber.connect();
+      
+      const channel = 'odds_ingestion_trigger';
+      await subscriber.subscribe(channel);
+      console.log(`✅ Worker listening for manual triggers on Redis channel: ${channel}`);
+
+      subscriber.on('message', (ch, message) => {
+        if (ch === channel && message === 'run') {
+          console.log(' MANUAL TRIGGER RECEIVED! Starting ingestion cycle...');
+          this.runIngestionCycle('manual');
+        }
+      });
+    } catch (error) {
+        console.error('❌ Failed to initialize Redis subscriber for manual triggers:', error);
+        sentryService.captureError(error, { component: 'odds_ingestion_worker_redis_subscriber' });
+    }
+  }
+
+
+  async runIngestionCycle(source = 'unknown') {
     if (this.isJobRunning) {
-      console.warn('Ingestion cycle skipped: Previous cycle still running.');
+      console.warn(`Ingestion cycle skipped (source: ${source}): Previous cycle still running.`);
       return;
     }
     this.isJobRunning = true;
-    console.log('🚀 Starting institutional odds ingestion cycle...');
+    console.log(`🚀 Starting institutional odds ingestion cycle (source: ${source})...`);
     let totalUpsertedCount = 0;
 
     try {
-      // This initial call is the most likely point of failure.
       const sports = await gamesService.getAvailableSports();
       
       if (!sports || sports.length === 0) {
-        console.warn('ODDS WORKER: No sports available from GamesService. This could be due to invalid API keys or no games in the database. Cycle will try again later.');
+        console.warn('ODDS WORKER: No sports available from GamesService. Cycle will try again later.');
         this.isJobRunning = false;
         return;
       }
 
-      for (const sport of sports) {
-        try {
-          const oddsForSport = await OddsService.getSportOdds(sport.sport_key);
-          if (oddsForSport && oddsForSport.length > 0) {
-            console.log(`  -> Fetched ${oddsForSport.length} games for ${sport.sport_key}. Upserting now...`);
-            await DatabaseService.upsertGames(oddsForSport);
-            totalUpsertedCount += oddsForSport.length;
+      // Process in batches to avoid rate limits
+      const batchSize = 5;
+      for (let i = 0; i < sports.length; i += batchSize) {
+        const batch = sports.slice(i, i + batchSize);
+        console.log(` -> Processing batch ${Math.floor(i / batchSize) + 1} of ${Math.ceil(sports.length / batchSize)}...`);
+        
+        await Promise.all(batch.map(async (sport) => {
+          try {
+            const oddsForSport = await OddsService.getSportOdds(sport.sport_key);
+            if (oddsForSport && oddsForSport.length > 0) {
+              console.log(`    -> Fetched ${oddsForSport.length} games for ${sport.sport_key}.`);
+              await DatabaseService.upsertGames(oddsForSport);
+              totalUpsertedCount += oddsForSport.length;
+            }
+          } catch (e) {
+              console.error(`    -> Failed to process odds for ${sport.sport_key}:`, e.message);
+              sentryService.captureError(e, { component: 'odds_ingestion_worker_sport_failure', sport_key: sport.sport_key });
           }
-        } catch (e) {
-            console.error(`Failed to process odds for ${sport.sport_key} during ingestion:`, e.message);
-            sentryService.captureError(e, { component: 'odds_ingestion_worker_sport_failure', sport_key: sport.sport_key });
+        }));
+
+        if (i + batchSize < sports.length) {
+            console.log(` -> Batch complete. Waiting for 2 seconds before next batch...`);
+            await delay(2000);
         }
       }
 
