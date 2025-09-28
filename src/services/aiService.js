@@ -52,10 +52,10 @@ class AIService {
   }
 
   async _generateWithGemini(sportKey, numLegs, mode, betType) {
-    const model = genAI.getGenerativeModel({ model: 'gemini-pro', safetySettings, generationConfig: { maxOutputTokens: 4096 } });
+    // FIX #1: Updated the model name from the deprecated 'gemini-pro' to a current, valid model.
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash', safetySettings, generationConfig: { maxOutputTokens: 4096 } });
     let finalPrompt;
 
-    // Dynamically generate the instruction for bet type
     const betTypeInstruction = betType === 'props'
       ? 'Your parlay must consist exclusively of **Player Prop** bets (e.g., player points, assists, touchdowns, yards).'
       : 'The legs can be a mix of moneyline (h2h), spreads, or player props.';
@@ -72,7 +72,13 @@ class AIService {
       console.log(`AI Service: Using live API mode for ${betType}.`);
       const liveGames = await oddsService.getSportOdds(sportKey);
       if (!liveGames || !liveGames.length) throw new Error('Could not fetch live odds.');
-      const enrichedGames = await Promise.all(liveGames.slice(0, 10).map(async (g) => ({ ...g, player_props: await oddsService.getPlayerPropsForGame(sportKey, g.id) })));
+      
+      // FIX #2: Changed `g.id` to `g.event_id` to pass the correct identifier for fetching player props.
+      const enrichedGames = await Promise.all(liveGames.slice(0, 10).map(async (g) => ({
+        ...g,
+        player_props: await oddsService.getPlayerPropsForGame(sportKey, g.event_id)
+      })));
+      
       finalPrompt = `You are an expert sports betting analyst. Construct a **${numLegs}-leg parlay** from the provided game data. ${betTypeInstruction} Provide a detailed justification for each leg. Your final output must be ONLY a valid JSON object. JSON FORMAT: { "parlay_legs": [ { "game": "...", "market": "...", "pick": "...", "justification": "..." } ], "confidence_score": 0.85 } **Live Game and Player Prop Data:** \`\`\`json\n${JSON.stringify(enrichedGames, null, 2)}\n\`\`\``;
     }
 
@@ -89,7 +95,7 @@ class AIService {
   }
 
   async validateOdds(oddsData) {
-    const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
     const prompt = `Is this JSON data structured correctly for sports odds? Respond only with {"valid": true/false}. Data: ${JSON.stringify(oddsData)}`;
     try {
       const result = await model.generateContent(prompt);
