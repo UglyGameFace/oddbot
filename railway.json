@@ -1,13 +1,5 @@
 {
   "$schema": "https://railway.app/railway.schema.json",
-  "deploy": {
-    "startCommand": "npm start",
-    "restartPolicyType": "ON_FAILURE",
-    "healthcheckPath": "/liveness",
-    "healthcheckTimeout": 30,
-    "healthcheckInterval": 15,
-    "healthcheckRetries": 5
-  },
   "services": [
     {
       "name": "parlay-bot",
@@ -16,6 +8,13 @@
       "startCommand": "npm start",
       "envVars": {
         "PORT": "8080"
+      },
+      "deploy": {
+        "restartPolicyType": "ON_FAILURE",
+        "healthcheckPath": "/liveness",
+        "healthcheckTimeout": 30,
+        "healthcheckInterval": 15,
+        "healthcheckRetries": 5
       }
     },
     {
