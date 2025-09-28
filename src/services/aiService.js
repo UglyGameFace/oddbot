@@ -36,12 +36,13 @@ class AIService {
     const prompt = `You are a precise, data-driven sports betting analyst. Your only task is to perform a web search to find the best ${numLegs}-leg parlay for ${sportKey}. ${betTypeInstruction} Focus on statistical mismatches, recent performance data, and confirmed player injuries. You must find real bets on major sportsbooks (DraftKings, FanDuel, BetMGM). Your final output must be ONLY a valid JSON object in the specified format, with no other text. JSON FORMAT: { "parlay_legs": [ { "game": "...", "market": "...", "pick": "...", "sportsbook": "...", "justification": "..." } ], "confidence_score": 0.80 }`;
 
     try {
-      const response = await axios.post('https://api.perplexity.ai/chat/completions', {
+      const response = await axios.post('[https://api.perplexity.ai/chat/completions](https://api.perplexity.ai/chat/completions)', {
         model: 'sonar-pro',
         messages: [{ role: 'system', content: 'You are a sports betting analyst.' }, { role: 'user', content: prompt }],
       }, { headers: { Authorization: `Bearer ${env.PERPLEXITY_API_KEY}` } });
 
       const text = response.data.choices[0].message.content;
+      // FIX: Robust JSON parsing
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error('Perplexity did not return valid JSON.');
       return JSON.parse(jsonMatch[0]);
@@ -52,8 +53,8 @@ class AIService {
   }
 
   async _generateWithGemini(sportKey, numLegs, mode, betType) {
-    // FIX #1: Updated the model name from the deprecated 'gemini-pro' to a current, valid model.
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-pro', safetySettings, generationConfig: { maxOutputTokens: 4096 } });
+    // FIX #1: Corrected model name for this SDK version.
+    const model = genAI.getGenerativeModel({ model: 'gemini-pro', safetySettings, generationConfig: { maxOutputTokens: 4096 } });
     let finalPrompt;
 
     const betTypeInstruction = betType === 'props'
@@ -73,7 +74,7 @@ class AIService {
       const liveGames = await oddsService.getSportOdds(sportKey);
       if (!liveGames || !liveGames.length) throw new Error('Could not fetch live odds.');
       
-      // FIX #2: Changed `g.id` to `g.event_id` to pass the correct identifier for fetching player props.
+      // FIX #2: Changed `g.id` to `g.event_id` to pass the correct identifier.
       const enrichedGames = await Promise.all(liveGames.slice(0, 10).map(async (g) => ({
         ...g,
         player_props: await oddsService.getPlayerPropsForGame(sportKey, g.event_id)
@@ -86,8 +87,10 @@ class AIService {
       const result = await model.generateContent(finalPrompt);
       const response = await result.response;
       const text = response.text();
-      const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
-      return JSON.parse(cleanJson);
+      // FIX #3: More robust JSON cleaning to handle AI responses that aren't perfect JSON.
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error("AI response did not contain a valid JSON object.");
+      return JSON.parse(jsonMatch[0]);
     } catch (error) {
       console.error(`Gemini parlay generation error in ${mode} mode:`, error);
       throw new Error(`Failed to generate AI parlay using Gemini in ${mode} mode.`);
@@ -95,12 +98,15 @@ class AIService {
   }
 
   async validateOdds(oddsData) {
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
     const prompt = `Is this JSON data structured correctly for sports odds? Respond only with {"valid": true/false}. Data: ${JSON.stringify(oddsData)}`;
     try {
       const result = await model.generateContent(prompt);
       const response = await result.response;
-      return JSON.parse(response.text());
+      const text = response.text();
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) return { valid: false };
+      return JSON.parse(jsonMatch[0]);
     } catch (error) {
       console.error('AI validation error:', error);
       return { valid: false };
