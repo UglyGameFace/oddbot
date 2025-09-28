@@ -13,14 +13,10 @@ const safetySettings = [
   { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
 ];
 
-// --- Supported Gemini models for v1 generateContent (fast → strong) [web:457][web:464]
-const GEMINI_MODEL_CANDIDATES = [
-  'gemini-2.0-flash',
-  'gemini-1.5-pro',
-  'gemini-1.5-pro-latest',
-];
+// --- Supported Gemini models for v1 generateContent (fast → strong)
+const GEMINI_MODEL_CANDIDATES = ['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-pro-latest']; // [web:461]
 
-// --- Runtime model resolution using Models List to avoid retired IDs [web:461]
+// --- Runtime model resolution using Models List to avoid retired IDs
 async function pickSupportedModel(apiKey, candidates = GEMINI_MODEL_CANDIDATES) {
   try {
     const url = `https://generativelanguage.googleapis.com/v1/models?key=${apiKey}`;
@@ -40,22 +36,24 @@ function extractFirstJsonObject(text = '') {
   try { return JSON.parse(m[0]); } catch { return null; }
 }
 
-// --- Timezone/date helpers for display from ISO UTC commence_time [web:491][web:499]
+// --- Timezone/date helpers for display from ISO UTC commence_time
 const TZ = env.TIMEZONE || 'America/New_York';
 function formatLocal(isoUtc, tz = TZ) {
-  if (!isoUtc) return '';
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: tz, year: 'numeric', month: 'short', day: '2-digit',
-    hour: '2-digit', minute: '2-digit'
-  }).format(new Date(isoUtc));
+  try {
+    if (!isoUtc) return '';
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, year: 'numeric', month: 'short', day: '2-digit',
+      hour: '2-digit', minute: '2-digit'
+    }).format(new Date(isoUtc));
+  } catch { return ''; }
 }
 
-// --- Build upcoming fixtures to constrain AI and to bind legs post-gen [web:363]
+// --- Build upcoming fixtures to constrain AI and to bind legs post-gen
 async function getUpcomingFixtures(sportKey, hoursHorizon = 120) {
   const now = Date.now();
   const horizon = now + hoursHorizon * 3600_000;
 
-  let games = await oddsService.getSportOdds(sportKey);
+  let games = await oddsService.getSportOdds(sportKey); // featured markets feed [web:363]
   if (!games?.length) games = await gamesService.getGamesForSport(sportKey);
 
   return (games || [])
@@ -67,7 +65,7 @@ async function getUpcomingFixtures(sportKey, hoursHorizon = 120) {
       event_id: g.event_id || g.id || g.game_id || null,
       away_team: g.away_team,
       home_team: g.home_team,
-      commence_time: g.commence_time, // ISO 8601 UTC from provider [web:363][web:491]
+      commence_time: g.commence_time, // ISO 8601 UTC from provider
     }));
 }
 
@@ -93,14 +91,17 @@ function bindLegsToFixtures(legs = [], fixtures = []) {
 const genAI = new GoogleGenerativeAI(env.GOOGLE_GEMINI_API_KEY);
 
 class AIService {
-  async generateParlay(sportKey, numLegs = 2, mode = 'live', aiModel = 'gemini', betType = 'mixed') {
+  // NEW: accept options with includeProps flag; default remains unchanged for existing callers
+  async generateParlay(sportKey, numLegs = 2, mode = 'live', aiModel = 'gemini', betType = 'mixed', opts = {}) {
+    const includeProps = !!opts.includeProps;
+
     if (mode === 'web') {
       if (aiModel === 'perplexity' && env.PERPLEXITY_API_KEY) {
         return this._generateWithPerplexity(sportKey, numLegs, betType);
       }
-      return this._generateWithGemini(sportKey, numLegs, 'web', betType);
+      return this._generateWithGemini(sportKey, numLegs, 'web', betType, { includeProps });
     }
-    return this._generateWithGemini(sportKey, numLegs, mode, betType);
+    return this._generateWithGemini(sportKey, numLegs, mode, betType, { includeProps });
   }
 
   async _generateWithPerplexity(sportKey, numLegs, betType) {
@@ -111,32 +112,26 @@ class AIService {
 
     const prompt = `You are a precise, data-driven sports betting analyst. Your only task is to perform a web search to find the best ${numLegs}-leg parlay for ${sportKey}. ${betTypeInstruction} Focus on statistical mismatches, recent performance data, and confirmed player injuries. You must find real bets on major sportsbooks (DraftKings, FanDuel, BetMGM). Your final output must be ONLY a valid JSON object in the specified format, with no other text. JSON FORMAT: { "parlay_legs": [ { "game": "...", "market": "...", "pick": "...", "sportsbook": "...", "justification": "..." } ], "confidence_score": 0.80 }`;
 
-    try {
-      const response = await axios.post(
-        'https://api.perplexity.ai/chat/completions',
-        {
-          model: 'sonar-pro',
-          messages: [
-            { role: 'system', content: 'You are a sports betting analyst.' },
-            { role: 'user', content: prompt }
-          ],
-        },
-        { headers: { Authorization: `Bearer ${env.PERPLEXITY_API_KEY}` } }
-      );
+    const response = await axios.post(
+      'https://api.perplexity.ai/chat/completions',
+      {
+        model: 'sonar-pro',
+        messages: [
+          { role: 'system', content: 'You are a sports betting analyst.' },
+          { role: 'user', content: prompt }
+        ],
+      },
+      { headers: { Authorization: `Bearer ${env.PERPLEXITY_API_KEY}` } }
+    );
 
-      const text = response?.data?.choices?.[0]?.message?.content || '';
-      const obj = extractFirstJsonObject(text);
-      if (!obj) throw new Error('Perplexity did not return valid JSON.');
-      return obj;
-    } catch (error) {
-      console.error('Perplexity API error:', error?.message || error);
-      throw new Error('Failed to generate parlay with Perplexity.');
-    }
+    const text = response?.data?.choices?.[0]?.message?.content || '';
+    const obj = extractFirstJsonObject(text);
+    if (!obj) throw new Error('Perplexity did not return valid JSON.');
+    return obj;
   }
 
-  async _generateWithGemini(sportKey, numLegs, mode, betType) {
-    // Resolve supported model at runtime (prevents 404 on retired IDs) [web:461][web:457]
-    const modelId = await pickSupportedModel(env.GOOGLE_GEMINI_API_KEY);
+  async _generateWithGemini(sportKey, numLegs, mode, betType, { includeProps } = {}) {
+    const modelId = await pickSupportedModel(env.GOOGLE_GEMINI_API_KEY); // [web:461]
     const model = genAI.getGenerativeModel({
       model: modelId,
       safetySettings,
@@ -161,32 +156,12 @@ class AIService {
         + `Return ONLY JSON: {"parlay_legs":[{"game":"<Away @ Home>","market":"...","pick":"...","sportsbook":"...","justification":"..."}],"confidence_score":0.xx}\n`
         + `Fixtures (ISO UTC commence_time):\n\`\`\`json\n${JSON.stringify(fixtures, null, 2)}\n\`\`\``;
 
-      try {
-        const result = await model.generateContent(finalPrompt);
-        const text = result?.response?.text?.() ?? '';
-        const obj = extractFirstJsonObject(text);
-        if (!obj?.parlay_legs?.length) throw new Error('Invalid AI JSON.');
-        obj.parlay_legs = bindLegsToFixtures(obj.parlay_legs, fixtures); // attach game_date_utc/local
-        return obj;
-      } catch (error) {
-        console.error(`Gemini parlay generation error in web mode (model=${modelId}):`, error?.message || error);
-        // fallback across candidates if needed
-        for (const fallback of GEMINI_MODEL_CANDIDATES.filter(m => m !== modelId)) {
-          try {
-            const alt = genAI.getGenerativeModel({
-              model: fallback, safetySettings, generationConfig: { maxOutputTokens: 4096 },
-            });
-            const altResp = await alt.generateContent(finalPrompt);
-            const text = altResp?.response?.text?.() ?? '';
-            const obj = extractFirstJsonObject(text);
-            if (obj?.parlay_legs?.length) {
-              obj.parlay_legs = bindLegsToFixtures(obj.parlay_legs, fixtures);
-              return obj;
-            }
-          } catch {}
-        }
-        throw new Error('Failed to generate AI parlay using Gemini in web mode.');
-      }
+      const result = await model.generateContent(finalPrompt);
+      const text = result?.response?.text?.() ?? '';
+      const obj = extractFirstJsonObject(text);
+      if (!obj?.parlay_legs?.length) throw new Error('Invalid AI JSON.');
+      obj.parlay_legs = bindLegsToFixtures(obj.parlay_legs, fixtures); // attach game_date_utc/local
+      return obj;
     } else if (mode === 'db') {
       console.log('AI Service: Using database-only mode.');
       const gameData = await gamesService.getGamesForSport(sportKey);
@@ -207,28 +182,37 @@ class AIService {
         + `Return ONLY JSON: { "parlay_legs": [{"game": "<Away @ Home>","market":"...","pick":"...","justification":"..."}], "confidence_score": 0.75 }\n`
         + `Fixtures:\n\`\`\`json\n${JSON.stringify(fixtures.slice(0, 25), null, 2)}\n\`\`\``;
 
-      try {
-        const result = await model.generateContent(finalPrompt);
-        const text = result?.response?.text?.() ?? '';
-        const obj = extractFirstJsonObject(text);
-        if (!obj?.parlay_legs?.length) throw new Error('Invalid AI JSON.');
-        obj.parlay_legs = bindLegsToFixtures(obj.parlay_legs, fixtures);
-        return obj;
-      } catch (error) {
-        console.error('Gemini parlay generation error in db mode:', error?.message || error);
-        throw new Error('Failed to generate AI parlay using Gemini in db mode.');
-      }
+      const result = await model.generateContent(finalPrompt);
+      const text = result?.response?.text?.() ?? '';
+      const obj = extractFirstJsonObject(text);
+      if (!obj?.parlay_legs?.length) throw new Error('Invalid AI JSON.');
+      obj.parlay_legs = bindLegsToFixtures(obj.parlay_legs, fixtures);
+      return obj;
     } else {
       // live mode
       console.log(`AI Service: Using live API mode for ${betType}.`);
       const liveGames = await oddsService.getSportOdds(sportKey);
       if (!liveGames?.length) throw new Error('Could not fetch live odds.');
 
+      // NEW: gate props fetching by includeProps or explicit props mode
+      const shouldFetchProps = includeProps || betType === 'props';
       const enrichedGames = await Promise.all(
-        liveGames.slice(0, 10).map(async (g) => ({
-          ...g,
-          player_props: await oddsService.getPlayerPropsForGame(sportKey, g.event_id || g.id || g.game_id)
-        }))
+        liveGames.slice(0, 10).map(async (g) => {
+          if (!shouldFetchProps) return g;
+          const eventId = g.event_id || g.id || g.game_id;
+          if (!eventId) return { ...g, player_props: null };
+          try {
+            const props = await oddsService.getPlayerPropsForGame(sportKey, eventId, {
+              regions: 'us',
+              markets: 'player_points,player_assists,player_rebounds',
+              oddsFormat: 'american'
+            });
+            return { ...g, player_props: props };
+          } catch (e) {
+            console.warn(`Props unavailable for ${eventId}: ${e?.response?.status || e?.message}`);
+            return { ...g, player_props: null };
+          }
+        })
       );
 
       const fixtures = (liveGames || [])
@@ -241,23 +225,18 @@ class AIService {
         }));
 
       finalPrompt =
-        `You are an expert sports betting analyst. Build a ${numLegs}-leg parlay from the provided live odds and props. `
+        `You are an expert sports betting analyst. Build a ${numLegs}-leg parlay from the provided live odds${shouldFetchProps ? ' and props' : ''}. `
         + `${betTypeInstruction} Provide detailed justification per leg. `
         + `Return ONLY JSON: { "parlay_legs": [ { "game": "<Away @ Home>", "market": "...", "pick": "...", "justification": "..." } ], "confidence_score": 0.85 }\n`
-        + `Live Odds/Props (truncated):\n\`\`\`json\n${JSON.stringify(enrichedGames, null, 2)}\n\`\`\`\n`
+        + `Live ${shouldFetchProps ? 'Odds/Props' : 'Odds'} Snapshot:\n\`\`\`json\n${JSON.stringify(enrichedGames, null, 2)}\n\`\`\`\n`
         + `Fixtures:\n\`\`\`json\n${JSON.stringify(fixtures.slice(0, 25), null, 2)}\n\`\`\``;
 
-      try {
-        const result = await model.generateContent(finalPrompt);
-        const text = result?.response?.text?.() ?? '';
-        const obj = extractFirstJsonObject(text);
-        if (!obj?.parlay_legs?.length) throw new Error('Invalid AI JSON.');
-        obj.parlay_legs = bindLegsToFixtures(obj.parlay_legs, fixtures);
-        return obj;
-      } catch (error) {
-        console.error('Gemini parlay generation error in live mode:', error?.message || error);
-        throw new Error('Failed to generate AI parlay using Gemini in live mode.');
-      }
+      const result = await model.generateContent(finalPrompt);
+      const text = result?.response?.text?.() ?? '';
+      const obj = extractFirstJsonObject(text);
+      if (!obj?.parlay_legs?.length) throw new Error('Invalid AI JSON.');
+      obj.parlay_legs = bindLegsToFixtures(obj.parlay_legs, fixtures);
+      return obj;
     }
   }
 
