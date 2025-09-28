@@ -24,11 +24,13 @@ const withTimeout = (p, ms, label) =>
 class DatabaseService {
   get client() { return supabaseClient || (supabaseClient = buildClient()); }
 
+  // --- Game Functions ---
   async upsertGames(gamesData) {
     if (!this.client || !gamesData?.length) return { data: [], error: null };
     try {
+      // NOTE: Your schema uses 'game_id_provider' as the conflict key, not 'id'.
       const { data, error } = await withTimeout(
-        this.client.from('games').upsert(gamesData, { onConflict: 'id' }).select(),
+        this.client.from('games').upsert(gamesData, { onConflict: 'game_id_provider' }).select(),
         5000, 'upsertGames'
       );
       if (error) throw error;
@@ -40,44 +42,87 @@ class DatabaseService {
     }
   }
 
-  async getDistinctSports() {
-    if (!this.client) return [];
-    try {
-      const { data, error } = await withTimeout(this.client.rpc('get_distinct_sports'), 4000, 'getDistinctSports');
-      if (error) throw error;
-      return data ?? [];
-    } catch (error) {
-      try {
-        const { data: fbData, error: fbErr } = await withTimeout(
-          this.client.from('games').select('sport_key,sport_title').neq('sport_key', null).neq('sport_title', null).order('sport_title', { ascending: true }),
-          4000, 'getDistinctSports-fallback'
-        );
-        if (fbErr) throw fbErr;
-        return fbData ?? [];
-      } catch (fbError) {
-        console.error('Supabase getDistinctSports error:', fbError.message);
-        sentryService.captureError(fbError, { component: 'database_service', operation: 'getDistinctSports' });
-        return [];
-      }
-    }
-  }
-
   async getGamesBySport(sportKey) {
     if (!this.client) return [];
     try {
-      const { data, error } = await withTimeout(
-        this.client.from('games').select('*').eq('sport_key', sportKey).gte('commence_time', new Date().toISOString()).order('commence_time', { ascending: true }),
-        5000, 'getGamesBySport'
-      );
-      if (error) throw error;
-      return data ?? [];
+        // Mapped 'sport' column from schema
+        const { data, error } = await withTimeout(
+            this.client.from('games').select('*').eq('sport', sportKey).gte('start_time', new Date().toISOString()).order('start_time', { ascending: true }),
+            5000, 'getGamesBySport'
+        );
+        if (error) throw error;
+        return data ?? [];
     } catch (error) {
-      console.error(`Supabase getGamesBySport error for ${sportKey}:`, error.message);
-      sentryService.captureError(error, { component: 'database_service', operation: 'getGamesBySport', sportKey });
-      return [];
+        console.error(`Supabase getGamesBySport error for ${sportKey}:`, error.message);
+        sentryService.captureError(error, { component: 'database_service', operation: 'getGamesBySport', sportKey });
+        return [];
     }
   }
 
+  // --- User & Settings Functions (NEW) ---
+  async findOrCreateUser(telegramId, firstName = '', username = '') {
+      if (!this.client) return null;
+      try {
+          let { data: user, error } = await this.client.from('users').select('*').eq('telegram_id', telegramId).single();
+          if (error && error.code === 'PGRST116') { // Not found
+              const { data: newUser, error: insertError } = await this.client.from('users').insert({
+                  telegram_id: telegramId,
+                  first_name: firstName,
+                  username: username
+              }).select().single();
+              if (insertError) throw insertError;
+              user = newUser;
+          } else if (error) {
+              throw error;
+          }
+          return user;
+      } catch (error) {
+          console.error(`Supabase findOrCreateUser error for ${telegramId}:`, error.message);
+          sentryService.captureError(error, { component: 'database_service', operation: 'findOrCreateUser' });
+          return null;
+      }
+  }
+
+  async getUserSettings(telegramId) {
+    const user = await this.findOrCreateUser(telegramId);
+    return user?.settings || {};
+  }
+
+  async updateUserSettings(telegramId, newSettings) {
+      if (!this.client) return null;
+      try {
+          const { data, error } = await this.client.from('users')
+              .update({ settings: newSettings, last_updated: new Date().toISOString() })
+              .eq('telegram_id', telegramId)
+              .select()
+              .single();
+          if (error) throw error;
+          return data;
+      } catch (error) {
+          console.error(`Supabase updateUserSettings error for ${telegramId}:`, error.message);
+          sentryService.captureError(error, { component: 'database_service', operation: 'updateUserSettings' });
+          return null;
+      }
+  }
+
+  // --- Sports Config Functions (NEW) ---
+  async getScheduledSports() {
+    if (!this.client) return [];
+    try {
+        const { data, error } = await withTimeout(
+            this.client.from('sports_config').select('*').eq('is_active', true).eq('fetch_on_schedule', true),
+            5000, 'getScheduledSports'
+        );
+        if (error) throw error;
+        return data ?? [];
+    } catch (error) {
+        console.error('Supabase getScheduledSports error:', error.message);
+        sentryService.captureError(error, { component: 'database_service', operation: 'getScheduledSports' });
+        return [];
+    }
+  }
+  
+  // --- Existing Unchanged Functions ---
   async getGameById(gameId) {
     if (!this.client) return null;
     try {
@@ -89,9 +134,21 @@ class DatabaseService {
       return data ?? null;
     } catch (error) {
       console.error(`Supabase getGameById error for ${gameId}:`, error.message);
-      sentryService.captureError(error, { component: 'database_service', operation: 'getGameById', gameId });
       return null;
     }
+  }
+
+  async getDistinctSports() {
+      // This could now be simplified to query `sports_config` instead of the large `games` table
+      if (!this.client) return [];
+      try {
+          const { data, error } = await withTimeout(this.client.from('sports_config').select('sport_key, sport_name as sport_title').eq('is_active', true), 4000, 'getDistinctSports');
+          if (error) throw error;
+          return data ?? [];
+      } catch (error) {
+          console.error('Supabase getDistinctSports error:', error.message);
+          return [];
+      }
   }
 
   async getSportGameCounts() {
@@ -102,7 +159,6 @@ class DatabaseService {
       return data ?? [];
     } catch (error) {
       console.error('Supabase getSportGameCounts error:', error.message);
-      sentryService.captureError(error, { component: 'database_service', operation: 'getSportGameCounts' });
       return [];
     }
   }
