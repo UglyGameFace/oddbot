@@ -17,14 +17,15 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 class InstitutionalOddsIngestionEngine {
   constructor() {
     this.isJobRunning = false;
-    this.initializeScheduling();
+    // The automatic scheduling call has been removed.
     this.initializeManualTrigger();
   }
 
+  // This function is no longer called in the constructor, disabling automatic runs.
   initializeScheduling() {
-    cron.schedule('*/15 * * * *', () => this.runIngestionCycle('cron'), { timezone: env.TIMEZONE });
-    console.log('✅ Odds Ingestion Engine scheduled to run every 15 minutes.');
-    setTimeout(() => this.runIngestionCycle('startup'), 5000);
+    // cron.schedule('*/15 * * * *', () => this.runIngestionCycle('cron'), { timezone: env.TIMEZONE });
+    // console.log('✅ Odds Ingestion Engine scheduled to run every 15 minutes.');
+    // setTimeout(() => this.runIngestionCycle('startup'), 5000);
   }
 
   async initializeManualTrigger() {
@@ -58,7 +59,6 @@ class InstitutionalOddsIngestionEngine {
     let totalUpsertedCount = 0;
 
     try {
-      // FIX: This is now dynamic. It gets the full list of sports from the API.
       const sportsToFetch = await gamesService.getAvailableSports();
       
       if (!sportsToFetch || !sportsToFetch.length) {
