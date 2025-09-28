@@ -41,12 +41,20 @@ const HOST = env.HOST || '0.0.0.0';
 
 const bot = new TelegramBot(TOKEN, { polling: !USE_WEBHOOK });
 
-// Health endpoints for Railway activation
-app.get('/', (_req, res) => res.status(200).send('OK'));
+// Enhanced Health endpoints for Railway compatibility
+app.get('/', (_req, res) => res.status(200).json({ 
+  status: 'OK', 
+  service: 'ParlayBot',
+  timestamp: new Date().toISOString(),
+  uptime: process.uptime()
+}));
 app.get('/health', (_req, res) => res.sendStatus(200));
 app.head('/health', (_req, res) => res.sendStatus(200));
+app.get('/liveness', (_req, res) => res.sendStatus(200));
+app.head('/liveness', (_req, res) => res.sendStatus(200));
 
 let server;
+let keepAliveInterval;
 
 async function main() {
   // Register all core handlers (your existing logic)
@@ -85,9 +93,23 @@ async function main() {
 
   sentryService.attachExpressPostRoutes?.(app);
 
-  server = app.listen(PORT, HOST, () => {
-    console.log(`🚀 Server listening on ${HOST}:${PORT}. Bot is starting in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`);
-  });
+  // Enhanced server startup with error handling
+  try {
+    server = app.listen(PORT, HOST, () => {
+      console.log(`🚀 Server listening on ${HOST}:${PORT}. Bot is starting in ${USE_WEBHOOK ? 'webhook' : 'polling'} mode.`);
+    });
+    
+    // Handle server errors
+    server.on('error', (error) => {
+      console.error('❌ Server error:', error);
+      sentryService.captureError(error);
+      process.exit(1);
+    });
+  } catch (error) {
+    console.error('❌ Failed to start server:', error);
+    sentryService.captureError(error);
+    process.exit(1);
+  }
 
   const commands = [
     { command: 'ai', description: 'Launch the AI Parlay Builder' },
@@ -101,16 +123,38 @@ async function main() {
   await bot.setMyCommands(commands);
   const me = await bot.getMe();
   console.log(`✅ Bot @${me.username} fully initialized.`);
+  
+  // Start keep-alive mechanism
+  keepAliveInterval = setInterval(() => {
+    console.log('🤖 Bot process active - waiting for requests...');
+  }, 300000); // Log every 5 minutes
+  
   console.log('Application startup sequence complete. Process will now run indefinitely.');
 }
 
 const shutdown = async (signal) => {
   console.log(`\nReceived ${signal}. Shutting down gracefully...`);
+  
+  // Clear keep-alive interval
+  if (keepAliveInterval) {
+    clearInterval(keepAliveInterval);
+  }
+  
   try {
     if (!USE_WEBHOOK) {
-      try { await bot.stopPolling({ cancel: true, reason: signal }); } catch {}
+      try { 
+        await bot.stopPolling({ cancel: true, reason: signal }); 
+        console.log('✅ Bot polling stopped.');
+      } catch (pollingError) {
+        console.warn('⚠️ Error stopping polling:', pollingError);
+      }
     } else {
-      try { await bot.deleteWebHook(); } catch {}
+      try { 
+        await bot.deleteWebHook(); 
+        console.log('✅ Webhook deleted.');
+      } catch (webhookError) {
+        console.warn('⚠️ Error deleting webhook:', webhookError);
+      }
     }
   } finally {
     if (server) {
@@ -118,16 +162,23 @@ const shutdown = async (signal) => {
         console.log('✅ HTTP server closed.');
         process.exit(0);
       });
+      
+      // Force close after 10 seconds
+      setTimeout(() => {
+        console.log('⚠️ Forcing shutdown...');
+        process.exit(1);
+      }, 10000);
     } else {
       process.exit(0);
     }
   }
 };
 
-main().then(() => {
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
-}).catch((e) => {
+// Enhanced shutdown handlers
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+main().catch((e) => {
   console.error('❌ Fatal Bot Initialization Error:', e);
   sentryService.captureError(e);
   process.exit(1);
