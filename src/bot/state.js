@@ -2,19 +2,21 @@
 import env from '../config/env.js';
 import { sentryService } from '../services/sentryService.js';
 import redisClient from '../services/redisService.js';
+import databaseService from '../services/databaseService.js'; // Import database service
 
 const NS = (env.NODE_ENV || 'production').toLowerCase();
 const V = 'v1';
 const PREFIX = `${V}:${NS}:`;
 const STATE_PREFIX = `${PREFIX}user:state:`;
 const SLIP_PREFIX = `${PREFIX}parlay:slip:`;
-const CONFIG_PREFIX = `${PREFIX}user:config:`;
+// REMOVED CONFIG_PREFIX as it's now in the database
 const DEFAULT_SLIP = { picks: [], stake: 10, totalOdds: 0, messageId: null };
 
 const safeParse = (s, f) => { try { return JSON.parse(s); } catch (e) { sentryService.captureError(e, { component: 'state', op: 'parse' }); return f; } };
 const withTimeout = (p, ms, label) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error(`Timeout ${ms}ms: ${label}`)), ms))]);
 const setWithTTL = async (c, k, v, ttl) => { if (!ttl) return c.set(k, v); try { return await c.set(k, v, { EX: ttl }); } catch { return await c.set(k, v, 'EX', ttl); } };
 
+// --- Conversational state (remains in Redis for speed) ---
 export async function setUserState(chatId, state, ttl = 3600) {
   const redis = await redisClient;
   await withTimeout(setWithTTL(redis, `${STATE_PREFIX}${chatId}`, JSON.stringify(state), ttl), 3000, 'setUserState');
@@ -25,6 +27,7 @@ export async function getUserState(chatId) {
   return data ? safeParse(data, {}) : {};
 }
 
+// --- Parlay slips (remains in Redis as it's temporary) ---
 export async function getParlaySlip(chatId) {
   const redis = await redisClient;
   const data = await withTimeout(redis.get(`${SLIP_PREFIX}${chatId}`), 3000, 'getParlaySlip');
@@ -35,23 +38,37 @@ export async function setParlaySlip(chatId, slip) {
   await withTimeout(setWithTTL(redis, `${SLIP_PREFIX}${chatId}`, JSON.stringify(slip), 86400), 3000, 'setParlaySlip');
 }
 
-async function getConfig(chatId, type) {
-  const redis = await redisClient;
-  const data = await withTimeout(redis.get(`${CONFIG_PREFIX}${type}:${chatId}`), 3000, 'getConfig');
-  if (data) return safeParse(data, {});
-  if (type === 'ai') return { legs: 2, strategy: 'balanced', includeProps: true, sports: [] };
-  if (type === 'builder') return { minOdds: -500, maxOdds: 500, avoidSameGame: true, cutoffHours: 48 };
-  return {};
+// --- User Configs (MOVED TO DATABASE) ---
+async function getConfig(telegramId, type) {
+    const settings = await databaseService.getUserSettings(telegramId);
+    const defaults = {
+        ai: { mode: 'live', model: 'gemini', betType: 'mixed' },
+        builder: { minOdds: -500, maxOdds: 500, avoidSameGame: true, cutoffHours: 48 },
+    };
+    // Merge user settings over defaults
+    return { ...defaults[type], ...(settings[type] || {}) };
 }
-async function setConfig(chatId, type, cfg) {
-  const redis = await redisClient;
-  await withTimeout(redis.set(`${CONFIG_PREFIX}${type}:${chatId}`, JSON.stringify(cfg)), 3000, 'setConfig');
-}
-export const getAIConfig = (id) => getConfig(id, 'ai');
-export const setAIConfig = (id, cfg) => setConfig(id, 'ai', cfg);
-export const getBuilderConfig = (id) => getConfig(id, 'builder');
-export const setBuilderConfig = (id, cfg) => setConfig(id, 'builder', cfg);
 
+async function setConfig(telegramId, type, newConfigData) {
+    const currentSettings = await databaseService.getUserSettings(telegramId);
+    const updatedSettings = {
+        ...currentSettings,
+        [type]: {
+            ...(currentSettings[type] || {}),
+            ...newConfigData
+        }
+    };
+    await databaseService.updateUserSettings(telegramId, updatedSettings);
+}
+
+export const getAIConfig = (id) => getConfig(id, 'ai');
+export const setAIConfig = (id, cfg) => setConfig(id, 'ai', { ...cfg });
+
+export const getBuilderConfig = (id) => getConfig(id, 'builder');
+export const setBuilderConfig = (id, cfg) => setConfig(id, 'builder', { ...cfg });
+
+
+// --- Tokens (unchanged, good use for Redis) ---
 const tokenPrefix = `${PREFIX}token:`;
 export async function saveToken(type, payload, ttl = 600) {
   const redis = await redisClient;
