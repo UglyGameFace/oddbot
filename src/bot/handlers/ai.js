@@ -5,7 +5,7 @@ import gamesService from '../../services/gamesService.js';
 import { setUserState, getUserState } from '../state.js';
 import { getSportEmoji, escapeMarkdownV2 } from '../../utils/enterpriseUtilities.js';
 
-// --- helper: safe edit without noisy errors (kept)
+// --- Helper: safe edit to avoid noisy "message is not modified" errors (kept)
 async function safeEditMessage(bot, text, options) {
   try {
     await bot.editMessageText(text, options);
@@ -17,6 +17,9 @@ async function safeEditMessage(bot, text, options) {
     }
   }
 }
+
+// --- Helper: toggle label for player props
+const propsToggleLabel = (on) => `${on ? '✅' : '☑️'} Include Player Props`;
 
 const SPORT_TITLES = {
   basketball_nba: 'NBA',
@@ -44,15 +47,14 @@ function sortSports(sports) {
 }
 function pageOf(arr, page) { const start = page * PAGE_SIZE; return arr.slice(start, start + PAGE_SIZE); }
 
-// Optional: pretty local time if service provided a UTC stamp
+// --- Fallback local time formatting if only UTC is present in legs
 function formatLocalIfPresent(utc, tzLabel) {
   try {
     if (!utc) return '';
-    const s = new Intl.DateTimeFormat('en-US', {
+    return new Intl.DateTimeFormat('en-US', {
       timeZone: tzLabel || 'America/New_York',
       year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit'
     }).format(new Date(utc));
-    return s;
   } catch { return ''; }
 }
 
@@ -113,6 +115,13 @@ export function registerAICallbacks(bot) {
       state.aiModel = parts[2];
       await setUserState(chatId, state);
       executeAiRequest(bot, chatId, message.message_id);
+    } else if (action === 'toggle') {
+      const what = parts[2];
+      if (what === 'props') {
+        state.includeProps = !state.includeProps;
+        await setUserState(chatId, state);
+        return sendBetTypeSelection(bot, chatId, message.message_id);
+      }
     } else if (action === 'back') {
       const to = parts[2];
       if (to === 'sport') sendSportSelection(bot, chatId, message.message_id, state.page || 0);
@@ -177,10 +186,13 @@ async function sendModeSelection(bot, chatId, messageId) {
 }
 
 async function sendBetTypeSelection(bot, chatId, messageId) {
+  const state = await getUserState(chatId) || {};
   const text = '🤖 *AI Parlay Builder*\n\n*Step 4:* What kind of parlay should I build?';
   const keyboard = [
     [{ text: '🔥 Player Props Only', callback_data: 'ai_bettype_props' }],
     [{ text: '🧩 Any Bet Type (Mixed)', callback_data: 'ai_bettype_mixed' }],
+    // NEW toggle row
+    [{ text: propsToggleLabel(!!state.includeProps), callback_data: 'ai_toggle_props' }],
     [{ text: '« Back to Mode', callback_data: 'ai_back_mode' }]
   ];
   const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
@@ -200,7 +212,7 @@ async function sendAiModelSelection(bot, chatId, messageId) {
 
 async function executeAiRequest(bot, chatId, messageId) {
   const state = await getUserState(chatId);
-  const { sportKey, numLegs, mode, betType, aiModel = 'gemini' } = state;
+  const { sportKey, numLegs, mode, betType, aiModel = 'gemini', includeProps = false } = state || {};
 
   if (!sportKey || !numLegs || !mode || !betType) {
     return safeEditMessage(bot, 'Incomplete selection. Please start over using /ai.', { chat_id: chatId, message_id: messageId });
@@ -213,22 +225,22 @@ async function executeAiRequest(bot, chatId, messageId) {
   const safeSportKey = escapeMarkdownV2(sportKey);
   const safeModeText = escapeMarkdownV2(modeText);
   const safeBetTypeText = escapeMarkdownV2(betTypeText);
+  const safeIncludeProps = escapeMarkdownV2(includeProps ? 'On' : 'Off');
 
   await safeEditMessage(
     bot,
-    `🤖 Accessing advanced analytics\\.\\.\\.\n\n*Sport:* ${safeSportKey}\n*Legs:* ${numLegs}\n*Mode:* ${safeModeText}\n*Type:* ${safeBetTypeText}\n\nThis may take a moment\\.`,
+    `🤖 Accessing advanced analytics\\.\\.\\.\n\n*Sport:* ${safeSportKey}\n*Legs:* ${numLegs}\n*Mode:* ${safeModeText}\n*Type:* ${safeBetTypeText}\n*Props:* ${safeIncludeProps}\n\nThis may take a moment\\.`,
     { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: null }
   );
 
   try {
-    const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType);
+    const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, { includeProps });
     if (!parlay || !parlay.parlay_legs || parlay.parlay_legs.length === 0) {
       throw new Error('AI returned an empty or invalid parlay.');
     }
 
-    // Optional: small fixtures header when dates are available
     const legs = parlay.parlay_legs;
-    const tzLabel = 'America/New_York'; // can inject env if you expose it to client
+    const tzLabel = 'America/New_York'; // or surface env value if wired through
     const headerLine = legs.every(l => l.game_date_local || l.game_date_utc)
       ? `Timezone: ${escapeMarkdownV2(tzLabel)}`
       : null;
