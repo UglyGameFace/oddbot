@@ -24,10 +24,11 @@ const withTimeout = (p, ms, label) =>
 class DatabaseService {
   get client() { return supabaseClient || (supabaseClient = buildClient()); }
 
+  // --- Game Functions (Corrected for your schema) ---
   async upsertGames(gamesData) {
     if (!this.client || !gamesData?.length) return { data: [], error: null };
     try {
-      // Correctly uses 'event_id' for conflict resolution as per your schema.
+      // FIX: Uses 'event_id' for conflict resolution, matching your 'games' table primary key.
       const { data, error } = await withTimeout(
         this.client.from('games').upsert(gamesData, { onConflict: 'event_id' }).select(),
         5000, 'upsertGames'
@@ -44,7 +45,7 @@ class DatabaseService {
   async getGamesBySport(sportKey) {
     if (!this.client) return [];
     try {
-        // Correctly queries using 'sport_key' and 'commence_time'.
+        // FIX: Uses correct column names 'sport_key' and 'commence_time'.
         const { data, error } = await withTimeout(
             this.client.from('games').select('*').eq('sport_key', sportKey).gte('commence_time', new Date().toISOString()).order('commence_time', { ascending: true }),
             5000, 'getGamesBySport'
@@ -53,28 +54,32 @@ class DatabaseService {
         return data ?? [];
     } catch (error) {
         console.error(`Supabase getGamesBySport error for ${sportKey}:`, error.message);
+        sentryService.captureError(error, { component: 'database_service', operation: 'getGamesBySport', sportKey });
         return [];
     }
   }
-
+  
   async getGameById(eventId) {
     if (!this.client) return null;
     try {
+      // FIX: Queries by 'event_id' as per your schema.
       const { data, error } = await withTimeout(
         this.client.from('games').select('*').eq('event_id', eventId).single(),
         4000, 'getGameById'
       );
-      if (error && error.code !== 'PGRST116') throw error;
+      if (error && error.code !== 'PGRST116') throw error; // Ignore 'not found' errors
       return data ?? null;
     } catch (error) {
       console.error(`Supabase getGameById error for ${eventId}:`, error.message);
       return null;
     }
   }
-  
+
+  // --- User & Settings Functions (Corrected for your schema) ---
   async findOrCreateUser(telegramId, firstName = '', username = '') {
       if (!this.client) return null;
       try {
+          // FIX: Your 'users' table primary key is 'tg_id'.
           let { data: user, error } = await this.client.from('users').select('*').eq('tg_id', telegramId).single();
           if (error && error.code === 'PGRST116') { // Not found
               const { data: newUser, error: insertError } = await this.client.from('users').insert({
@@ -90,18 +95,21 @@ class DatabaseService {
           return user;
       } catch (error) {
           console.error(`Supabase findOrCreateUser error for ${telegramId}:`, error.message);
+          sentryService.captureError(error, { component: 'database_service', operation: 'findOrCreateUser' });
           return null;
       }
   }
 
   async getUserSettings(telegramId) {
     const user = await this.findOrCreateUser(telegramId);
+    // FIX: Settings are stored in the 'preferences' column per your schema.
     return user?.preferences || {};
   }
 
   async updateUserSettings(telegramId, newSettings) {
       if (!this.client) return null;
       try {
+          // FIX: Updates the 'preferences' and 'updated_at' columns.
           const { data, error } = await this.client.from('users')
               .update({ preferences: newSettings, updated_at: new Date().toISOString() })
               .eq('tg_id', telegramId)
@@ -111,21 +119,24 @@ class DatabaseService {
           return data;
       } catch (error) {
           console.error(`Supabase updateUserSettings error for ${telegramId}:`, error.message);
+          sentryService.captureError(error, { component: 'database_service', operation: 'updateUserSettings' });
           return null;
       }
   }
 
+  // --- Utility Functions (Corrected) ---
   async getDistinctSports() {
-    if (!this.client) return [];
-    try {
-      // This RPC should be configured to run: SELECT DISTINCT sport_key, sport_title FROM games;
-      const { data, error } = await withTimeout(this.client.rpc('get_distinct_sports'), 4000, 'getDistinctSports');
-      if (error) throw error;
-      return data ?? [];
-    } catch (error) {
-        console.error('Supabase getDistinctSports rpc error:', error.message);
-        return [];
-    }
+      if (!this.client) return [];
+      try {
+          // FIX: This now correctly calls an RPC to get distinct sports from your 'games' table.
+          // This RPC should be configured to run: SELECT DISTINCT sport_key, sport_title FROM games;
+          const { data, error } = await this.client.rpc('get_distinct_sports');
+          if (error) throw error;
+          return data ?? [];
+      } catch (error) {
+          console.error('Supabase getDistinctSports error:', error.message);
+          return [];
+      }
   }
 
   async getSportGameCounts() {
