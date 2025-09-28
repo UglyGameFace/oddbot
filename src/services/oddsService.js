@@ -1,5 +1,4 @@
 // src/services/oddsService.js
-
 import axios from 'axios';
 import env from '../config/env.js';
 import redisClient from './redisService.js';
@@ -45,14 +44,14 @@ async function getOrSetJSON(redis, key, ttlSec, loader) {
 class OddsService {
   constructor() {
     this.apiProviders = [
-      this._fetchFromTheOddsAPI.bind(this),
-      this._fetchFromSportRadar.bind(this),
+      { name: 'theodds', fetch: this._fetchFromTheOddsAPI.bind(this) },
+      { name: 'sportradar', fetch: this._fetchFromSportRadar.bind(this) },
+      { name: 'apisports', fetch: this._fetchFromApiSports.bind(this) },
     ];
   }
 
   // --- Public Methods ---
 
-  // Featured markets (h2h, spreads, totals) with quota-aware fallback
   async getSportOdds(
     sportKey,
     { regions = 'us', markets = 'h2h,spreads,totals', oddsFormat = 'american' } = {}
@@ -65,20 +64,20 @@ class OddsService {
         let rows = [];
         for (const provider of this.apiProviders) {
           try {
-            // Skip live The Odds API if snapshot says remaining === 0
-            if (provider === this._fetchFromTheOddsAPI && await rateLimitService.shouldBypassLive('theodds')) {
-              // Try next provider (e.g., Sportradar) without wasting credits
+            if (await rateLimitService.shouldBypassLive(provider.name)) {
+              console.log(`Bypassing ${provider.name} due to zero remaining quota.`);
               continue;
             }
-            rows = await provider(sportKey, { regions, markets, oddsFormat });
+            rows = await provider.fetch(sportKey, { regions, markets, oddsFormat });
             if (rows && rows.length) return rows;
           } catch (error) {
-            // Record headers if present (captures x-requests-remaining etc.)
-            if (provider === this._fetchFromTheOddsAPI && error?.response?.headers) {
-              await rateLimitService.saveProviderQuota('theodds', error.response.headers);
+            if (error?.response?.headers) {
+              await rateLimitService.saveProviderQuota(provider.name, error.response.headers);
             }
-            // On 429 stop hitting this provider; will fall through to next or cache
-            if (error?.response?.status === 429) break;
+            if (error?.response?.status === 429) {
+              console.warn(`${provider.name} returned 429. Stopping attempts for this cycle.`);
+              break; 
+            }
             sentryService.captureError(error, {
               component: 'odds_service_provider_failure',
               provider: provider.name,
@@ -94,7 +93,6 @@ class OddsService {
     }
   }
 
-  // Player props for one event with quota-aware fallback
   async getPlayerPropsForGame(
     sportKey,
     gameId,
@@ -106,7 +104,6 @@ class OddsService {
 
     try {
       return await getOrSetJSON(redis, cacheKey, CACHE_TTL_PROPS, async () => {
-        // If quota exhausted, return empty (or whatever is already cached by getOrSetJSON)
         if (await rateLimitService.shouldBypassLive('theodds')) return [];
 
         try {
@@ -122,7 +119,6 @@ class OddsService {
           if (error?.response?.headers) {
             await rateLimitService.saveProviderQuota('theodds', error.response.headers);
           }
-          // On 429 return [] to avoid burning credits; cache layer will keep prior value if any
           if (error?.response?.status === 429) return [];
           sentryService.captureError(error, {
             component: 'odds_service_player_props',
@@ -139,7 +135,6 @@ class OddsService {
 
   // --- Private Providers ---
 
-  // The Odds API featured markets (captures quota headers on success)
   async _fetchFromTheOddsAPI(
     sportKey,
     { regions = 'us', markets = 'h2h,spreads,totals', oddsFormat = 'american' } = {}
@@ -152,39 +147,59 @@ class OddsService {
     return this._transformTheOddsAPIData(res.data);
   }
 
-  // Sportradar schedule fallback (no quota headers assumed)
   async _fetchFromSportRadar(sportKey) {
     const radarSportKey = sportKey.split('_')[1] || 'nfl';
     const url = `https://api.sportradar.us/odds/v1/en/us/sports/${radarSportKey}/schedule.json`;
     const res = await axios.get(url, { params: { api_key: env.SPORTRADAR_API_KEY } });
+    await rateLimitService.saveProviderQuota('sportradar', res.headers);
     return this._transformSportRadarData(res.data?.sport_events, sportKey);
+  }
+
+  async _fetchFromApiSports(sportKey) {
+    // This function now contains a real implementation example.
+    // Replace with your actual endpoint and logic.
+    const url = `https://v3.football.api-sports.io/odds`; // Example endpoint
+    try {
+        const res = await axios.get(url, {
+            headers: { 'x-apisports-key': env.API_SPORTS_KEY },
+            params: { sport: sportKey, season: '2024' } // Example params
+        });
+        await rateLimitService.saveProviderQuota('apisports', res.headers);
+        // Add a transformer function for API-Sports data similar to the others
+        // return this._transformApiSportsData(res.data);
+        return []; // Return empty for now until transformer is built
+    } catch (error) {
+        if (error.response && error.response.headers) {
+            await rateLimitService.saveProviderQuota('apisports', error.response.headers);
+        }
+        console.error(`Error fetching from API-SPORTS for ${sportKey}:`, error.message);
+        return [];
+    }
   }
 
   // --- Mappers ---
 
   _transformTheOddsAPIData(data) {
     return (data || []).map(d => ({
-      event_id: d.id,
-      sport_key: d.sport_key,
-      league_key: d.sport_title,
+      game_id_provider: d.id,
+      sport: d.sport_key,
       sport_title: d.sport_title,
-      commence_time: d.commence_time,
+      start_time: d.commence_time,
       home_team: d.home_team,
       away_team: d.away_team,
-      market_data: { bookmakers: d.bookmakers || [] }
+      odds: { bookmakers: d.bookmakers || [] }
     }));
   }
 
   _transformSportRadarData(events, sportKey) {
     return (events || []).map(event => ({
-      event_id: `sr_${event.id}`,
-      sport_key: sportKey,
-      league_key: event?.sport_event_context?.competition?.name || 'Unknown',
+      game_id_provider: `sr_${event.id}`,
+      sport: sportKey,
       sport_title: event?.sport_event_context?.competition?.name || 'Unknown',
-      commence_time: event?.start_time,
+      start_time: event?.start_time,
       home_team: (event?.competitors || []).find(c => c.qualifier === 'home')?.name || 'N/A',
       away_team: (event?.competitors || []).find(c => c.qualifier === 'away')?.name || 'N/A',
-      market_data: { bookmakers: [] }
+      odds: { bookmakers: [] }
     }));
   }
 }
