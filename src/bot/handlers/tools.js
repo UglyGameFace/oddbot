@@ -2,7 +2,7 @@
 
 import redisClient from '../../services/redisService.js';
 import databaseService from '../../services/databaseService.js';
-import rateLimitService from '../../services/rateLimitService.js'; // Import the service
+import rateLimitService from '../../services/rateLimitService.js';
 import env from '../../config/env.js';
 import axios from 'axios';
 
@@ -53,7 +53,7 @@ async function sendToolsMenu(bot, chatId, messageId = null) {
     [{ text: '🔄 Trigger Odds Ingestion', callback_data: 'tools_ingest' }],
     [{ text: '🧹 Clear Redis Cache', callback_data: 'tools_cache' }],
     [{ text: '📡 Check API Status', callback_data: 'tools_apistatus' }],
-    [{ text: '📊 Get Database & Quota Stats', callback_data: 'tools_dbstats' }] // Updated button text
+    [{ text: '📊 Get Database & Quota Stats', callback_data: 'tools_dbstats' }]
   ];
   const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
 
@@ -70,14 +70,12 @@ async function handleManualIngest(bot, chatId, messageId) {
         const channel = 'odds_ingestion_trigger';
         const message = 'run';
         await redis.publish(channel, message);
-
-        const responseText = `✅ Successfully sent a manual trigger to the odds ingestion worker. Check the worker's logs to monitor its progress.`;
+        const responseText = `✅ Trigger sent to odds ingestion worker. It will process on its next cycle. Check the worker logs on Railway to monitor progress.`;
         await bot.editMessageText(responseText, {
             chat_id: chatId,
             message_id: messageId,
             reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] }
         });
-
     } catch (error) {
         console.error('Failed to publish manual ingest trigger:', error);
         await bot.editMessageText('❌ Failed to send trigger to the worker. Please check the logs.', {
@@ -87,7 +85,6 @@ async function handleManualIngest(bot, chatId, messageId) {
         });
     }
 }
-
 
 async function handleCacheClear(bot, chatId, messageId) {
   await bot.editMessageText('Clearing all known Redis keys (odds, props, state)...', {
@@ -133,7 +130,6 @@ async function handleApiStatus(bot, chatId, messageId) {
 
   const statuses = {};
 
-  // Check Gemini (Google AI)
   try {
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${env.GOOGLE_GEMINI_API_KEY}`;
     const geminiRes = await axios.get(geminiUrl, { timeout: 5000 });
@@ -142,7 +138,6 @@ async function handleApiStatus(bot, chatId, messageId) {
     statuses['Google Gemini'] = '❌ Offline';
   }
 
-  // Check Perplexity
   try {
     await axios.post('https://api.perplexity.ai/chat/completions', {}, {
         headers: { Authorization: `Bearer ${env.PERPLEXITY_API_KEY}` },
@@ -157,7 +152,6 @@ async function handleApiStatus(bot, chatId, messageId) {
     }
   }
 
-  // Check The Odds API
   try {
     const oddsUrl = `https://api.the-odds-api.com/v4/sports?apiKey=${env.THE_ODDS_API_KEY}`;
     await axios.get(oddsUrl, { timeout: 5000 });
@@ -179,33 +173,37 @@ async function handleApiStatus(bot, chatId, messageId) {
   });
 }
 
-// Updated function to include API Quota stats
 async function handleDbStats(bot, chatId, messageId) {
     await bot.editMessageText('📊 Fetching database and API quota statistics...', { chat_id: chatId, message_id: messageId });
     try {
-        // Fetch DB Stats
         const stats = await databaseService.getSportGameCounts();
-        let statsText = '*📊 Database Game Counts*\n\n';
+        let statsText = '📊 *Database Game Counts*\n\n';
         if (stats && stats.length > 0) {
             stats.forEach(stat => {
-                statsText += `• *${stat.sport_title}:* ${stat.game_count} games\n`;
+                const title = stat.sport_title || 'Unknown/Other'; // Handles null titles gracefully
+                statsText += `• *${title}:* ${stat.game_count} games\n`;
             });
         } else {
             statsText += 'No games found in the database. The ingestion worker may need to run.\n';
         }
 
-        // Fetch API Quota Stats
-        statsText += '\n*📈 API Quota Status (Live)*\n\n';
+        statsText += '\n📈 *API Quota Status (Live)*\n_Data reflects the last API call made by a worker._\n\n';
         const providers = ['theodds', 'sportradar', 'apisports'];
         for (const provider of providers) {
             const quota = await rateLimitService.getProviderQuota(provider);
-            statsText += `*${provider.toUpperCase()}*:\n`;
+            const providerName = provider.charAt(0).toUpperCase() + provider.slice(1);
+            statsText += `*${providerName}*:\n`;
             if (quota) {
-                statsText += `  - Remaining: ${quota.remaining ?? 'N/A'}\n`;
-                statsText += `  - Used: ${quota.used ?? 'N/A'}\n`;
-                statsText += `  - Window: ${quota.window ?? 'N/A'}\n`;
+                const remaining = quota.remaining ?? 'N/A';
+                const used = quota.used ?? 'N/A';
+                const limit = quota.limit ?? 'N/A';
+                const lastUpdated = quota.at ? new Date(quota.at).toLocaleTimeString() : 'Never';
+                statsText += `  - Remaining: ${remaining}\n`;
+                statsText += `  - Used: ${used}\n`;
+                statsText += `  - Limit/Window: ${limit}\n`;
+                statsText += `  - Last Updated: ${lastUpdated}\n`;
             } else {
-                statsText += '  - _No quota data available._\n';
+                statsText += '  - _No data yet. Trigger odds ingestion to populate._\n';
             }
         }
 
