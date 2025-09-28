@@ -36,18 +36,18 @@ class AIService {
     const prompt = `You are a precise, data-driven sports betting analyst. Your only task is to perform a web search to find the best ${numLegs}-leg parlay for ${sportKey}. ${betTypeInstruction} Focus on statistical mismatches, recent performance data, and confirmed player injuries. You must find real bets on major sportsbooks (DraftKings, FanDuel, BetMGM). Your final output must be ONLY a valid JSON object in the specified format, with no other text. JSON FORMAT: { "parlay_legs": [ { "game": "...", "market": "...", "pick": "...", "sportsbook": "...", "justification": "..." } ], "confidence_score": 0.80 }`;
 
     try {
-      const response = await axios.post('[https://api.perplexity.ai/chat/completions](https://api.perplexity.ai/chat/completions)', {
+      // FIX: Corrected the URL by removing markdown formatting.
+      const response = await axios.post('https://api.perplexity.ai/chat/completions', {
         model: 'sonar-pro',
         messages: [{ role: 'system', content: 'You are a sports betting analyst.' }, { role: 'user', content: prompt }],
       }, { headers: { Authorization: `Bearer ${env.PERPLEXITY_API_KEY}` } });
 
       const text = response.data.choices[0].message.content;
-      // FIX: Robust JSON parsing
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error('Perplexity did not return valid JSON.');
       return JSON.parse(jsonMatch[0]);
     } catch (error) {
-      console.error("Perplexity API error:", error.response ? error.response.data : error.message);
+      console.error("Perplexity API error:", error.message);
       throw new Error('Failed to generate parlay with Perplexity.');
     }
   }
