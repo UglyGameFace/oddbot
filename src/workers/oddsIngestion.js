@@ -17,16 +17,7 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 class InstitutionalOddsIngestionEngine {
   constructor() {
     this.isJobRunning = false;
-    // FIX: The automatic scheduling call has been removed to prevent startup/timed runs.
-    // this.initializeScheduling(); 
     this.initializeManualTrigger();
-  }
-
-  // The contents of this function are commented out to disable automatic runs.
-  initializeScheduling() {
-    // cron.schedule('*/15 * * * *', () => this.runIngestionCycle('cron'), { timezone: env.TIMEZONE });
-    // console.log('✅ Odds Ingestion Engine scheduled to run every 15 minutes.');
-    // setTimeout(() => this.runIngestionCycle('startup'), 5000);
   }
 
   async initializeManualTrigger() {
@@ -100,6 +91,10 @@ class InstitutionalOddsIngestionEngine {
         console.log('Ingestion cycle complete. No new odds were found across all sports.');
       }
       
+      // **NEW:** Save timestamp of successful run to Redis
+      const redis = await redisClient;
+      await redis.set('meta:last_successful_ingestion', new Date().toISOString());
+
     } catch (error) {
       console.error('❌ A critical error occurred during the main ingestion cycle:', error);
       sentryService.captureError(error, { component: 'odds_ingestion_worker_main' });
