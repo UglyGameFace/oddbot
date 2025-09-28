@@ -4,7 +4,7 @@ import { createHash } from 'crypto';
 import CryptoJS from 'crypto-js';
 import MerkleTree from 'merkletreejs';
 
-// --- NEW FUNCTION TO PREVENT FORMATTING ERRORS ---
+// --- NEW FUNCTION TO PREVENT TELEGRAM FORMATTING ERRORS ---
 /**
  * Escapes characters that have special meaning in Telegram's MarkdownV2.
  * @param {string} text The text to escape.
@@ -16,6 +16,7 @@ export function escapeMarkdownV2(text) {
   // The characters to escape are: _ * [ ] ( ) ~ ` > # + - = | { } . !
   return textString.replace(/([_*\[\]()~`>#\+\-=|{}.!])/g, '\\$1');
 }
+
 
 // --- CONSOLIDATED ANALYSIS FUNCTIONS ---
 
