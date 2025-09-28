@@ -53,7 +53,7 @@ class AIService {
 
   async _generateWithGemini(sportKey, numLegs, mode, betType) {
     // FIX #1: Updated the model name from the deprecated 'gemini-pro' to a current, valid model.
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash', safetySettings, generationConfig: { maxOutputTokens: 4096 } });
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-pro', safetySettings, generationConfig: { maxOutputTokens: 4096 } });
     let finalPrompt;
 
     const betTypeInstruction = betType === 'props'
