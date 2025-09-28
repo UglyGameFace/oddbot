@@ -4,7 +4,6 @@ import DatabaseService from '../services/databaseService.js';
 import OddsService from '../services/oddsService.js';
 import { sentryService } from '../services/sentryService.js';
 import env from '../config/env.js';
-// Import gamesService to dynamically fetch the list of all sports
 import gamesService from '../services/gamesService.js'; 
 import redisClient from '../services/redisService.js';
 
@@ -59,8 +58,7 @@ class InstitutionalOddsIngestionEngine {
     let totalUpsertedCount = 0;
 
     try {
-      // ** THE FIX IS HERE **
-      // We now call the gamesService to get a fresh, complete list of all sports from the API.
+      // FIX: This is now dynamic. It gets the full list of sports from the API.
       const sportsToFetch = await gamesService.getAvailableSports();
       
       if (!sportsToFetch || !sportsToFetch.length) {
@@ -80,18 +78,8 @@ class InstitutionalOddsIngestionEngine {
             const oddsForSport = await OddsService.getSportOdds(sport.sport_key);
             if (oddsForSport && oddsForSport.length > 0) {
               console.log(`    -> Fetched ${oddsForSport.length} games for ${sport.sport_key}.`);
-              const gamesToUpsert = oddsForSport.map(game => ({
-                  event_id: game.event_id,
-                  sport_key: game.sport_key,
-                  league_key: game.league_key,
-                  commence_time: game.commence_time,
-                  home_team: game.home_team,
-                  away_team: game.away_team,
-                  market_data: game.market_data,
-                  sport_title: game.sport_title
-              }));
-              await DatabaseService.upsertGames(gamesToUpsert);
-              totalUpsertedCount += gamesToUpsert.length;
+              await DatabaseService.upsertGames(oddsForSport);
+              totalUpsertedCount += oddsForSport.length;
             }
           } catch (e) {
               console.error(`    -> Failed to process odds for ${sport.sport_key}:`, e.message);
