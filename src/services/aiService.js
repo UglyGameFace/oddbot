@@ -1,5 +1,4 @@
 // src/services/aiService.js
-
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
 import axios from 'axios';
 import env from '../config/env.js';
@@ -53,7 +52,7 @@ class AIService {
   }
 
   async _generateWithGemini(sportKey, numLegs, mode, betType) {
-    // FIX #1: Corrected model name for this SDK version.
+    // FINAL FIX: Changed the model name to 'gemini-1.0-pro', the correct model for this SDK version.
     const model = genAI.getGenerativeModel({ model: 'gemini-1.0-pro', safetySettings, generationConfig: { maxOutputTokens: 4096 } });
     let finalPrompt;
 
@@ -74,7 +73,7 @@ class AIService {
       const liveGames = await oddsService.getSportOdds(sportKey);
       if (!liveGames || !liveGames.length) throw new Error('Could not fetch live odds.');
       
-      // FIX #2: Changed `g.id` to `g.event_id` to pass the correct identifier.
+      // Changed `g.id` to `g.event_id` to pass the correct identifier.
       const enrichedGames = await Promise.all(liveGames.slice(0, 10).map(async (g) => ({
         ...g,
         player_props: await oddsService.getPlayerPropsForGame(sportKey, g.event_id)
@@ -87,7 +86,7 @@ class AIService {
       const result = await model.generateContent(finalPrompt);
       const response = await result.response;
       const text = response.text();
-      // FIX #3: More robust JSON cleaning to handle AI responses that aren't perfect JSON.
+      // More robust JSON cleaning to handle AI responses that aren't perfect JSON.
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error("AI response did not contain a valid JSON object.");
       return JSON.parse(jsonMatch[0]);
@@ -98,7 +97,7 @@ class AIService {
   }
 
   async validateOdds(oddsData) {
-    const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.0-pro' });
     const prompt = `Is this JSON data structured correctly for sports odds? Respond only with {"valid": true/false}. Data: ${JSON.stringify(oddsData)}`;
     try {
       const result = await model.generateContent(prompt);
