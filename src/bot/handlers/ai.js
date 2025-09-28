@@ -5,30 +5,34 @@ import gamesService from '../../services/gamesService.js';
 import { setUserState, getUserState } from '../state.js';
 import { getSportEmoji, escapeMarkdownV2 } from '../../utils/enterpriseUtilities.js';
 
-const SPORT_TITLES = {
-  basketball_nba: 'NBA',
-  basketball_wnba: 'WNBA',
-  baseball_mlb: 'MLB',
-  football_nfl: 'NFL',
-  hockey_nhl: 'NHL',
-  icehockey_nhl: 'NHL',
-  football_ncaaf: 'NCAAF',
-  americanfootball_ncaaf: 'NCAAF',
-};
+// --- NEW HELPER to safely edit messages and ignore non-critical errors ---
+async function safeEditMessage(bot, text, options) {
+    try {
+        await bot.editMessageText(text, options);
+    } catch (error) {
+        if (error.message && error.message.includes('message is not modified')) {
+            // This is a benign error from Telegram, ignore it.
+        } else {
+            // For any other error, log it.
+            console.error('An error occurred while editing a message:', error.message);
+        }
+    }
+}
 
+const SPORT_TITLES = { /* ... your existing titles ... */ };
 const PREFERRED_FIRST = ['football_ncaaf', 'americanfootball_ncaaf'];
 const DEPRIORITIZE_LAST = ['hockey_nhl', 'icehockey_nhl'];
 const PAGE_SIZE = 10;
 
 function sortSports(sports) {
-  const rank = (k) => {
-    if (PREFERRED_FIRST.includes(k)) return -100;
-    if (DEPRIORITIZE_LAST.includes(k)) return 100;
-    return 0;
-  };
-  return [...(sports || [])].sort(
-    (a, b) => rank(a?.sport_key || '') - rank(b?.sport_key || '')
-  );
+    const rank = (k) => {
+      if (PREFERRED_FIRST.includes(k)) return -100;
+      if (DEPRIORITIZE_LAST.includes(k)) return 100;
+      return 0;
+    };
+    return [...(sports || [])].sort(
+      (a, b) => rank(a?.sport_key || '') - rank(b?.sport_key || '')
+    );
 }
 function pageOf(arr, page) { const start = page * PAGE_SIZE; return arr.slice(start, start + PAGE_SIZE); }
 
@@ -122,55 +126,56 @@ async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
 
   const text = '🤖 *AI Parlay Builder*\n\n*Step 1:* Select a sport.';
   const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } };
-  if (messageId) await bot.editMessageText(text, { ...opts, chat_id: chatId, message_id: messageId });
+
+  if (messageId) await safeEditMessage(bot, text, { ...opts, chat_id: chatId, message_id: messageId });
   else await bot.sendMessage(chatId, text, opts);
 }
 
 async function sendLegSelection(bot, chatId, messageId) {
-  const state = await getUserState(chatId);
-  const sportTitle = (state.sportKey || '').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-  const legOptions = [2, 3, 4, 5, 6, 7, 8, 9, 10];
-  const buttons = legOptions.map(num => ({ text: `${num} Legs`, callback_data: `ai_legs_${num}` }));
-  const keyboard = [];
-  for (let i = 0; i < buttons.length; i += 3) keyboard.push(buttons.slice(i, i + 3));
-  keyboard.push([{ text: '« Back to Sports', callback_data: 'ai_back_sport' }]);
-  const text = `🤖 *AI Parlay Builder*\n\n*Step 2:* How many legs for your ${sportTitle} parlay?`;
-  const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
-  await bot.editMessageText(text, { ...opts, chat_id: chatId, message_id: messageId });
+    const state = await getUserState(chatId);
+    const sportTitle = (state.sportKey || '').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+    const legOptions = [2, 3, 4, 5, 6, 7, 8, 9, 10];
+    const buttons = legOptions.map(num => ({ text: `${num} Legs`, callback_data: `ai_legs_${num}` }));
+    const keyboard = [];
+    for (let i = 0; i < buttons.length; i += 3) keyboard.push(buttons.slice(i, i + 3));
+    keyboard.push([{ text: '« Back to Sports', callback_data: 'ai_back_sport' }]);
+    const text = `🤖 *AI Parlay Builder*\n\n*Step 2:* How many legs for your ${sportTitle} parlay?`;
+    const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
+    await safeEditMessage(bot, text, { ...opts, chat_id: chatId, message_id: messageId });
 }
 
 async function sendModeSelection(bot, chatId, messageId) {
-  const text = '🤖 *AI Parlay Builder*\n\n*Step 3:* Select an analysis mode.';
-  const keyboard = [
-    [{ text: '🌐 Web Research Only', callback_data: 'ai_mode_web' }],
-    [{ text: '📡 Live API Data (Best)', callback_data: 'ai_mode_live' }],
-    [{ text: '💾 Database Only (Fallback)', callback_data: 'ai_mode_db' }],
-    [{ text: '« Back to Legs', callback_data: 'ai_back_legs' }]
-  ];
-  const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
-  await bot.editMessageText(text, { ...opts, chat_id: chatId, message_id: messageId });
+    const text = '🤖 *AI Parlay Builder*\n\n*Step 3:* Select an analysis mode.';
+    const keyboard = [
+        [{ text: '🌐 Web Research Only', callback_data: 'ai_mode_web' }],
+        [{ text: '📡 Live API Data (Best)', callback_data: 'ai_mode_live' }],
+        [{ text: '💾 Database Only (Fallback)', callback_data: 'ai_mode_db' }],
+        [{ text: '« Back to Legs', callback_data: 'ai_back_legs' }]
+    ];
+    const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
+    await safeEditMessage(bot, text, { ...opts, chat_id: chatId, message_id: messageId });
 }
 
 async function sendBetTypeSelection(bot, chatId, messageId) {
-  const text = '🤖 *AI Parlay Builder*\n\n*Step 4:* What kind of parlay should I build?';
-  const keyboard = [
-    [{ text: '🔥 Player Props Only', callback_data: 'ai_bettype_props' }],
-    [{ text: '🧩 Any Bet Type (Mixed)', callback_data: 'ai_bettype_mixed' }],
-    [{ text: '« Back to Mode', callback_data: 'ai_back_mode' }]
-  ];
-  const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
-  await bot.editMessageText(text, { ...opts, chat_id: chatId, message_id: messageId });
+    const text = '🤖 *AI Parlay Builder*\n\n*Step 4:* What kind of parlay should I build?';
+    const keyboard = [
+        [{ text: '🔥 Player Props Only', callback_data: 'ai_bettype_props' }],
+        [{ text: '🧩 Any Bet Type (Mixed)', callback_data: 'ai_bettype_mixed' }],
+        [{ text: '« Back to Mode', callback_data: 'ai_back_mode' }]
+    ];
+    const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
+    await safeEditMessage(bot, text, { ...opts, chat_id: chatId, message_id: messageId });
 }
 
 async function sendAiModelSelection(bot, chatId, messageId) {
-  const text = '🤖 *AI Parlay Builder*\n\n*Step 5:* Choose your Research AI.\n\n*Gemini is creative and great at finding narrative connections. Perplexity is fast, direct, and focuses on hard data.*';
-  const keyboard = [
-    [{ text: '🧠 Gemini (Creative)', callback_data: 'ai_model_gemini' }],
-    [{ text: '⚡ Perplexity (Data-Focused)', callback_data: 'ai_model_perplexity' }],
-    [{ text: '« Back to Bet Type', callback_data: 'ai_back_bettype' }]
-  ];
-  const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
-  await bot.editMessageText(text, { ...opts, chat_id: chatId, message_id: messageId });
+    const text = '🤖 *AI Parlay Builder*\n\n*Step 5:* Choose your Research AI.\n\n*Gemini is creative and great at finding narrative connections. Perplexity is fast, direct, and focuses on hard data.*';
+    const keyboard = [
+        [{ text: '🧠 Gemini (Creative)', callback_data: 'ai_model_gemini' }],
+        [{ text: '⚡ Perplexity (Data-Focused)', callback_data: 'ai_model_perplexity' }],
+        [{ text: '« Back to Bet Type', callback_data: 'ai_back_bettype' }]
+    ];
+    const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
+    await safeEditMessage(bot, text, { ...opts, chat_id: chatId, message_id: messageId });
 }
 
 async function executeAiRequest(bot, chatId, messageId) {
@@ -178,7 +183,7 @@ async function executeAiRequest(bot, chatId, messageId) {
     const { sportKey, numLegs, mode, betType, aiModel = 'gemini' } = state;
 
     if (!sportKey || !numLegs || !mode || !betType) {
-        return bot.editMessageText('Incomplete selection. Please start over using /ai.', { chat_id: chatId, message_id: messageId });
+        return safeEditMessage(bot, 'Incomplete selection. Please start over using /ai.', { chat_id: chatId, message_id: messageId });
     }
 
     let modeText = { web: 'Web Research', live: 'Live API Data', db: 'Database Only' }[mode];
@@ -189,7 +194,7 @@ async function executeAiRequest(bot, chatId, messageId) {
     const safeModeText = escapeMarkdownV2(modeText);
     const safeBetTypeText = escapeMarkdownV2(betTypeText);
 
-    await bot.editMessageText(
+    await safeEditMessage(bot,
         `🤖 Accessing advanced analytics\\.\\.\\.\n\n*Sport:* ${safeSportKey}\n*Legs:* ${numLegs}\n*Mode:* ${safeModeText}\n*Type:* ${safeBetTypeText}\n\nThis may take a moment\\.`,
         { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: null }
     );
@@ -214,12 +219,12 @@ async function executeAiRequest(bot, chatId, messageId) {
         });
 
         const finalKeyboard = [[{ text: 'Build Another AI Parlay', callback_data: 'ai_back_sport' }]];
-        await bot.editMessageText(response, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: finalKeyboard } });
+        await safeEditMessage(bot, response, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: finalKeyboard } });
 
     } catch (error) {
         console.error('AI handler execution error:', error);
         const safeError = escapeMarkdownV2(error.message);
-        await bot.editMessageText(`❌ I encountered a critical error: \`${safeError}\`\\.\nPlease try again later\\.`, {
+        await safeEditMessage(bot, `❌ I encountered a critical error: \`${safeError}\`\\.\nPlease try again later\\.`, {
             chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2',
             reply_markup: { inline_keyboard: [[{ text: 'Start Over', callback_data: 'ai_back_sport' }]] }
         });
