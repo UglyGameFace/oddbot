@@ -34,16 +34,6 @@ const PREFERRED_FIRST = ['football_ncaaf', 'americanfootball_ncaaf'];
 const DEPRIORITIZE_LAST = ['hockey_nhl', 'icehockey_nhl'];
 const PAGE_SIZE = 10;
 
-// --- VERIFIED FIX: Fallback sports list for when live/db data is unavailable ---
-const FALLBACK_SPORTS = [
-    { sport_key: 'americanfootball_nfl', sport_title: 'NFL' },
-    { sport_key: 'basketball_nba', sport_title: 'NBA' },
-    { sport_key: 'baseball_mlb', sport_title: 'MLB' },
-    { sport_key: 'americanfootball_ncaaf', sport_title: 'NCAAF' },
-    { sport_key: 'basketball_ncaab', sport_title: 'NCAAB' },
-    { sport_key: 'icehockey_nhl', sport_title: 'NHL' },
-];
-
 function sortSports(sports) {
   const rank = (k) => {
     if (PREFERRED_FIRST.includes(k)) return -100;
@@ -140,19 +130,11 @@ export function registerAICallbacks(bot) {
 }
 
 async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
-  let sportsRaw = await gamesService.getAvailableSports();
-  
-  let usingFallback = false;
-  if (!sportsRaw || sportsRaw.length === 0) {
-    console.warn('Primary sports service returned no data. Using static fallback list for AI handler.');
-    sportsRaw = FALLBACK_SPORTS;
-    usingFallback = true;
-  }
-
+  const sportsRaw = await gamesService.getAvailableSports();
   const sports = sortSports((sportsRaw || []).filter(s => s?.sport_key));
   
   if (!sports?.length) {
-    return bot.sendMessage(chatId, 'Error: No sports are available to analyze at the moment.');
+    return bot.sendMessage(chatId, 'Error: No sports are available to analyze. Please contact support.');
   }
 
   const totalPages = Math.max(1, Math.ceil(sports.length / PAGE_SIZE));
@@ -166,7 +148,7 @@ async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
   const rows = [];
   for (let i = 0; i < slice.length; i += 2) rows.push(slice.slice(i, i + 2));
 
-  if (!usingFallback && totalPages > 1) {
+  if (totalPages > 1) {
     const nav = [];
     if (page > 0) nav.push({ text: '‹ Prev', callback_data: `ai_page_${page - 1}` });
     if (page < totalPages - 1) nav.push({ text: 'Next ›', callback_data: `ai_page_${page + 1}` });
