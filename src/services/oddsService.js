@@ -20,7 +20,9 @@ async function getOrSetJSON(redis, key, ttlSec, loader) {
   if (gotLock) {
     try {
       const data = await loader();
-      await redis.set(key, JSON.stringify(data), { EX: ttlSec });
+      if (data && data.length > 0) {
+        await redis.set(key, JSON.stringify(data), { EX: ttlSec });
+      }
       return data;
     } finally {
       await redis.del(lockKey);
@@ -33,7 +35,9 @@ async function getOrSetJSON(redis, key, ttlSec, loader) {
       if (again) return JSON.parse(again);
     }
     const data = await loader();
-    await redis.set(key, JSON.stringify(data), { EX: ttlSec });
+    if (data && data.length > 0) {
+        await redis.set(key, JSON.stringify(data), { EX: ttlSec });
+    }
     return data;
   }
 }
@@ -119,21 +123,23 @@ class OddsService {
   }
 
   async _fetchFromApiSports(sportKey) {
-    // Implementation remains the same
     return [];
   }
 
   _transformTheOddsAPIData(data) {
     return (data || []).reduce((acc, d) => {
+      // Validation to ensure the object has the minimum required data
       if (d.id && d.sport_key && d.commence_time && d.home_team && d.away_team) {
         acc.push({
-          game_id_provider: d.id,
-          sport: d.sport_key,
-          sport_title: d.sport_title,
-          start_time: d.commence_time,
+          // FIX: This structure now perfectly matches your 'games' table schema.
+          event_id: d.id,
+          sport_key: d.sport_key,
+          league_key: d.sport_title, // Using sport_title as league_key
+          commence_time: d.commence_time,
           home_team: d.home_team,
           away_team: d.away_team,
-          odds: { bookmakers: d.bookmakers || [] }
+          market_data: { bookmakers: d.bookmakers || [] },
+          sport_title: d.sport_title
         });
       } else {
         console.warn(`[Data Validation] Discarding invalid game object from TheOddsAPI: ${JSON.stringify(d)}`);
@@ -146,13 +152,15 @@ class OddsService {
     return (events || []).reduce((acc, event) => {
         if (event.id && event.start_time) {
             acc.push({
-                game_id_provider: `sr_${event.id}`,
-                sport: sportKey,
-                sport_title: event?.sport_event_context?.competition?.name || 'Unknown',
-                start_time: event?.start_time,
+                // FIX: This structure now perfectly matches your 'games' table schema.
+                event_id: `sr_${event.id}`,
+                sport_key: sportKey,
+                league_key: event?.sport_event_context?.competition?.name || 'Unknown',
+                commence_time: event.start_time,
                 home_team: (event?.competitors || []).find(c => c.qualifier === 'home')?.name || 'N/A',
                 away_team: (event?.competitors || []).find(c => c.qualifier === 'away')?.name || 'N/A',
-                odds: { bookmakers: [] }
+                market_data: { bookmakers: [] },
+                sport_title: event?.sport_event_context?.competition?.name || 'Unknown'
             });
         } else {
             console.warn(`[Data Validation] Discarding invalid game object from SportRadar: ${JSON.stringify(event)}`);
