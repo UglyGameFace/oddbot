@@ -11,7 +11,7 @@ import axios from 'axios';
 import { createClient } from '@supabase/supabase-js';
 import { MerkleTree } from 'merkletreejs';
 import SHA256 from 'crypto-js/sha256';
-import aiService from '../services/aiService.js'; // FIX: Added missing import
+import aiService from '../services/aiService.js'; // <-- FIX: This line was added
 
 class InstitutionalSettlementEngine {
   constructor() {
