@@ -170,22 +170,18 @@ class OddsService {
 
   // --- Mappers ---
   _transformTheOddsAPIData(data) {
-    // ** THE FIX IS HERE **
-    // We now use .reduce() to filter out invalid records before returning.
     return (data || []).reduce((acc, d) => {
-      // Validation check: ensure all required fields for the database exist.
       if (d.id && d.sport_key && d.commence_time && d.home_team && d.away_team) {
         acc.push({
-          game_id_provider: d.id,
-          sport: d.sport_key,
+          event_id: d.id,
+          sport_key: d.sport_key,
           sport_title: d.sport_title,
-          start_time: d.commence_time,
+          commence_time: d.commence_time,
           home_team: d.home_team,
           away_team: d.away_team,
-          odds: { bookmakers: d.bookmakers || [] }
+          bookmakers: d.bookmakers || []
         });
       } else {
-        // Log the invalid data so you can inspect it if needed.
         console.warn(`[Data Validation] Discarding invalid game object from TheOddsAPI: ${JSON.stringify(d)}`);
       }
       return acc;
@@ -196,13 +192,13 @@ class OddsService {
     return (events || []).reduce((acc, event) => {
         if (event.id && event.start_time) {
             acc.push({
-                game_id_provider: `sr_${event.id}`,
-                sport: sportKey,
+                event_id: `sr_${event.id}`,
+                sport_key: sportKey,
                 sport_title: event?.sport_event_context?.competition?.name || 'Unknown',
-                start_time: event?.start_time,
+                commence_time: event?.start_time,
                 home_team: (event?.competitors || []).find(c => c.qualifier === 'home')?.name || 'N/A',
                 away_team: (event?.competitors || []).find(c => c.qualifier === 'away')?.name || 'N/A',
-                odds: { bookmakers: [] }
+                bookmakers: []
             });
         } else {
             console.warn(`[Data Validation] Discarding invalid game object from SportRadar: ${JSON.stringify(event)}`);
