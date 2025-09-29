@@ -169,12 +169,9 @@ class OddsService {
   }
 
   // --- Mappers ---
-  // --- Mappers ---
   _transformTheOddsAPIData(data) {
     return (data || []).reduce((acc, d) => {
-      // Validation check remains the same
       if (d.id && d.sport_key && d.commence_time && d.home_team && d.away_team) {
-        // FIX: Mapped the data to the correct database column names
         acc.push({
           game_id_provider: d.id,
           sport: d.sport_key,
@@ -194,7 +191,6 @@ class OddsService {
   _transformSportRadarData(events, sportKey) {
     return (events || []).reduce((acc, event) => {
         if (event.id && event.start_time) {
-            // FIX: Mapped the data to the correct database column names
             acc.push({
                 game_id_provider: `sr_${event.id}`,
                 sport: sportKey,
@@ -202,7 +198,7 @@ class OddsService {
                 start_time: event?.start_time,
                 home_team: (event?.competitors || []).find(c => c.qualifier === 'home')?.name || 'N/A',
                 away_team: (event?.competitors || []).find(c => c.qualifier === 'away')?.name || 'N/A',
-                odds: { bookmakers: [] } // SportRadar data doesn't include odds in this call
+                odds: { bookmakers: [] }
             });
         } else {
             console.warn(`[Data Validation] Discarding invalid game object from SportRadar: ${JSON.stringify(event)}`);
