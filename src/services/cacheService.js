@@ -9,6 +9,7 @@ export default function makeCache(redis) {
 
     const lockKey = `lock:${key}`;
     const gotLock = await redis.set(lockKey, '1', { NX: true, PX: lockMs });
+
     if (gotLock) {
       try {
         const data = await loader();
@@ -24,6 +25,7 @@ export default function makeCache(redis) {
         const again = await redis.get(key);
         if (again) return JSON.parse(again);
       }
+      // If still not available, compute once
       const data = await loader();
       await redis.set(key, JSON.stringify(data), { EX: ttlSec });
       return data;
