@@ -135,31 +135,30 @@ class DatabaseService {
           (data || []).forEach(game => {
             if (game.sport_key && game.sport_title) {
                 uniqueSportsMap.set(game.sport_key, { 
-                  sport: game.sport_key,  // CRITICAL FIX: gamesService expects 'sport'
+                  // --- THIS IS THE CRITICAL FIX ---
+                  sport_key: game.sport_key,  // Changed from 'sport' to 'sport_key' for alignment
                   sport_title: game.sport_title 
                 });
             }
           });
           
-          // FORCE RETURN SPORTS EVEN IF DATABASE EMPTY
           if (uniqueSportsMap.size === 0) {
             console.log('🔄 Database empty, returning default sports');
             return [
-              { sport: 'basketball_nba', sport_title: 'NBA' },
-              { sport: 'americanfootball_nfl', sport_title: 'NFL' },
-              { sport: 'baseball_mlb', sport_title: 'MLB' },
-              { sport: 'basketball_ncaab', sport_title: 'NCAAB' }
+              { sport_key: 'basketball_nba', sport_title: 'NBA' },
+              { sport_key: 'americanfootball_nfl', sport_title: 'NFL' },
+              { sport_key: 'baseball_mlb', sport_title: 'MLB' },
+              { sport_key: 'basketball_ncaab', sport_title: 'NCAAB' }
             ];
           }
           
           return Array.from(uniqueSportsMap.values());
       } catch (error) {
           console.error('Supabase getDistinctSports error:', error.message);
-          // FORCE RETURN SPORTS ON ERROR TOO
-          return [
-            { sport: 'basketball_nba', sport_title: 'NBA' },
-            { sport: 'americanfootball_nfl', sport_title: 'NFL' },
-            { sport: 'baseball_mlb', sport_title: 'MLB' }
+          return [ // Fallback on error
+            { sport_key: 'basketball_nba', sport_title: 'NBA' },
+            { sport_key: 'americanfootball_nfl', sport_title: 'NFL' },
+            { sport_key: 'baseball_mlb', sport_title: 'MLB' }
           ];
       }
   }
