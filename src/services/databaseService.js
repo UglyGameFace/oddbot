@@ -1,4 +1,4 @@
-// src/services/databaseService.js
+// src/services/databaseService.js - FIXED VERSION
 import { createClient } from '@supabase/supabase-js';
 import env from '../config/env.js';
 import { sentryService } from './sentryService.js';
@@ -71,23 +71,17 @@ class DatabaseService {
   }
   
   async getOddsDateRange() {
-  if (!this.client) return { min_date: null, max_date: null };
-  try {
-    const { data: minData, error: minError } = await this.client
-      .from('games').select('commence_time').order('commence_time', { ascending: true }).limit(1);
-    const { data: maxData, error: maxError } = await this.client
-      .from('games').select('commence_time').order('commence_time', { ascending: false }).limit(1);
-    
-    if (minError || maxError) throw minError || maxError;
-    return { 
-      min_date: minData?.[0]?.commence_time || null, 
-      max_date: maxData?.[0]?.commence_time || null 
-    };
-  } catch (error) {
-    console.error('Supabase getOddsDateRange error:', error.message);
-    return { min_date: null, max_date: null };
+    if (!this.client) return { min_date: null, max_date: null };
+    try {
+      const { data: minData, error: minError } = await this.client.from('games').select('commence_time').order('commence_time', { ascending: true }).limit(1);
+      const { data: maxData, error: maxError } = await this.client.from('games').select('commence_time').order('commence_time', { ascending: false }).limit(1);
+      if (minError || maxError) throw minError || maxError;
+      return { min_date: minData?.[0]?.commence_time || null, max_date: maxData?.[0]?.commence_time || null };
+    } catch (error) {
+      console.error('Supabase getOddsDateRange error:', error.message);
+      return { min_date: null, max_date: null };
+    }
   }
-}
 
   async findOrCreateUser(telegramId, firstName = '', username = '') {
       if (!this.client) return null;
@@ -133,46 +127,92 @@ class DatabaseService {
   }
 
   async getDistinctSports() {
+      if (!this.client) return [];
+      try {
+          const { data, error } = await this.client.from('games').select('sport_key, sport_title');
+          if (error) throw error;
+          const uniqueSportsMap = new Map();
+          (data || []).forEach(game => {
+            if (game.sport_key && game.sport_title) {
+                uniqueSportsMap.set(game.sport_key, { 
+                  sport: game.sport_key,  // CRITICAL FIX: gamesService expects 'sport'
+                  sport_title: game.sport_title 
+                });
+            }
+          });
+          
+          // FORCE RETURN SPORTS EVEN IF DATABASE EMPTY
+          if (uniqueSportsMap.size === 0) {
+            console.log('🔄 Database empty, returning default sports');
+            return [
+              { sport: 'basketball_nba', sport_title: 'NBA' },
+              { sport: 'americanfootball_nfl', sport_title: 'NFL' },
+              { sport: 'baseball_mlb', sport_title: 'MLB' },
+              { sport: 'basketball_ncaab', sport_title: 'NCAAB' }
+            ];
+          }
+          
+          return Array.from(uniqueSportsMap.values());
+      } catch (error) {
+          console.error('Supabase getDistinctSports error:', error.message);
+          // FORCE RETURN SPORTS ON ERROR TOO
+          return [
+            { sport: 'basketball_nba', sport_title: 'NBA' },
+            { sport: 'americanfootball_nfl', sport_title: 'NFL' },
+            { sport: 'baseball_mlb', sport_title: 'MLB' }
+          ];
+      }
+  }
+
+  async getSportGameCounts() {
     if (!this.client) return [];
     try {
-        // FIXED: Use correct column names that match your schema
-        const { data, error } = await this.client.from('games').select('sport_key, sport_title');
-        if (error) throw error;
-        const uniqueSportsMap = new Map();
-        (data || []).forEach(game => {
-          if (game.sport_key && game.sport_title) {
-              uniqueSportsMap.set(game.sport_key, { 
-                  sport: game.sport_key,  // gamesService expects 'sport' not 'sport_key'
-                  sport_title: game.sport_title 
-              });
-          }
-        });
-        return Array.from(uniqueSportsMap.values());
+      const { data, error } = await this.client.from('games').select('sport_title, commence_time');
+      if (error) throw error;
+      const counts = (data || []).reduce((acc, { sport_title }) => {
+          const title = sport_title || 'Unknown/Other';
+          acc[title] = (acc[title] || 0) + 1;
+          return acc;
+      }, {});
+      return Object.entries(counts).map(([title, count]) => ({ sport_title: title, game_count: count }));
     } catch (error) {
-        console.error('Supabase getDistinctSports error:', error.message);
-        return [];
+      console.error('Supabase getSportGameCounts error:', error.message);
+      return [];
     }
-}
-  async getSportGameCounts() {
-  if (!this.client) return [];
-  try {
-    const { data, error } = await this.client.from('games').select('sport_title, commence_time');
-    if (error) throw error;
-    
-    const counts = (data || []).reduce((acc, game) => {
-      const title = game.sport_title || 'Unknown';
-      acc[title] = (acc[title] || 0) + 1;
-      return acc;
-    }, {});
-    
-    return Object.entries(counts).map(([sport_title, game_count]) => ({
-      sport_title,
-      game_count
-    }));
-  } catch (error) {
-    console.error('Supabase getSportGameCounts error:', error.message);
-    return [];
   }
+
+  // ADD THESE METHODS FOR SETTLEMENT WORKER
+  async getActiveGames() {
+    if (!this.client) return [];
+    try {
+      const { data, error } = await this.client
+        .from('games')
+        .select('*')
+        .in('status', ['scheduled', 'live'])
+        .gte('commence_time', new Date().toISOString());
+      if (error) throw error;
+      return data || [];
+    } catch (error) {
+      console.error('getActiveGames error:', error.message);
+      return [];
+    }
+  }
+
+  async getRecentlyCompletedGames() {
+    if (!this.client) return [];
+    try {
+      const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const { data, error } = await this.client
+        .from('games')
+        .select('*')
+        .eq('status', 'completed')
+        .gte('commence_time', twentyFourHoursAgo);
+      if (error) throw error;
+      return data || [];
+    } catch (error) {
+      console.error('getRecentlyCompletedGames error:', error.message);
+      return [];
+    }
   }
 }
 
