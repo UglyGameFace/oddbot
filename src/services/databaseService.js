@@ -1,11 +1,10 @@
-// src/services/databaseService.js - FINAL VERSION
+// src/services/databaseService.js
 import { createClient } from '@supabase/supabase-js';
 import env from '../config/env.js';
 import { sentryService } from './sentryService.js';
 
 const SUPABASE_KEY = env.SUPABASE_SERVICE_KEY || env.SUPABASE_ANON_KEY;
 
-// --- VERIFIED FIX: Comprehensive fallback sports list ---
 const COMPREHENSIVE_FALLBACK_SPORTS = [
     { sport_key: 'americanfootball_nfl', sport_title: 'NFL' },
     { sport_key: 'americanfootball_ncaaf', sport_title: 'NCAAF' },
@@ -41,6 +40,34 @@ const withTimeout = (p, ms, label) =>
 
 class DatabaseService {
   get client() { return supabaseClient || (supabaseClient = buildClient()); }
+
+  async getDistinctSports() {
+      if (!this.client) return COMPREHENSIVE_FALLBACK_SPORTS;
+      try {
+          const { data, error } = await this.client.from('games').select('sport_key, sport_title');
+          if (error) throw error;
+          const uniqueSportsMap = new Map();
+          (data || []).forEach(game => {
+            if (game.sport_key && game.sport_title) {
+                uniqueSportsMap.set(game.sport_key, { 
+                  sport_key: game.sport_key,
+                  sport_title: game.sport_title 
+                });
+            }
+          });
+          
+          if (uniqueSportsMap.size === 0) {
+            console.log('🔄 Database empty, returning comprehensive default sports list.');
+            return COMPREHENSIVE_FALLBACK_SPORTS;
+          }
+          
+          return Array.from(uniqueSportsMap.values());
+      } catch (error) {
+          console.error('Supabase getDistinctSports error:', error.message);
+          console.log('🔄 Error fetching from DB, returning comprehensive default sports list.');
+          return COMPREHENSIVE_FALLBACK_SPORTS;
+      }
+  }
 
   async upsertGames(gamesData) {
     if (!this.client || !gamesData?.length) return { data: [], error: null };
@@ -141,34 +168,6 @@ class DatabaseService {
       } catch (error) {
           console.error(`Supabase updateUserSettings error for ${telegramId}:`, error.message);
           return null;
-      }
-  }
-
-  async getDistinctSports() {
-      if (!this.client) return COMPREHENSIVE_FALLBACK_SPORTS;
-      try {
-          const { data, error } = await this.client.from('games').select('sport_key, sport_title');
-          if (error) throw error;
-          const uniqueSportsMap = new Map();
-          (data || []).forEach(game => {
-            if (game.sport_key && game.sport_title) {
-                uniqueSportsMap.set(game.sport_key, { 
-                  sport_key: game.sport_key,
-                  sport_title: game.sport_title 
-                });
-            }
-          });
-          
-          if (uniqueSportsMap.size === 0) {
-            console.log('🔄 Database empty, returning comprehensive default sports list.');
-            return COMPREHENSIVE_FALLBACK_SPORTS;
-          }
-          
-          return Array.from(uniqueSportsMap.values());
-      } catch (error) {
-          console.error('Supabase getDistinctSports error:', error.message);
-          console.log('🔄 Error fetching from DB, returning comprehensive default sports list.');
-          return COMPREHENSIVE_FALLBACK_SPORTS;
       }
   }
 
