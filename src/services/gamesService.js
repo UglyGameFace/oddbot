@@ -25,14 +25,15 @@ const PREFERRED_FIRST = ['football_ncaaf', 'americanfootball_ncaaf'];
 const DEPRIORITIZE_LAST = ['hockey_nhl', 'icehockey_nhl'];
 
 function sortSports(sports) {
-  const rank = (k) => {
+  const rank = (sportObj) => {
+    // FIX: Use the 'sport' property from the object to get the key.
+    const k = sportObj?.sport || '';
     if (PREFERRED_FIRST.includes(k)) return -100;
     if (DEPRIORITIZE_LAST.includes(k)) return 100;
     return 0;
   };
-  return [...(sports || [])].sort(
-    (a, b) => rank(a?.sport_key || '') - rank(b?.sport_key || '')
-  );
+  // FIX: Pass the full object to the rank function for sorting.
+  return [...(sports || [])].sort((a, b) => rank(a) - rank(b));
 }
 
 // Optional provider sports merge to enrich sparse DB/API results
@@ -40,10 +41,10 @@ async function fetchProviderSports() {
   if (!env.THE_ODDS_API_KEY) return [];
   try {
     const url = `https://api.the-odds-api.com/v4/sports?all=true&apiKey=${env.THE_ODDS_API_KEY}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`provider sports ${res.status}`);
-    const arr = await res.json();
-    return (arr || []).map(s => ({ sport_key: s.key, sport_title: s.title || '', active: !!s.active }));
+    // FIX: Switched to axios to handle requests consistently.
+    const res = await axios.get(url, { timeout: 5000 });
+    // FIX: API response from TheOddsAPI provides 'key' and 'title'. Map them to 'sport' and 'sport_title'.
+    return (res.data || []).map(s => ({ sport: s.key, sport_title: s.title || '', active: !!s.active }));
   } catch (e) {
     sentryService.captureError(e, { component: 'games_service', operation: 'fetchProviderSports' });
     return [];
@@ -73,24 +74,29 @@ class GamesService {
       // 2) Fallback: derive from live games via odds API (upcoming)
       if (!sports || sports.length === 0) {
         console.warn('No sports found in DB, attempting live API fallback...');
-        const liveGames = await oddsService.getSportOdds('upcoming'); // your wrapper around /v4/sports/:sport/odds [web:363]
+        const liveGames = await oddsService.getSportOdds('upcoming');
         if (liveGames && liveGames.length > 0) {
           const map = new Map();
           for (const g of liveGames) {
-            if (g?.sport_key) map.set(g.sport_key, g.sport_title || '');
+            // FIX: Use 'sport' instead of 'sport_key'.
+            if (g?.sport) map.set(g.sport, g.sport_title || '');
           }
-          sports = Array.from(map, ([sport_key, sport_title]) => ({ sport_key, sport_title }));
+          // FIX: Use 'sport' instead of 'sport_key'.
+          sports = Array.from(map, ([sport, sport_title]) => ({ sport, sport_title }));
         }
       }
 
       // 3) Optional enrichment: merge with provider /v4/sports (in-season + off-season) for completeness
       if (sports && sports.length > 0 && env.THE_ODDS_API_KEY) {
         try {
-          const provider = await fetchProviderSports(); // may be empty on error [web:363]
+          const provider = await fetchProviderSports();
           if (provider.length) {
-            const seen = new Set(sports.map(s => s.sport_key));
+            // FIX: Use 'sport' instead of 'sport_key' for comparison.
+            const seen = new Set(sports.map(s => s.sport));
             for (const p of provider) {
-              if (!seen.has(p.sport_key)) sports.push({ sport_key: p.sport_key, sport_title: p.sport_title || '' });
+              if (!seen.has(p.sport)) {
+                sports.push({ sport: p.sport, sport_title: p.sport_title || '' });
+              }
             }
           }
         } catch (e) {
@@ -100,17 +106,20 @@ class GamesService {
 
       // Normalize titles to guarantee non-null, then sort for UX preference
       const normalized = (sports || [])
-        .filter(s => s?.sport_key)
+        // FIX: Filter by 'sport' instead of 'sport_key'.
+        .filter(s => s?.sport)
         .map(s => ({
-          sport_key: s.sport_key,
-          sport_title: s.sport_title || SPORT_TITLES[s.sport_key] || s.sport_key, // non-empty label [web:87]
+          // FIX: Use 'sport' instead of 'sport_key'.
+          sport: s.sport,
+          sport_title: s.sport_title || SPORT_TITLES[s.sport] || s.sport,
         }));
 
       const dedupSeen = new Set();
       const dedup = [];
       for (const s of normalized) {
-        if (dedupSeen.has(s.sport_key)) continue;
-        dedupSeen.add(s.sport_key);
+        // FIX: Use 'sport' to check for duplicates.
+        if (dedupSeen.has(s.sport)) continue;
+        dedupSeen.add(s.sport);
         dedup.push(s);
       }
 
@@ -143,13 +152,13 @@ class GamesService {
     }
 
     try {
-      // 1) Primary: DB
+      // 1) Primary: DB (This will now work because databaseService was fixed)
       let games = await databaseService.getGamesBySport(sportKey);
 
-      // 2) Fallback: Odds API
+      // 2) Fallback: Odds API (This will now work because oddsService was fixed)
       if (!games || games.length === 0) {
         console.warn(`No games for ${sportKey} in DB, attempting live API fallback...`);
-        games = await oddsService.getSportOdds(sportKey); // wrapper for /v4/sports/:sport/odds [web:363]
+        games = await oddsService.getSportOdds(sportKey);
       }
 
       if (games && games.length > 0) {
@@ -169,6 +178,7 @@ class GamesService {
    */
   async getGameDetails(gameId) {
     const redis = await redisClient;
+    // NOTE: This assumes gameId is the provider's unique ID.
     const cacheKey = `games:details:${gameId}`;
 
     try {
@@ -179,6 +189,7 @@ class GamesService {
     }
 
     try {
+      // This will now work correctly as getGameById was fixed to use 'game_id_provider'
       const game = await databaseService.getGameById(gameId);
 
       if (game) {
