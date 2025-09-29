@@ -7,7 +7,7 @@ import MerkleTree from 'merkletreejs';
 // --- NEW FUNCTION TO PREVENT TELEGRAM FORMATTING ERRORS ---
 /**
  * Escapes characters that have special meaning in Telegram's MarkdownV2.
- * @param {string} text The text to escape.
+ * @param {string | number} text The text to escape.
  * @returns {string} The escaped text.
  */
 export function escapeMarkdownV2(text) {
@@ -23,9 +23,11 @@ export function escapeMarkdownV2(text) {
 /**
  * Formerly from quant.js
  * A simple quantitative analysis function.
+ * @param {object[]} oddsData - The array of game odds data.
+ * @returns {{totalGamesAnalyzed: number, averageH2HOdds: number}}
  */
 export function analyzeQuantitative(oddsData) {
-  if (!oddsData || oddsData.length === 0) return { totalGames: 0, averageOdds: 0 };
+  if (!oddsData || oddsData.length === 0) return { totalGamesAnalyzed: 0, averageH2HOdds: 0 };
   const h2hOdds = oddsData.flatMap(game =>
     game.bookmakers?.flatMap(bookmaker =>
       bookmaker.markets?.filter(market => market.key === 'h2h')
@@ -42,6 +44,7 @@ export function analyzeQuantitative(oddsData) {
 /**
  * Formerly from psychometric.js
  * A mock user profiling function.
+ * @param {string | number} chatId - The user's chat ID.
  */
 export const psychometric = {
     async profileUser(chatId) {
@@ -65,7 +68,14 @@ export const advancedOddsModel = {
         const home = h2h.find(o => o.name === game.home_team);
         const away = h2h.find(o => o.name === game.away_team);
         const draw = h2h.find(o => o.name === 'Draw');
-        const prob = (price) => price ? (1 / toDecimalFromAmerican(price)) * 100 : 0;
+
+        // Refactored to use existing utility functions for consistency
+        const prob = (americanPrice) => {
+            if (!americanPrice) return 0;
+            const decimal = toDecimalFromAmerican(americanPrice);
+            return impliedProbability(decimal) * 100; // Return as percentage
+        };
+
         return { home: prob(home?.price), away: prob(away?.price), draw: prob(draw?.price) };
     },
     engineerGameFeatures(game) {
@@ -80,33 +90,59 @@ export const advancedOddsModel = {
 
 // --- EXISTING UTILITY FUNCTIONS ---
 
+/**
+ * Returns an emoji for a given sport key.
+ * @param {string} key - The sport key (e.g., 'baseball_mlb').
+ * @returns {string} An emoji.
+ */
 export function getSportEmoji(key = '') {
   const k = key.toLowerCase();
-  if (k.includes('americanfootball_nfl')) return 'ðŸˆ';
-  if (k.includes('americanfootball_ncaaf')) return 'ðŸŽ“ðŸˆ';
-  if (k.includes('basketball_nba')) return 'ðŸ€';
-  if (k.includes('basketball_wnba')) return 'ðŸ™‹ðŸ½â€â™€ï¸ðŸ€';
-  if (k.includes('basketball_ncaab')) return 'ðŸŽ“';
-  if (k.includes('baseball_mlb')) return 'âš¾';
-  if (k.includes('icehockey_nhl')) return 'ðŸ’';
-  if (k.includes('soccer')) return 'âš½';
-  return 'ðŸ†';
+  if (k.includes('americanfootball_nfl')) return '🏈';
+  if (k.includes('americanfootball_ncaaf')) return '🎓'; // College Football
+  if (k.includes('basketball_nba')) return '🏀';
+  if (k.includes('basketball_wnba')) return '⛹️‍♀️'; // WNBA
+  if (k.includes('basketball_ncaab')) return '🏀'; // College Basketball
+  if (k.includes('baseball_mlb')) return '⚾';
+  if (k.includes('icehockey_nhl')) return '🏒';
+  if (k.includes('soccer')) return '⚽';
+  return '🏆'; // Default
 }
 
+/**
+ * Converts American odds to decimal odds.
+ * @param {number} americanOdds - e.g., -110 or 200
+ * @returns {number}
+ */
 export function toDecimalFromAmerican(americanOdds) {
   if (americanOdds > 0) return (americanOdds / 100) + 1;
   return (100 / Math.abs(americanOdds)) + 1;
 }
 
+/**
+ * Converts decimal odds to American odds.
+ * @param {number} decimalOdds - e.g., 1.91 or 3.00
+ * @returns {number}
+ */
 export function toAmerican(decimalOdds) {
-    if (decimalOdds >= 2) return (decimalOdds - 1) * 100;
-    return -100 / (decimalOdds - 1);
+    if (decimalOdds >= 2) return Math.round((decimalOdds - 1) * 100);
+    return Math.round(-100 / (decimalOdds - 1));
 }
 
+/**
+ * Calculates the implied probability from decimal odds.
+ * @param {number} decimalOdds
+ * @returns {number} - Probability as a fraction (e.g., 0.52)
+ */
 export function impliedProbability(decimalOdds) {
+  if (decimalOdds <= 0) return 0;
   return 1 / decimalOdds;
 }
 
+/**
+ * Formats an ISO date string to a user-friendly string in a specific timezone.
+ * @param {string} isoString
+ * @returns {string}
+ */
 export function formatGameTimeTZ(isoString) {
   if (!isoString) return '';
   const tz = process.env.TIMEZONE || 'America/New_York';
@@ -118,6 +154,11 @@ export function formatGameTimeTZ(isoString) {
   });
 }
 
+/**
+ * Groups parlay legs by their associated game.
+ * @param {object[]} legs
+ * @returns {object}
+ */
 export function groupLegsByGame(legs) {
     const grouped = {};
     for (const leg of legs) {
@@ -129,11 +170,23 @@ export function groupLegsByGame(legs) {
     return grouped;
 }
 
+/**
+ * Generates a Merkle Tree from an array of data.
+ * @param {any[]} data - The data to be included in the tree.
+ * @returns {MerkleTree}
+ */
 export function generateMerkleTree(data) {
     const leaves = data.map(x => CryptoJS.SHA256(JSON.stringify(x)));
     return new MerkleTree(leaves, CryptoJS.SHA256);
 }
 
+/**
+ * Verifies a proof against a Merkle Tree.
+ * @param {MerkleTree} tree - The Merkle Tree instance.
+ * @param {any} leaf - The leaf data to verify.
+ * @param {Buffer[]} proof - The proof generated by the tree.
+ * @returns {boolean}
+ */
 export function verifyMerkleProof(tree, leaf, proof) {
     return tree.verify(proof, CryptoJS.SHA256(JSON.stringify(leaf)), tree.getRoot());
 }
