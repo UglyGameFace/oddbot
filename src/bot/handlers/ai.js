@@ -34,6 +34,8 @@ const PREFERRED_FIRST = ['football_ncaaf', 'americanfootball_ncaaf'];
 const DEPRIORITIZE_LAST = ['hockey_nhl', 'icehockey_nhl'];
 const PAGE_SIZE = 10;
 
+// --- REMOVED: The local FALLBACK_SPORTS constant is no longer needed as this logic is now centralized in the service layer.
+
 function sortSports(sports) {
   const rank = (k) => {
     if (PREFERRED_FIRST.includes(k)) return -100;
@@ -133,8 +135,9 @@ async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
   const sportsRaw = await gamesService.getAvailableSports();
   const sports = sortSports((sportsRaw || []).filter(s => s?.sport_key));
   
-  if (!sports?.length) {
-    return bot.sendMessage(chatId, 'Error: No sports are available to analyze. Please contact support.');
+  if (!sports || sports.length === 0) {
+    // This message should now only appear if there's a fundamental failure in all data sources.
+    return bot.sendMessage(chatId, 'Error: No sports are available to analyze at the moment. Please contact support.');
   }
 
   const totalPages = Math.max(1, Math.ceil(sports.length / PAGE_SIZE));
