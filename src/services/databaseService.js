@@ -24,20 +24,6 @@ const withTimeout = (p, ms, label) =>
 class DatabaseService {
   get client() { return supabaseClient || (supabaseClient = buildClient()); }
 
-  async getOddsDateRange() {
-    if (!this.client) return { min_date: null, max_date: null };
-    try {
-      // FIX: This is a robust fallback that works without needing a custom RPC.
-      const { data: minData, error: minError } = await this.client.from('games').select('commence_time').order('commence_time', { ascending: true }).limit(1);
-      const { data: maxData, error: maxError } = await this.client.from('games').select('commence_time').order('commence_time', { ascending: false }).limit(1);
-      if (minError || maxError) throw minError || maxError;
-      return { min_date: minData?.[0]?.commence_time || null, max_date: maxData?.[0]?.commence_time || null };
-    } catch (error) {
-      console.error('Supabase getOddsDateRange error:', error.message);
-      return { min_date: null, max_date: null };
-    }
-  }
-
   async upsertGames(gamesData) {
     if (!this.client || !gamesData?.length) return { data: [], error: null };
     try {
@@ -84,6 +70,20 @@ class DatabaseService {
     }
   }
   
+  async getOddsDateRange() {
+    if (!this.client) return { min_date: null, max_date: null };
+    try {
+      // FIX: Replaced RPC with a direct, robust query.
+      const { data: minData, error: minError } = await this.client.from('games').select('commence_time').order('commence_time', { ascending: true }).limit(1);
+      const { data: maxData, error: maxError } = await this.client.from('games').select('commence_time').order('commence_time', { ascending: false }).limit(1);
+      if (minError || maxError) throw minError || maxError;
+      return { min_date: minData?.[0]?.commence_time || null, max_date: maxData?.[0]?.commence_time || null };
+    } catch (error) {
+      console.error('Supabase getOddsDateRange error:', error.message);
+      return { min_date: null, max_date: null };
+    }
+  }
+
   async findOrCreateUser(telegramId, firstName = '', username = '') {
       if (!this.client) return null;
       try {
@@ -130,11 +130,16 @@ class DatabaseService {
   async getDistinctSports() {
       if (!this.client) return [];
       try {
-          // FIX: Replaced the broken RPC call with a direct query that achieves the same result.
+          // FIX: Replaced the broken RPC call with a direct query that de-duplicates in code.
           const { data, error } = await this.client.from('games').select('sport_key, sport_title');
           if (error) throw error;
-          const uniqueSports = [...new Map(data.map(item => [item['sport_key'], item])).values()];
-          return uniqueSports;
+          const uniqueSportsMap = new Map();
+          (data || []).forEach(game => {
+            if (game.sport_key && game.sport_title) {
+                uniqueSportsMap.set(game.sport_key, { sport_key: game.sport_key, sport_title: game.sport_title });
+            }
+          });
+          return Array.from(uniqueSportsMap.values());
       } catch (error) {
           console.error('Supabase getDistinctSports error:', error.message);
           return [];
@@ -144,15 +149,15 @@ class DatabaseService {
   async getSportGameCounts() {
     if (!this.client) return [];
     try {
-        // FIX: Replaced the broken RPC call with a direct query that achieves the same result.
-        const { data, error } = await this.client.from('games').select('sport_title');
-        if (error) throw error;
-        const counts = data.reduce((acc, { sport_title }) => {
-            const title = sport_title || 'Unknown/Other';
-            acc[title] = (acc[title] || 0) + 1;
-            return acc;
-        }, {});
-        return Object.entries(counts).map(([title, count]) => ({ sport_title: title, game_count: count }));
+      // FIX: Replaced the broken RPC call with a direct query that groups in code.
+      const { data, error } = await this.client.from('games').select('sport_title');
+      if (error) throw error;
+      const counts = (data || []).reduce((acc, { sport_title }) => {
+          const title = sport_title || 'Unknown/Other';
+          acc[title] = (acc[title] || 0) + 1;
+          return acc;
+      }, {});
+      return Object.entries(counts).map(([title, count]) => ({ sport_title: title, game_count: count }));
     } catch (error) {
       console.error('Supabase getSportGameCounts error:', error.message);
       return [];
