@@ -169,17 +169,20 @@ class OddsService {
   }
 
   // --- Mappers ---
+  // --- Mappers ---
   _transformTheOddsAPIData(data) {
     return (data || []).reduce((acc, d) => {
+      // Validation check remains the same
       if (d.id && d.sport_key && d.commence_time && d.home_team && d.away_team) {
+        // FIX: Mapped the data to the correct database column names
         acc.push({
-          event_id: d.id,
-          sport_key: d.sport_key,
+          game_id_provider: d.id,
+          sport: d.sport_key,
           sport_title: d.sport_title,
-          commence_time: d.commence_time,
+          start_time: d.commence_time,
           home_team: d.home_team,
           away_team: d.away_team,
-          bookmakers: d.bookmakers || []
+          odds: { bookmakers: d.bookmakers || [] }
         });
       } else {
         console.warn(`[Data Validation] Discarding invalid game object from TheOddsAPI: ${JSON.stringify(d)}`);
@@ -191,14 +194,15 @@ class OddsService {
   _transformSportRadarData(events, sportKey) {
     return (events || []).reduce((acc, event) => {
         if (event.id && event.start_time) {
+            // FIX: Mapped the data to the correct database column names
             acc.push({
-                event_id: `sr_${event.id}`,
-                sport_key: sportKey,
+                game_id_provider: `sr_${event.id}`,
+                sport: sportKey,
                 sport_title: event?.sport_event_context?.competition?.name || 'Unknown',
-                commence_time: event?.start_time,
+                start_time: event?.start_time,
                 home_team: (event?.competitors || []).find(c => c.qualifier === 'home')?.name || 'N/A',
                 away_team: (event?.competitors || []).find(c => c.qualifier === 'away')?.name || 'N/A',
-                bookmakers: []
+                odds: { bookmakers: [] } // SportRadar data doesn't include odds in this call
             });
         } else {
             console.warn(`[Data Validation] Discarding invalid game object from SportRadar: ${JSON.stringify(event)}`);
