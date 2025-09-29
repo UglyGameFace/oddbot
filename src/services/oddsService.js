@@ -6,6 +6,7 @@ import { sentryService } from './sentryService.js';
 import rateLimitService from './rateLimitService.js';
 
 const CACHE_TTL_ODDS = 60;
+const CACHE_TTL_PROPS = 60; // FIX: Added missing constant
 const LOCK_MS = 8000;
 const RETRY_MS = 150;
 const ODDS_BASE = 'https://api.the-odds-api.com/v4';
