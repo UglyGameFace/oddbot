@@ -34,6 +34,16 @@ const PREFERRED_FIRST = ['football_ncaaf', 'americanfootball_ncaaf'];
 const DEPRIORITIZE_LAST = ['hockey_nhl', 'icehockey_nhl'];
 const PAGE_SIZE = 10;
 
+// --- VERIFIED FIX: Fallback sports list for when live/db data is unavailable ---
+const FALLBACK_SPORTS = [
+    { sport_key: 'americanfootball_nfl', sport_title: 'NFL' },
+    { sport_key: 'basketball_nba', sport_title: 'NBA' },
+    { sport_key: 'baseball_mlb', sport_title: 'MLB' },
+    { sport_key: 'americanfootball_ncaaf', sport_title: 'NCAAF' },
+    { sport_key: 'basketball_ncaab', sport_title: 'NCAAB' },
+    { sport_key: 'icehockey_nhl', sport_title: 'NHL' },
+];
+
 function sortSports(sports) {
   const rank = (k) => {
     if (PREFERRED_FIRST.includes(k)) return -100;
@@ -130,9 +140,20 @@ export function registerAICallbacks(bot) {
 }
 
 async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
-  const sportsRaw = await gamesService.getAvailableSports();
+  let sportsRaw = await gamesService.getAvailableSports();
+  
+  let usingFallback = false;
+  if (!sportsRaw || sportsRaw.length === 0) {
+    console.warn('Primary sports service returned no data. Using static fallback list for AI handler.');
+    sportsRaw = FALLBACK_SPORTS;
+    usingFallback = true;
+  }
+
   const sports = sortSports((sportsRaw || []).filter(s => s?.sport_key));
-  if (!sports?.length) return bot.sendMessage(chatId, 'No games in DB to analyze.');
+  
+  if (!sports?.length) {
+    return bot.sendMessage(chatId, 'Error: No sports are available to analyze at the moment.');
+  }
 
   const totalPages = Math.max(1, Math.ceil(sports.length / PAGE_SIZE));
   page = Math.min(Math.max(0, page), totalPages - 1);
@@ -145,10 +166,12 @@ async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
   const rows = [];
   for (let i = 0; i < slice.length; i += 2) rows.push(slice.slice(i, i + 2));
 
-  const nav = [];
-  if (page > 0) nav.push({ text: '‹ Prev', callback_data: `ai_page_${page - 1}` });
-  if (page < totalPages - 1) nav.push({ text: 'Next ›', callback_data: `ai_page_${page + 1}` });
-  if (nav.length) rows.push(nav);
+  if (!usingFallback && totalPages > 1) {
+    const nav = [];
+    if (page > 0) nav.push({ text: '‹ Prev', callback_data: `ai_page_${page - 1}` });
+    if (page < totalPages - 1) nav.push({ text: 'Next ›', callback_data: `ai_page_${page + 1}` });
+    if (nav.length) rows.push(nav);
+  }
 
   const text = '🤖 *AI Parlay Builder*\n\n*Step 1:* Select a sport.';
   const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } };
@@ -173,8 +196,8 @@ async function sendLegSelection(bot, chatId, messageId) {
 async function sendModeSelection(bot, chatId, messageId) {
   const text = '🤖 *AI Parlay Builder*\n\n*Step 3:* Select an analysis mode.';
   const keyboard = [
-    [{ text: '🌐 Web Research Only', callback_data: 'ai_mode_web' }],
-    [{ text: '📡 Live API Data (Best)', callback_data: 'ai_mode_live' }],
+    [{ text: '🌐 Web Research (Recommended)', callback_data: 'ai_mode_web' }],
+    [{ text: '📡 Live API Data (Requires Quota)', callback_data: 'ai_mode_live' }],
     [{ text: '💾 Database Only (Fallback)', callback_data: 'ai_mode_db' }],
     [{ text: '« Back to Legs', callback_data: 'ai_back_legs' }]
   ];
@@ -230,10 +253,9 @@ async function executeAiRequest(bot, chatId, messageId) {
   );
 
   try {
-    // Pass the player props toggle into aiService
     const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, { includeProps });
     if (!parlay || !parlay.parlay_legs || parlay.parlay_legs.length === 0) {
-      throw new Error('AI returned an empty or invalid parlay.');
+      throw new Error('AI returned an empty or invalid parlay. This can happen if no games are found for the selected sport.');
     }
 
     const legs = parlay.parlay_legs;
@@ -271,7 +293,7 @@ async function executeAiRequest(bot, chatId, messageId) {
   } catch (error) {
     console.error('AI handler execution error:', error);
     const safeError = escapeMarkdownV2(error.message || 'Unknown error');
-    await safeEditMessage(bot, `❌ I encountered a critical error: \`${safeError}\`\\.\nPlease try again later\\.`, {
+    await safeEditMessage(bot, `❌ I encountered a critical error: \`${safeError}\`\\.\nPlease try again later, or select the Web Research mode which does not depend on live API data\\.`, {
       chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2',
       reply_markup: { inline_keyboard: [[{ text: 'Start Over', callback_data: 'ai_back_sport' }]] }
     });
