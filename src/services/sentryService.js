@@ -5,34 +5,32 @@ import env from '../config/env.js';
 
 let profilingIntegration = null;
 
-// FIX: Only attempt to import and enable the profiler if it's explicitly turned on.
-// This prevents the native module from running and crashing the application in incompatible environments.
-if (env.SENTRY_ENABLE_PROFILING) {
+async function init() {
+  if (!env.SENTRY_DSN) return;
   try {
-    // Dynamically import to avoid issues if @sentry/profiling-node is not installed
-    const { NodeProfiler } = await import('@sentry/profiling-node');
-    profilingIntegration = new NodeProfiler();
-    console.log('Sentry profiling integration has been enabled.');
+    if (env.SENTRY_ENABLE_PROFILING) {
+      try {
+        const { NodeProfiler } = await import('@sentry/profiling-node');
+        profilingIntegration = new NodeProfiler();
+        console.log('Sentry profiling integration has been enabled.');
+      } catch (e) {
+        console.log('Sentry profiling integration could not be loaded.');
+      }
+    }
+
+    Sentry.init({
+      dsn: env.SENTRY_DSN,
+      environment: env.NODE_ENV,
+      tracesSampleRate: Number(env.SENTRY_TRACES_SAMPLE_RATE ?? 0),
+      profilesSampleRate: Number(env.PROFILES_SAMPLE_RATE ?? 0),
+      integrations: [...(profilingIntegration ? [profilingIntegration] : [])],
+    });
+    console.log('✅ Sentry Initialized.');
   } catch (e) {
-    // Profiling support may not be enabled, which is acceptable.
-    console.log('Sentry profiling integration could not be loaded.');
+    console.warn('Sentry initialization skipped:', e?.message || e);
   }
 }
-
-if (env.SENTRY_DSN) {
-  Sentry.init({
-    dsn: env.SENTRY_DSN,
-    environment: env.NODE_ENV,
-    tracesSampleRate: env.SENTRY_TRACES_SAMPLE_RATE,
-    // FIX: Use the correct environment variable for the profiles sample rate.
-    profilesSampleRate: env.PROFILES_SAMPLE_RATE,
-    integrations: [
-      // This will now correctly add the integration only if it was successfully loaded and enabled.
-      ...(profilingIntegration ? [profilingIntegration] : [])
-    ],
-  });
-  console.log('✅ Sentry Initialized.');
-}
+void init();
 
 export const sentryService = {
   attachExpressPreRoutes(app) {
@@ -52,9 +50,9 @@ export const sentryService = {
 
   captureError(error, context = {}) {
     if (env.SENTRY_DSN) {
-        Sentry.captureException(error, { extra: context });
+      Sentry.captureException(error, { extra: context });
     } else {
-        console.error("Sentry Capture (DSN not set):", { error: error.message, context });
+      console.error('Sentry Capture (DSN not set):', { error: error?.message || String(error), context });
     }
   },
 };
