@@ -71,18 +71,23 @@ class DatabaseService {
   }
   
   async getOddsDateRange() {
-    if (!this.client) return { min_date: null, max_date: null };
-    try {
-      // **FIX:** Replaced the broken RPC with a direct, robust query.
-      const { data: minData, error: minError } = await this.client.from('games').select('commence_time').order('commence_time', { ascending: true }).limit(1);
-      const { data: maxData, error: maxError } = await this.client.from('games').select('commence_time').order('commence_time', { ascending: false }).limit(1);
-      if (minError || maxError) throw minError || maxError;
-      return { min_date: minData?.[0]?.commence_time || null, max_date: maxData?.[0]?.commence_time || null };
-    } catch (error) {
-      console.error('Supabase getOddsDateRange error:', error.message);
-      return { min_date: null, max_date: null };
-    }
+  if (!this.client) return { min_date: null, max_date: null };
+  try {
+    const { data: minData, error: minError } = await this.client
+      .from('games').select('commence_time').order('commence_time', { ascending: true }).limit(1);
+    const { data: maxData, error: maxError } = await this.client
+      .from('games').select('commence_time').order('commence_time', { ascending: false }).limit(1);
+    
+    if (minError || maxError) throw minError || maxError;
+    return { 
+      min_date: minData?.[0]?.commence_time || null, 
+      max_date: maxData?.[0]?.commence_time || null 
+    };
+  } catch (error) {
+    console.error('Supabase getOddsDateRange error:', error.message);
+    return { min_date: null, max_date: null };
   }
+}
 
   async findOrCreateUser(telegramId, firstName = '', username = '') {
       if (!this.client) return null;
@@ -150,24 +155,25 @@ class DatabaseService {
   }
 
   async getSportGameCounts() {
-    if (!this.client) return [];
-    try {
-      // **THE FIX IS HERE**
-      // Replaced the broken RPC call with a direct query that groups the results in code.
-      const { data, error } = await this.client.from('games').select('sport_title');
-      if (error) throw error;
-
-      const counts = (data || []).reduce((acc, { sport_title }) => {
-          const title = sport_title || 'Unknown/Other';
-          acc[title] = (acc[title] || 0) + 1;
-          return acc;
-      }, {});
-
-      return Object.entries(counts).map(([title, count]) => ({ sport_title: title, game_count: count }));
-    } catch (error) {
-      console.error('Supabase getSportGameCounts error:', error.message);
-      return [];
-    }
+  if (!this.client) return [];
+  try {
+    const { data, error } = await this.client.from('games').select('sport_title, commence_time');
+    if (error) throw error;
+    
+    const counts = (data || []).reduce((acc, game) => {
+      const title = game.sport_title || 'Unknown';
+      acc[title] = (acc[title] || 0) + 1;
+      return acc;
+    }, {});
+    
+    return Object.entries(counts).map(([sport_title, game_count]) => ({
+      sport_title,
+      game_count
+    }));
+  } catch (error) {
+    console.error('Supabase getSportGameCounts error:', error.message);
+    return [];
+  }
   }
 }
 
