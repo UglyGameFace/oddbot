@@ -18,9 +18,6 @@ class InstitutionalOddsIngestionEngine {
   constructor() {
     this.isJobRunning = false;
     this.initializeManualTrigger();
-    // Schedule to run every 30 minutes
-    cron.schedule('*/30 * * * *', () => this.runIngestionCycle('scheduled'));
-    console.log('✅ Odds ingestion worker scheduled to run every 30 minutes.');
   }
 
   async initializeManualTrigger() {
