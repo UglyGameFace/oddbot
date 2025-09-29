@@ -1,9 +1,27 @@
-// src/services/databaseService.js - FIXED VERSION
+// src/services/databaseService.js - FINAL VERSION
 import { createClient } from '@supabase/supabase-js';
 import env from '../config/env.js';
 import { sentryService } from './sentryService.js';
 
 const SUPABASE_KEY = env.SUPABASE_SERVICE_KEY || env.SUPABASE_ANON_KEY;
+
+// --- VERIFIED FIX: Comprehensive fallback sports list ---
+const COMPREHENSIVE_FALLBACK_SPORTS = [
+    { sport_key: 'americanfootball_nfl', sport_title: 'NFL' },
+    { sport_key: 'americanfootball_ncaaf', sport_title: 'NCAAF' },
+    { sport_key: 'basketball_nba', sport_title: 'NBA' },
+    { sport_key: 'basketball_ncaab', sport_title: 'NCAAB' },
+    { sport_key: 'baseball_mlb', sport_title: 'MLB' },
+    { sport_key: 'icehockey_nhl', sport_title: 'NHL' },
+    { sport_key: 'soccer_usa_mls', sport_title: 'MLS' },
+    { sport_key: 'soccer_epl', sport_title: 'EPL' },
+    { sport_key: 'soccer_uefa_champs_league', sport_title: 'Champions League' },
+    { sport_key: 'mma_mixed_martial_arts', sport_title: 'MMA' },
+    { sport_key: 'golf_pga_tour', sport_title: 'PGA Tour' },
+    { sport_key: 'tennis_atp_wta', sport_title: 'Tennis' },
+    { sport_key: 'basketball_wnba', sport_title: 'WNBA' },
+];
+
 
 function buildClient() {
   if (!env.SUPABASE_URL || !SUPABASE_KEY) {
@@ -127,7 +145,7 @@ class DatabaseService {
   }
 
   async getDistinctSports() {
-      if (!this.client) return [];
+      if (!this.client) return COMPREHENSIVE_FALLBACK_SPORTS;
       try {
           const { data, error } = await this.client.from('games').select('sport_key, sport_title');
           if (error) throw error;
@@ -135,31 +153,22 @@ class DatabaseService {
           (data || []).forEach(game => {
             if (game.sport_key && game.sport_title) {
                 uniqueSportsMap.set(game.sport_key, { 
-                  // --- THIS IS THE CRITICAL FIX ---
-                  sport_key: game.sport_key,  // Changed from 'sport' to 'sport_key' for alignment
+                  sport_key: game.sport_key,
                   sport_title: game.sport_title 
                 });
             }
           });
           
           if (uniqueSportsMap.size === 0) {
-            console.log('🔄 Database empty, returning default sports');
-            return [
-              { sport_key: 'basketball_nba', sport_title: 'NBA' },
-              { sport_key: 'americanfootball_nfl', sport_title: 'NFL' },
-              { sport_key: 'baseball_mlb', sport_title: 'MLB' },
-              { sport_key: 'basketball_ncaab', sport_title: 'NCAAB' }
-            ];
+            console.log('🔄 Database empty, returning comprehensive default sports list.');
+            return COMPREHENSIVE_FALLBACK_SPORTS;
           }
           
           return Array.from(uniqueSportsMap.values());
       } catch (error) {
           console.error('Supabase getDistinctSports error:', error.message);
-          return [ // Fallback on error
-            { sport_key: 'basketball_nba', sport_title: 'NBA' },
-            { sport_key: 'americanfootball_nfl', sport_title: 'NFL' },
-            { sport_key: 'baseball_mlb', sport_title: 'MLB' }
-          ];
+          console.log('🔄 Error fetching from DB, returning comprehensive default sports list.');
+          return COMPREHENSIVE_FALLBACK_SPORTS;
       }
   }
 
@@ -180,7 +189,6 @@ class DatabaseService {
     }
   }
 
-  // ADD THESE METHODS FOR SETTLEMENT WORKER
   async getActiveGames() {
     if (!this.client) return [];
     try {
