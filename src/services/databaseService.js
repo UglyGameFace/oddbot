@@ -71,26 +71,12 @@ class DatabaseService {
     }
   }
   
-  async getOddsDateRange() {
-    if (!this.client) return { min_date: null, max_date: null };
-    try {
-      // FIX: Replaced RPC with a direct, robust query.
-      const { data: minData, error: minError } = await this.client.from('games').select('commence_time').order('commence_time', { ascending: true }).limit(1);
-      const { data: maxData, error: maxError } = await this.client.from('games').select('commence_time').order('commence_time', { ascending: false }).limit(1);
-      if (minError || maxError) throw minError || maxError;
-      return { min_date: minData?.[0]?.commence_time || null, max_date: maxData?.[0]?.commence_time || null };
-    } catch (error) {
-      console.error('Supabase getOddsDateRange error:', error.message);
-      return { min_date: null, max_date: null };
-    }
-  }
-
   // --- User & Settings Functions (Corrected for your schema) ---
   async findOrCreateUser(telegramId, firstName = '', username = '') {
       if (!this.client) return null;
       try {
           let { data: user, error } = await this.client.from('users').select('*').eq('tg_id', telegramId).single();
-          if (error && error.code === 'PGRST116') {
+          if (error && error.code === 'PGRST116') { // Not found
               const { data: newUser, error: insertError } = await this.client.from('users').insert({
                   tg_id: telegramId,
                   first_name: firstName,
@@ -129,11 +115,10 @@ class DatabaseService {
       }
   }
 
-  // --- Utility Functions (Corrected) ---
+  // --- Utility Functions (Replaced RPCs with direct queries) ---
   async getDistinctSports() {
       if (!this.client) return [];
       try {
-          // FIX: Replaced the broken RPC call with a direct query that de-duplicates in code.
           const { data, error } = await this.client.from('games').select('sport_key, sport_title');
           if (error) throw error;
           const uniqueSportsMap = new Map();
@@ -152,7 +137,6 @@ class DatabaseService {
   async getSportGameCounts() {
     if (!this.client) return [];
     try {
-      // FIX: Replaced the broken RPC call with a direct query that groups in code.
       const { data, error } = await this.client.from('games').select('sport_title');
       if (error) throw error;
       const counts = (data || []).reduce((acc, { sport_title }) => {
