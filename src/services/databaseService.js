@@ -27,7 +27,6 @@ class DatabaseService {
   async getOddsDateRange() {
     if (!this.client) return { min: null, max: null };
     try {
-      // NOTE: Ensure your RPC 'get_odds_date_range' uses 'start_time' column from the 'games' table.
       const { data, error } = await withTimeout(this.client.rpc('get_odds_date_range'), 5000, 'getOddsDateRange');
       if (error) throw error;
       return data?.[0] || { min_date: null, max_date: null };
