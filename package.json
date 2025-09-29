@@ -1,17 +1,17 @@
 {
   "name": "institutional-ai-parlay-bot",
   "version": "3.0.0",
-  "description": "Fully-featured Telegram parlay bot with AI, analytics, ML, and scheduled caching. Cache buster: 2",
+  "description": "Fully-featured Telegram parlay bot with AI, analytics, ML, and scheduled caching. Cache buster: 3",
   "main": "src/bot.js",
   "type": "module",
   "engines": {
     "node": ">=20.0.0"
   },
   "scripts": {
-    "start": "node src/bot.js",
+    "start": "NODE_OPTIONS='--max-old-space-size=192' node src/bot.js",
     "dev": "NODE_ENV=development nodemon src/bot.js",
-    "worker:odds": "node src/workers/oddsIngestion.js",
-    "worker:notifications": "node src/workers/notificationWorker.js",
+    "worker:odds": "NODE_OPTIONS='--max-old-space-size=128' node src/workers/oddsIngestion.js",
+    "worker:notifications": "NODE_OPTIONS='--max-old-space-size=128' node src/workers/notificationWorker.js",
     "lint": "eslint . --ext .js",
     "format": "prettier --write \"src/**/*.js\""
   },
