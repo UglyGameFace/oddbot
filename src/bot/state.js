@@ -2,19 +2,24 @@
 import env from '../config/env.js';
 import { sentryService } from '../services/sentryService.js';
 import redisClient from '../services/redisService.js';
-import databaseService from '../services/databaseService.js'; // Import database service
+import databaseService from './databaseService.js';
 
 const NS = (env.NODE_ENV || 'production').toLowerCase();
 const V = 'v1';
 const PREFIX = `${V}:${NS}:`;
 const STATE_PREFIX = `${PREFIX}user:state:`;
 const SLIP_PREFIX = `${PREFIX}parlay:slip:`;
-// REMOVED CONFIG_PREFIX as it's now in the database
 const DEFAULT_SLIP = { picks: [], stake: 10, totalOdds: 0, messageId: null };
 
 const safeParse = (s, f) => { try { return JSON.parse(s); } catch (e) { sentryService.captureError(e, { component: 'state', op: 'parse' }); return f; } };
 const withTimeout = (p, ms, label) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error(`Timeout ${ms}ms: ${label}`)), ms))]);
-const setWithTTL = async (c, k, v, ttl) => { if (!ttl) return c.set(k, v); try { return await c.set(k, v, { EX: ttl }); } catch { return await c.set(k, v, 'EX', ttl); } };
+
+// --- VERIFIED FIX: Use older, more compatible Redis syntax for SET with TTL ---
+const setWithTTL = async (c, k, v, ttl) => {
+  if (!ttl) return c.set(k, v);
+  // Use 'EX' flag in a flat list instead of an options object
+  return c.set(k, v, 'EX', ttl);
+};
 
 // --- Conversational state (remains in Redis for speed) ---
 export async function setUserState(chatId, state, ttl = 3600) {
@@ -45,7 +50,6 @@ async function getConfig(telegramId, type) {
         ai: { mode: 'live', model: 'gemini', betType: 'mixed' },
         builder: { minOdds: -500, maxOdds: 500, avoidSameGame: true, cutoffHours: 48 },
     };
-    // Merge user settings over defaults
     return { ...defaults[type], ...(settings[type] || {}) };
 }
 
