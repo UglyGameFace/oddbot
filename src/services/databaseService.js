@@ -134,23 +134,27 @@ class DatabaseService {
     }
   }
 
-  async getDistinctSports() {
-    if (!this.client) return [];
-    try {
-      const { data, error } = await this.client.from('games').select('sport_key, sport_title');
-      if (error) throw error;
-      const uniqueSportsMap = new Map();
-      (data || []).forEach(game => {
-        if (game.sport_key && game.sport_title) {
-          uniqueSportsMap.set(game.sport_key, { sport_key: game.sport_key, sport_title: game.sport_title });
-        }
-      });
-      return Array.from(uniqueSportsMap.values());
-    } catch (error) {
-      console.error('Supabase getDistinctSports error:', error.message);
-      return [];
-    }
+async getDistinctSports() {
+  if (!this.client) return [];
+  try {
+    const { data, error } = await this.client.from('games').select('sport_key, sport_title');
+    if (error) throw error;
+    const toTitle = (k, t) => t || String(k || '')
+      .split('_')
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ');
+    const unique = new Map();
+    (data || []).forEach(({ sport_key, sport_title }) => {
+      if (!sport_key) return;
+      const title = toTitle(sport_key, sport_title);
+      if (!unique.has(sport_key)) unique.set(sport_key, { sport_key, sport_title: title });
+    });
+    return Array.from(unique.values());
+  } catch (error) {
+    console.error('Supabase getDistinctSports error:', error.message);
+    return [];
   }
+}
 
   async getSportGameCounts() {
     if (!this.client) return [];
