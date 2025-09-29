@@ -37,12 +37,10 @@ const env = cleanEnv(process.env, {
   SENTRY_ENABLE_PROFILING: bool({ default: false }),
   PROFILES_SAMPLE_RATE: num({ default: 0.25 }),
 
-  // Prefer platform-injected PORT; devDefault for local runs
   PORT: num({ devDefault: 8080 }),
   HOST: str({ default: '0.0.0.0' }),
   APP_URL: url({ default: 'http://localhost:8080' }),
 
-  // Optional aliases for the Telegram webhook secret
   TELEGRAM_WEBHOOK_SECRET: str({ default: process.env.TG_WEBHOOK_SECRET || '' }),
   TG_WEBHOOK_SECRET: str({ default: process.env.TELEGRAM_WEBHOOK_SECRET || '' }),
 
@@ -54,15 +52,19 @@ const env = cleanEnv(process.env, {
   ENCRYPTION_KEY: str({ default: 'default-encryption-key-change-in-production' }),
   JWT_SECRET: str({ default: 'default-jwt-secret-change-in-production' }),
 
+  // Worker & Performance Tuning
+  WORKER_POOL_SIZE: num({ default: 4 }),
+  DATABASE_POOL_SIZE: num({ default: 10 }),
+  MAX_EVENT_LOOP_DELAY: num({ default: 1000 }),
+  ODDS_INGESTION_BATCH_SIZE: num({ default: 5 }), // New
+  ODDS_INGESTION_DELAY_MS: num({ default: 2000 }), // New
+  LOG_LEVEL: str({ choices: ['error','warn','info','debug','trace'], default: 'info' }),
+  
+  // Feature Flags
   FEATURE_QUANTITATIVE_ANALYTICS: bool({ default: true }),
   FEATURE_BEHAVIORAL_INSIGHTS: bool({ default: true }),
   FEATURE_REAL_TIME_ODDS: bool({ default: true }),
   FEATURE_ADVANCED_NOTIFICATIONS: bool({ default: true }),
-
-  WORKER_POOL_SIZE: num({ default: 4 }),
-  DATABASE_POOL_SIZE: num({ default: 10 }),
-  MAX_EVENT_LOOP_DELAY: num({ default: 1000 }),
-  LOG_LEVEL: str({ choices: ['error','warn','info','debug','trace'], default: 'info' }),
 }, {
   strict: true,
   dotEnvPath: '.env',
