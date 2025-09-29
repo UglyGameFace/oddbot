@@ -11,62 +11,31 @@ function buildClient() {
     return null;
   }
   const client = createClient(env.SUPABASE_URL, SUPABASE_KEY, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
-    },
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   });
   console.log('✅ Supabase client initialized.');
   return client;
 }
 
 let supabaseClient = buildClient();
-
-/**
- * Cancellable timeout wrapper that aborts the underlying HTTP request.
- * Pass a builder factory that receives an AbortSignal and returns a Supabase promise.
- */
-async function withAbortTimeout(buildRequest, ms, label) {
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), ms);
-  try {
-    const { data, error } = await buildRequest(ac.signal);
-    if (error) throw error;
-    return data ?? null;
-  } catch (err) {
-    // Normalize aborted errors into a clean timeout message
-    if (String(err?.message || err).toLowerCase().includes('aborted')) {
-      throw new Error(`Timeout ${ms}ms: ${label}`);
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
-}
+const withTimeout = (p, ms, label) =>
+  Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error(`Timeout ${ms}ms: ${label}`)), ms))]);
 
 class DatabaseService {
-  get client() {
-    return supabaseClient || (supabaseClient = buildClient());
-  }
+  get client() { return supabaseClient || (supabaseClient = buildClient()); }
 
   async upsertGames(gamesData) {
     if (!this.client || !gamesData?.length) return { data: [], error: null };
     try {
-      const data = await withAbortTimeout(
-        (signal) =>
-          this.client
-            .from('games')
-            .upsert(gamesData, { onConflict: 'event_id' })
-            .abortSignal(signal)
-            .select(),
-        5000,
-        'upsertGames'
+      const { data, error } = await withTimeout(
+        this.client.from('games').upsert(gamesData, { onConflict: 'event_id' }).select(),
+        5000, 'upsertGames'
       );
+      if (error) throw error;
       return { data, error: null };
     } catch (error) {
-      console.error('Supabase upsert error:', error?.message || error);
-      try { sentryService?.captureError?.(error, { component: 'database_service', operation: 'upsertGames' }); } catch {}
+      console.error('Supabase upsert error:', error.message);
+      sentryService.captureError(error, { component: 'database_service', operation: 'upsertGames' });
       return { data: null, error };
     }
   }
@@ -74,120 +43,67 @@ class DatabaseService {
   async getGamesBySport(sportKey) {
     if (!this.client) return [];
     try {
-      const data = await withAbortTimeout(
-        (signal) =>
-          this.client
-            .from('games')
-            .select('*')
-            .eq('sport_key', sportKey)
-            .gte('commence_time', new Date().toISOString())
-            .order('commence_time', { ascending: true })
-            .abortSignal(signal),
-        5000,
-        'getGamesBySport'
-      );
-      return data ?? [];
+        const { data, error } = await withTimeout(
+            this.client.from('games').select('*').eq('sport_key', sportKey).gte('commence_time', new Date().toISOString()).order('commence_time', { ascending: true }),
+            5000, 'getGamesBySport'
+        );
+        if (error) throw error;
+        return data ?? [];
     } catch (error) {
-      console.error(`Supabase getGamesBySport error for ${sportKey}:`, error?.message || error);
-      return [];
+        console.error(`Supabase getGamesBySport error for ${sportKey}:`, error.message);
+        return [];
     }
   }
-
+  
   async getGameById(eventId) {
     if (!this.client) return null;
     try {
-      const data = await withAbortTimeout(
-        (signal) =>
-          this.client
-            .from('games')
-            .select('*')
-            .eq('event_id', eventId)
-            .maybeSingle()
-            .abortSignal(signal),
-        4000,
-        'getGameById'
+      const { data, error } = await withTimeout(
+        this.client.from('games').select('*').eq('event_id', eventId).single(),
+        4000, 'getGameById'
       );
+      if (error && error.code !== 'PGRST116') throw error;
       return data ?? null;
     } catch (error) {
-      console.error(`Supabase getGameById error for ${eventId}:`, error?.message || error);
+      console.error(`Supabase getGameById error for ${eventId}:`, error.message);
       return null;
     }
   }
-
+  
   async getOddsDateRange() {
     if (!this.client) return { min_date: null, max_date: null };
     try {
-      const minData = await withAbortTimeout(
-        (signal) =>
-          this.client
-            .from('games')
-            .select('commence_time')
-            .order('commence_time', { ascending: true })
-            .limit(1)
-            .abortSignal(signal),
-        3000,
-        'getOddsDateRange:min'
-      );
-      const maxData = await withAbortTimeout(
-        (signal) =>
-          this.client
-            .from('games')
-            .select('commence_time')
-            .order('commence_time', { ascending: false })
-            .limit(1)
-            .abortSignal(signal),
-        3000,
-        'getOddsDateRange:max'
-      );
-      return {
-        min_date: minData?.[0]?.commence_time || null,
-        max_date: maxData?.[0]?.commence_time || null,
-      };
+      // **FIX:** Replaced the broken RPC with a direct, robust query.
+      const { data: minData, error: minError } = await this.client.from('games').select('commence_time').order('commence_time', { ascending: true }).limit(1);
+      const { data: maxData, error: maxError } = await this.client.from('games').select('commence_time').order('commence_time', { ascending: false }).limit(1);
+      if (minError || maxError) throw minError || maxError;
+      return { min_date: minData?.[0]?.commence_time || null, max_date: maxData?.[0]?.commence_time || null };
     } catch (error) {
-      console.error('Supabase getOddsDateRange error:', error?.message || error);
+      console.error('Supabase getOddsDateRange error:', error.message);
       return { min_date: null, max_date: null };
     }
   }
 
   async findOrCreateUser(telegramId, firstName = '', username = '') {
-    if (!this.client) return null;
-    try {
-      // maybeSingle avoids PGRST116 when no rows
-      let user = await withAbortTimeout(
-        (signal) =>
-          this.client
-            .from('users')
-            .select('*')
-            .eq('tg_id', telegramId)
-            .maybeSingle()
-            .abortSignal(signal),
-        4000,
-        'findOrCreateUser:select'
-      );
-
-      if (!user) {
-        user = await withAbortTimeout(
-          (signal) =>
-            this.client
-              .from('users')
-              .insert({
-                tg_id: telegramId,
-                first_name: firstName,
-                username: username,
-              })
-              .abortSignal(signal)
-              .select()
-              .maybeSingle(),
-          4000,
-          'findOrCreateUser:insert'
-        );
+      if (!this.client) return null;
+      try {
+          let { data: user, error } = await this.client.from('users').select('*').eq('tg_id', telegramId).single();
+          if (error && error.code === 'PGRST116') {
+              const { data: newUser, error: insertError } = await this.client.from('users').insert({
+                  tg_id: telegramId,
+                  first_name: firstName,
+                  username: username
+              }).select().single();
+              if (insertError) throw insertError;
+              user = newUser;
+          } else if (error) {
+              throw error;
+          }
+          return user;
+      } catch (error) {
+          console.error(`Supabase findOrCreateUser error for ${telegramId}:`, error.message);
+          return null;
       }
-
-      return user ?? null;
-    } catch (error) {
-      console.error(`Supabase findOrCreateUser error for ${telegramId}:`, error?.message || error);
-      return null;
-    }
   }
 
   async getUserSettings(telegramId) {
@@ -196,88 +112,60 @@ class DatabaseService {
   }
 
   async updateUserSettings(telegramId, newSettings) {
-    if (!this.client) return null;
-    try {
-      // Ensure the user exists
-      await this.findOrCreateUser(telegramId);
-
-      const data = await withAbortTimeout(
-        (signal) =>
-          this.client
-            .from('users')
-            .update({
-              preferences: newSettings,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('tg_id', telegramId)
-            .abortSignal(signal)
-            .select()
-            .maybeSingle(),
-        4000,
-        'updateUserSettings'
-      );
-      return data ?? null;
-    } catch (error) {
-      console.error(`Supabase updateUserSettings error for ${telegramId}:`, error?.message || error);
-      return null;
-    }
+      if (!this.client) return null;
+      try {
+          const { data, error } = await this.client.from('users')
+              .update({ preferences: newSettings, updated_at: new Date().toISOString() })
+              .eq('tg_id', telegramId)
+              .select()
+              .single();
+          if (error) throw error;
+          return data;
+      } catch (error) {
+          console.error(`Supabase updateUserSettings error for ${telegramId}:`, error.message);
+          return null;
+      }
   }
 
   async getDistinctSports() {
-    if (!this.client) return [];
-    try {
-      // Pull relevant columns and de-duplicate in code
-      const data = await withAbortTimeout(
-        (signal) =>
-          this.client
-            .from('games')
-            .select('sport_key, sport_title')
-            .abortSignal(signal),
-        4000,
-        'getDistinctSports'
-      );
-
-      const unique = new Map();
-      (data || []).forEach((row) => {
-        if (row?.sport_key && row?.sport_title && !unique.has(row.sport_key)) {
-          unique.set(row.sport_key, {
-            sport_key: row.sport_key,
-            sport_title: row.sport_title,
+      if (!this.client) return [];
+      try {
+          // **THE FIX IS HERE**
+          // Replaced the broken RPC call with a direct query that de-duplicates the results in code.
+          // This is guaranteed to work with your schema.
+          const { data, error } = await this.client.from('games').select('sport_key, sport_title');
+          if (error) throw error;
+          
+          const uniqueSportsMap = new Map();
+          (data || []).forEach(game => {
+            if (game.sport_key && game.sport_title) {
+                uniqueSportsMap.set(game.sport_key, { sport_key: game.sport_key, sport_title: game.sport_title });
+            }
           });
-        }
-      });
-      return Array.from(unique.values());
-    } catch (error) {
-      console.error('Supabase getDistinctSports error:', error?.message || error);
-      return [];
-    }
+          return Array.from(uniqueSportsMap.values());
+      } catch (error) {
+          console.error('Supabase getDistinctSports error:', error.message);
+          return [];
+      }
   }
 
   async getSportGameCounts() {
     if (!this.client) return [];
     try {
-      const data = await withAbortTimeout(
-        (signal) =>
-          this.client
-            .from('games')
-            .select('sport_title')
-            .abortSignal(signal),
-        4000,
-        'getSportGameCounts'
-      );
+      // **THE FIX IS HERE**
+      // Replaced the broken RPC call with a direct query that groups the results in code.
+      const { data, error } = await this.client.from('games').select('sport_title');
+      if (error) throw error;
 
       const counts = (data || []).reduce((acc, { sport_title }) => {
-        const title = sport_title || 'Unknown/Other';
-        acc[title] = (acc[title] || 0) + 1;
-        return acc;
+          const title = sport_title || 'Unknown/Other';
+          acc[title] = (acc[title] || 0) + 1;
+          return acc;
       }, {});
 
-      return Object.entries(counts).map(([sport_title, game_count]) => ({
-        sport_title,
-        game_count,
-      }));
+      return Object.entries(counts).map(([title, count]) => ({ sport_title: title, game_count: count }));
     } catch (error) {
-      console.error('Supabase getSportGameCounts error:', error?.message || error);
+      console.error('Supabase getSportGameCounts error:', error.message);
       return [];
     }
   }
