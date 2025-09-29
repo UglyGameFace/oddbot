@@ -109,6 +109,7 @@ function bindLegsToFixtures(legs = [], fixtures = []) {
 const genAI = new GoogleGenerativeAI(env.GOOGLE_GEMINI_API_KEY);
 
 class AIService {
+  // --- UPDATED: Main router function ---
   async generateParlay(sportKey, numLegs = 2, mode = 'live', aiModel = 'gemini', betType = 'mixed', opts = {}) {
     const includeProps = !!opts.includeProps;
     if (mode === 'web') {
@@ -121,12 +122,14 @@ class AIService {
     return this._generateWithGeminiContext(sportKey, numLegs, mode, betType, { includeProps });
   }
 
+  // --- ADDED: Helper for consistent instructions ---
   _getBetTypeInstruction(betType) {
     return betType === 'props'
         ? 'Each leg of the parlay MUST be a Player Prop bet (e.g., player points, assists, touchdowns, yards).'
         : 'The parlay can be a mix of moneyline, spread, totals, or player props.';
   }
 
+  // --- ADDED: Specialized function for Perplexity Web Research ---
   async _generateWithPerplexityWeb(sportKey, numLegs, betType) {
     console.log(`AI Service: Using Perplexity Web Research for ${betType}.`);
     const betTypeInstruction = this._getBetTypeInstruction(betType);
@@ -137,7 +140,7 @@ class AIService {
     const response = await axios.post(
       'https://api.perplexity.ai/chat/completions',
       {
-        model: 'sonar-pro',
+        model: 'sonar-pro', // Corrected model name
         messages: [
           { role: 'system', content: 'You are a sports betting analyst who responds only in valid JSON format.' },
           { role: 'user', content: prompt },
@@ -151,6 +154,7 @@ class AIService {
     return obj;
   }
   
+  // --- ADDED: Specialized function for Gemini Web Research ---
   async _generateWithGeminiWeb(sportKey, numLegs, betType) {
     console.log(`AI Service: Using Gemini Web Research for ${betType}.`);
     const modelId = await pickSupportedModel(env.GOOGLE_GEMINI_API_KEY);
@@ -167,6 +171,7 @@ class AIService {
     return obj;
   }
 
+  // --- ADDED: Specialized function for Live/DB Context Modes ---
   async _generateWithGeminiContext(sportKey, numLegs, mode, betType, { includeProps } = {}) {
     console.log(`AI Service: Using Gemini with ${mode} context for ${betType}.`);
     const modelId = await pickSupportedModel(env.GOOGLE_GEMINI_API_KEY);
@@ -193,7 +198,7 @@ class AIService {
           }
         }),
       );
-      fixtures = liveGames; // Use original list for binding
+      fixtures = liveGames;
     } else { // mode === 'db'
       contextData = await gamesService.getGamesForSport(sportKey);
       if (!contextData?.length) throw new Error('No games found in the database for the specified sport.');
