@@ -2,7 +2,6 @@
 import env from '../config/env.js';
 import { sentryService } from '../services/sentryService.js';
 import redisClient from '../services/redisService.js';
-// --- VERIFIED FIX: Corrected the import path to point to the correct directory ---
 import databaseService from '../services/databaseService.js';
 
 const NS = (env.NODE_ENV || 'production').toLowerCase();
@@ -15,9 +14,10 @@ const DEFAULT_SLIP = { picks: [], stake: 10, totalOdds: 0, messageId: null };
 const safeParse = (s, f) => { try { return JSON.parse(s); } catch (e) { sentryService.captureError(e, { component: 'state', op: 'parse' }); return f; } };
 const withTimeout = (p, ms, label) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error(`Timeout ${ms}ms: ${label}`)), ms))]);
 
+// --- VERIFIED FIX: Use older, more compatible Redis syntax for SET with TTL ---
 const setWithTTL = async (c, k, v, ttl) => {
   if (!ttl) return c.set(k, v);
-  // Use 'EX' flag in a flat list for wider Redis version compatibility
+  // Use 'EX' flag in a flat list instead of an options object
   return c.set(k, v, 'EX', ttl);
 };
 
