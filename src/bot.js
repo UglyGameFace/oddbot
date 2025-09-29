@@ -161,17 +161,17 @@ async function main() {
     const webhookPath = `/webhook/${TOKEN}`;
     const targetWebhookUrl = `${APP_URL}${webhookPath}`;
 
-    // **FIX 1: Check current webhook before setting a new one to prevent rate-limiting.**
+    // **FIX:** Check current webhook before setting a new one to prevent rate-limiting.
     const currentWebhook = await bot.getWebHookInfo();
     if (currentWebhook.url !== targetWebhookUrl) {
-        await bot.setWebHook(targetWebhookUrl, {
-            secret_token: WEBHOOK_SECRET || undefined,
-        });
-        console.log(`✅ Webhook set to: ${targetWebhookUrl}`);
+      await bot.setWebHook(targetWebhookUrl, {
+        secret_token: WEBHOOK_SECRET || undefined,
+      });
+      console.log(`✅ Webhook set: ${targetWebhookUrl}`);
     } else {
-        console.log('✅ Webhook is already correctly configured.');
+      console.log('✅ Webhook is already correctly configured.');
     }
-    
+
     app.post(
       webhookPath,
       (req, res, next) => {
@@ -218,7 +218,7 @@ async function main() {
   console.log('🎉 Application startup complete!');
 }
 
-// **FIX 2: Graceful shutdown logic to handle Railway restarts cleanly.**
+// **FIX:** Graceful shutdown logic to handle Railway restarts cleanly.
 const shutdown = async (signal) => {
   console.log(`\n🛑 Received ${signal}. Starting graceful shutdown...`);
   isServiceReady = false;
@@ -228,14 +228,15 @@ const shutdown = async (signal) => {
   }
 
   try {
-    if (!USE_WEBHOOK && bot.isPolling()) {
-        await bot.stopPolling({ cancel: true });
-        console.log('✅ Bot polling stopped.');
-    } else if (USE_WEBHOOK) {
-        console.log('✅ Webhook retained for next deployment.');
+    if (USE_WEBHOOK) {
+      // It's often better to leave the webhook on Telegram's side unless you're changing URLs.
+      console.log('✅ Webhook retained for next deployment.');
+    } else if (bot.isPolling()) {
+      await bot.stopPolling({ cancel: true });
+      console.log('✅ Bot polling stopped.');
     }
   } catch (error) {
-    console.warn('⚠️ Error during bot shutdown tasks:', error.message);
+    console.warn('⚠️ Error during bot shutdown:', error.message);
   }
 
   if (server) {
@@ -256,9 +257,9 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
 main().catch((error) => {
-  console.error('💥 Fatal initialization error:', error);
+  console.error('💥 Fatal initialization error:', error.message);
   sentryService.captureError(error);
-  // Don't exit immediately on a rate limit error, which can cause a crash loop.
+  // Don't exit immediately on rate limit, allow the shutdown process to handle it.
   if (!String(error.message).includes('429')) {
     process.exit(1);
   }
