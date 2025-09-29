@@ -18,6 +18,9 @@ class InstitutionalOddsIngestionEngine {
   constructor() {
     this.isJobRunning = false;
     this.initializeManualTrigger();
+    // Schedule to run every 30 minutes
+    cron.schedule('*/30 * * * *', () => this.runIngestionCycle('scheduled'));
+    console.log('✅ Odds ingestion worker scheduled to run every 30 minutes.');
   }
 
   async initializeManualTrigger() {
@@ -91,7 +94,6 @@ class InstitutionalOddsIngestionEngine {
         console.log('Ingestion cycle complete. No new odds were found across all sports.');
       }
       
-      // **NEW:** Save timestamp of successful run to Redis
       const redis = await redisClient;
       await redis.set('meta:last_successful_ingestion', new Date().toISOString());
 
