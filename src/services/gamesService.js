@@ -1,5 +1,4 @@
 // src/services/gamesService.js
-
 import databaseService from './databaseService.js';
 import oddsService from './oddsService.js';
 import redisClient from './redisService.js';
@@ -25,7 +24,6 @@ const DEPRIORITIZE_LAST = ['hockey_nhl', 'icehockey_nhl'];
 
 function sortSports(sports) {
   const rank = (sportObj) => {
-    // --- VERIFIED FIX: Use 'sport_key' for sorting ---
     const k = sportObj?.sport_key || '';
     if (PREFERRED_FIRST.includes(k)) return -100;
     if (DEPRIORITIZE_LAST.includes(k)) return 100;
@@ -62,26 +60,21 @@ class GamesService {
       let sports = await databaseService.getDistinctSports();
 
       if (!sports || sports.length === 0) {
-        console.log('Database contains no sports; falling back to API provider to bootstrap.');
         sports = await fetchProviderSports();
       }
 
-      // --- VERIFIED FIX: Process data using 'sport_key' instead of 'sport' ---
       const normalized = (sports || [])
-        .filter(s => s?.sport_key) // Filter by 'sport_key'
+        .filter(s => s?.sport_key)
         .map(s => ({
-          sport_key: s.sport_key, // Use 'sport_key'
+          sport_key: s.sport_key,
           sport_title: s.sport_title || SPORT_TITLES[s.sport_key] || s.sport_key,
         }));
 
-      // --- VERIFIED FIX: Deduplicate using 'sport_key' ---
       const deduped = [...new Map(normalized.map(item => [item.sport_key, item])).values()];
       const ordered = sortSports(deduped);
 
       if (ordered.length > 0) {
         await redis.set(cacheKey, JSON.stringify(ordered), { EX: CACHE_TTL });
-      } else {
-        console.warn("getAvailableSports is returning an empty array. The Odds API may be down or your key is maxed out.");
       }
 
       return ordered;
@@ -90,7 +83,7 @@ class GamesService {
       return [];
     }
   }
-
+  
   async getGamesForSport(sportKey) {
     if (!sportKey) return [];
     const redis = await redisClient;
