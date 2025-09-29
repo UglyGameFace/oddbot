@@ -11,7 +11,6 @@ const LOCK_MS = 8000;
 const RETRY_MS = 150;
 const ODDS_BASE = 'https://api.the-odds-api.com/v4';
 
-// Helper function to create a title from a key (e.g., 'americanfootball_nfl' -> 'Americanfootball Nfl')
 const titleFromKey = (key) => {
     if (!key) return 'Unknown Sport';
     return key.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
@@ -22,12 +21,13 @@ async function getOrSetJSON(redis, key, ttlSec, loader) {
   if (cached) return JSON.parse(cached);
 
   const lockKey = `lock:${key}`;
-  const gotLock = await redis.set(lockKey, '1', { NX: true, PX: LOCK_MS });
+  // --- VERIFIED FIX: Use older, more compatible Redis syntax for SET with options ---
+  const gotLock = await redis.set(lockKey, '1', 'PX', LOCK_MS, 'NX');
   if (gotLock) {
     try {
       const data = await loader();
       if (data && data.length > 0) {
-        await redis.set(key, JSON.stringify(data), { EX: ttlSec });
+        await redis.set(key, JSON.stringify(data), 'EX', ttlSec);
       }
       return data;
     } finally {
@@ -42,7 +42,7 @@ async function getOrSetJSON(redis, key, ttlSec, loader) {
     }
     const data = await loader();
      if (data && data.length > 0) {
-        await redis.set(key, JSON.stringify(data), { EX: ttlSec });
+        await redis.set(key, JSON.stringify(data), 'EX', ttlSec);
     }
     return data;
   }
@@ -129,7 +129,6 @@ class OddsService {
   }
 
   async _fetchFromApiSports(sportKey) {
-    // This function remains as a placeholder for your future implementation.
     return [];
   }
 
@@ -137,7 +136,6 @@ class OddsService {
     return (data || []).reduce((acc, d) => {
       if (d.id && d.sport_key && d.commence_time && d.home_team && d.away_team) {
         acc.push({
-          // This structure now perfectly matches your 'games' table schema.
           event_id: d.id,
           sport_key: d.sport_key,
           league_key: d.sport_title || titleFromKey(d.sport_key),
