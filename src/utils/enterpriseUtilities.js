@@ -1,7 +1,7 @@
 // src/services/oddsService.js
 import axios from 'axios';
 import env from '../config/env.js';
-import redisClient from './redisService.js';
+import redis from '../services/redisService.js';
 import { sentryService } from './sentryService.js';
 import rateLimitService from './rateLimitService.js';
 
