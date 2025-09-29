@@ -133,27 +133,26 @@ class DatabaseService {
   }
 
   async getDistinctSports() {
-      if (!this.client) return [];
-      try {
-          // **THE FIX IS HERE**
-          // Replaced the broken RPC call with a direct query that de-duplicates the results in code.
-          // This is guaranteed to work with your schema.
-          const { data, error } = await this.client.from('games').select('sport_key, sport_title');
-          if (error) throw error;
-          
-          const uniqueSportsMap = new Map();
-          (data || []).forEach(game => {
-            if (game.sport_key && game.sport_title) {
-                uniqueSportsMap.set(game.sport_key, { sport_key: game.sport_key, sport_title: game.sport_title });
-            }
-          });
-          return Array.from(uniqueSportsMap.values());
-      } catch (error) {
-          console.error('Supabase getDistinctSports error:', error.message);
-          return [];
-      }
-  }
-
+    if (!this.client) return [];
+    try {
+        // FIXED: Use correct column names that match your schema
+        const { data, error } = await this.client.from('games').select('sport_key, sport_title');
+        if (error) throw error;
+        const uniqueSportsMap = new Map();
+        (data || []).forEach(game => {
+          if (game.sport_key && game.sport_title) {
+              uniqueSportsMap.set(game.sport_key, { 
+                  sport: game.sport_key,  // gamesService expects 'sport' not 'sport_key'
+                  sport_title: game.sport_title 
+              });
+          }
+        });
+        return Array.from(uniqueSportsMap.values());
+    } catch (error) {
+        console.error('Supabase getDistinctSports error:', error.message);
+        return [];
+    }
+}
   async getSportGameCounts() {
   if (!this.client) return [];
   try {
