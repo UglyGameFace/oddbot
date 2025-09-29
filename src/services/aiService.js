@@ -162,7 +162,7 @@ class AIService {
     const response = await axios.post(
       'https://api.perplexity.ai/chat/completions',
       {
-        model: 'llama-3-sonar-large-32k-online', // Using a more capable model
+        model: 'sonar-pro', // Using a more capable model
         messages: [
           { role: 'system', content: 'You are a sports betting analyst who responds only in JSON.' },
           { role: 'user', content: prompt },
