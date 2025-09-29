@@ -25,7 +25,8 @@ const DEPRIORITIZE_LAST = ['hockey_nhl', 'icehockey_nhl'];
 
 function sortSports(sports) {
   const rank = (sportObj) => {
-    const k = sportObj?.sport || '';
+    // FIX: Ensure sportObj and sport_key exist to prevent errors on malformed data
+    const k = sportObj?.sport_key || '';
     if (PREFERRED_FIRST.includes(k)) return -100;
     if (DEPRIORITIZE_LAST.includes(k)) return 100;
     return 0;
@@ -38,7 +39,8 @@ async function fetchProviderSports() {
   try {
     const url = `https://api.the-odds-api.com/v4/sports?all=true&apiKey=${env.THE_ODDS_API_KEY}`;
     const res = await axios.get(url, { timeout: 5000 });
-    return (res.data || []).map(s => ({ sport: s.key, sport_title: s.title || '', active: !!s.active }));
+    // IMPORTANT: Map the API response to match the database schema directly
+    return (res.data || []).map(s => ({ sport_key: s.key, sport_title: s.title || '', active: !!s.active }));
   } catch (e) {
     sentryService.captureError(e, { component: 'games_service', operation: 'fetchProviderSports' });
     return [];
@@ -58,30 +60,30 @@ class GamesService {
     }
 
     try {
-      // Primary: DB distinct sports (schema uses sport_key + sport_title)
       let sports = await databaseService.getDistinctSports();
-      // Normalize to { sport, sport_title }
-      sports = (sports || []).map(s => ({ sport: s.sport_key || s.sport, sport_title: s.sport_title || '' }));
 
-      // Fallback: provider catalog
+      // --- THIS IS THE CRITICAL FIX ---
+      // If the database is empty, we MUST fall back to the API provider to bootstrap the system.
       if (!sports || sports.length === 0) {
-        const provider = await fetchProviderSports();
-        sports = provider.map(p => ({ sport: p.sport, sport_title: p.sport_title || '' }));
+        console.log('Database contains no sports; falling back to API provider to bootstrap.');
+        sports = await fetchProviderSports();
       }
-
+      
       // Normalize/merge titles and order
       const normalized = (sports || [])
-        .filter(s => s?.sport)
+        .filter(s => s?.sport_key) // Filter by sport_key for consistency
         .map(s => ({
-          sport: s.sport,
-          sport_title: s.sport_title || SPORT_TITLES[s.sport] || s.sport,
+          sport_key: s.sport_key,
+          sport_title: s.sport_title || SPORT_TITLES[s.sport_key] || s.sport_key,
         }));
 
-      const deduped = [...new Map(normalized.map(item => [item.sport, item])).values()];
+      const deduped = [...new Map(normalized.map(item => [item.sport_key, item])).values()];
       const ordered = sortSports(deduped);
 
       if (ordered.length > 0) {
         await redis.set(cacheKey, JSON.stringify(ordered), { EX: CACHE_TTL });
+      } else {
+        console.warn("getAvailableSports is returning an empty array. The Odds API may be down or have no active sports.");
       }
 
       return ordered;
@@ -104,9 +106,11 @@ class GamesService {
     }
 
     try {
-      let games = await databaseService.getGamesBySport(sportKey);
+      // Prioritize fetching live odds directly from the source for freshness
+      let games = await oddsService.getSportOdds(sportKey);
       if (!games || games.length === 0) {
-        games = await oddsService.getSportOdds(sportKey);
+        // Fallback to database if live odds fail
+        games = await databaseService.getGamesBySport(sportKey);
       }
       if (games && games.length > 0) {
         await redis.set(cacheKey, JSON.stringify(games), { EX: CACHE_TTL });
