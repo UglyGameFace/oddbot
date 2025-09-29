@@ -24,7 +24,6 @@ const withTimeout = (p, ms, label) =>
 class DatabaseService {
   get client() { return supabaseClient || (supabaseClient = buildClient()); }
 
-  // --- Game Functions (Corrected for your schema) ---
   async upsertGames(gamesData) {
     if (!this.client || !gamesData?.length) return { data: [], error: null };
     try {
@@ -71,12 +70,25 @@ class DatabaseService {
     }
   }
   
-  // --- User & Settings Functions (Corrected for your schema) ---
+  async getOddsDateRange() {
+    if (!this.client) return { min_date: null, max_date: null };
+    try {
+      // **FIX:** Replaced the broken RPC with a direct, robust query.
+      const { data: minData, error: minError } = await this.client.from('games').select('commence_time').order('commence_time', { ascending: true }).limit(1);
+      const { data: maxData, error: maxError } = await this.client.from('games').select('commence_time').order('commence_time', { ascending: false }).limit(1);
+      if (minError || maxError) throw minError || maxError;
+      return { min_date: minData?.[0]?.commence_time || null, max_date: maxData?.[0]?.commence_time || null };
+    } catch (error) {
+      console.error('Supabase getOddsDateRange error:', error.message);
+      return { min_date: null, max_date: null };
+    }
+  }
+
   async findOrCreateUser(telegramId, firstName = '', username = '') {
       if (!this.client) return null;
       try {
           let { data: user, error } = await this.client.from('users').select('*').eq('tg_id', telegramId).single();
-          if (error && error.code === 'PGRST116') { // Not found
+          if (error && error.code === 'PGRST116') {
               const { data: newUser, error: insertError } = await this.client.from('users').insert({
                   tg_id: telegramId,
                   first_name: firstName,
@@ -115,12 +127,15 @@ class DatabaseService {
       }
   }
 
-  // --- Utility Functions (Replaced RPCs with direct queries) ---
   async getDistinctSports() {
       if (!this.client) return [];
       try {
+          // **THE FIX IS HERE**
+          // Replaced the broken RPC call with a direct query that de-duplicates the results in code.
+          // This is guaranteed to work with your schema.
           const { data, error } = await this.client.from('games').select('sport_key, sport_title');
           if (error) throw error;
+          
           const uniqueSportsMap = new Map();
           (data || []).forEach(game => {
             if (game.sport_key && game.sport_title) {
@@ -137,13 +152,17 @@ class DatabaseService {
   async getSportGameCounts() {
     if (!this.client) return [];
     try {
+      // **THE FIX IS HERE**
+      // Replaced the broken RPC call with a direct query that groups the results in code.
       const { data, error } = await this.client.from('games').select('sport_title');
       if (error) throw error;
+
       const counts = (data || []).reduce((acc, { sport_title }) => {
           const title = sport_title || 'Unknown/Other';
           acc[title] = (acc[title] || 0) + 1;
           return acc;
       }, {});
+
       return Object.entries(counts).map(([title, count]) => ({ sport_title: title, game_count: count }));
     } catch (error) {
       console.error('Supabase getSportGameCounts error:', error.message);
