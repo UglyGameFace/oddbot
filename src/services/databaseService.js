@@ -24,11 +24,23 @@ const withTimeout = (p, ms, label) =>
 class DatabaseService {
   get client() { return supabaseClient || (supabaseClient = buildClient()); }
 
-  // --- Game Functions (Corrected for your schema) ---
+  async getOddsDateRange() {
+    if (!this.client) return { min_date: null, max_date: null };
+    try {
+      // FIX: This is a robust fallback that works without needing a custom RPC.
+      const { data: minData, error: minError } = await this.client.from('games').select('commence_time').order('commence_time', { ascending: true }).limit(1);
+      const { data: maxData, error: maxError } = await this.client.from('games').select('commence_time').order('commence_time', { ascending: false }).limit(1);
+      if (minError || maxError) throw minError || maxError;
+      return { min_date: minData?.[0]?.commence_time || null, max_date: maxData?.[0]?.commence_time || null };
+    } catch (error) {
+      console.error('Supabase getOddsDateRange error:', error.message);
+      return { min_date: null, max_date: null };
+    }
+  }
+
   async upsertGames(gamesData) {
     if (!this.client || !gamesData?.length) return { data: [], error: null };
     try {
-      // FIX: Your 'games' table uses 'event_id' as the primary key for conflicts.
       const { data, error } = await withTimeout(
         this.client.from('games').upsert(gamesData, { onConflict: 'event_id' }).select(),
         5000, 'upsertGames'
@@ -45,7 +57,6 @@ class DatabaseService {
   async getGamesBySport(sportKey) {
     if (!this.client) return [];
     try {
-        // FIX: Uses correct column names 'sport_key' and 'commence_time'.
         const { data, error } = await withTimeout(
             this.client.from('games').select('*').eq('sport_key', sportKey).gte('commence_time', new Date().toISOString()).order('commence_time', { ascending: true }),
             5000, 'getGamesBySport'
@@ -61,12 +72,11 @@ class DatabaseService {
   async getGameById(eventId) {
     if (!this.client) return null;
     try {
-      // FIX: Queries by 'event_id' as per your schema.
       const { data, error } = await withTimeout(
         this.client.from('games').select('*').eq('event_id', eventId).single(),
         4000, 'getGameById'
       );
-      if (error && error.code !== 'PGRST116') throw error; // Ignore 'not found' errors
+      if (error && error.code !== 'PGRST116') throw error;
       return data ?? null;
     } catch (error) {
       console.error(`Supabase getGameById error for ${eventId}:`, error.message);
@@ -74,27 +84,11 @@ class DatabaseService {
     }
   }
   
-  async getOddsDateRange() {
-    if (!this.client) return { min_date: null, max_date: null };
-    try {
-      // FIX: This RPC should be configured to run: 
-      // SELECT min(commence_time) as min_date, max(commence_time) as max_date FROM games;
-      const { data, error } = await withTimeout(this.client.rpc('get_odds_date_range'), 5000, 'getOddsDateRange');
-      if (error) throw error;
-      return data?.[0] || { min_date: null, max_date: null };
-    } catch (error) {
-      console.error('Supabase getOddsDateRange error:', error.message);
-      return { min_date: null, max_date: null };
-    }
-  }
-
-  // --- User & Settings Functions (Corrected for your schema) ---
   async findOrCreateUser(telegramId, firstName = '', username = '') {
       if (!this.client) return null;
       try {
-          // FIX: Your 'users' table primary key is 'tg_id'.
           let { data: user, error } = await this.client.from('users').select('*').eq('tg_id', telegramId).single();
-          if (error && error.code === 'PGRST116') { // Not found
+          if (error && error.code === 'PGRST116') {
               const { data: newUser, error: insertError } = await this.client.from('users').insert({
                   tg_id: telegramId,
                   first_name: firstName,
@@ -114,14 +108,12 @@ class DatabaseService {
 
   async getUserSettings(telegramId) {
     const user = await this.findOrCreateUser(telegramId);
-    // FIX: Settings are stored in the 'preferences' column per your schema.
     return user?.preferences || {};
   }
 
   async updateUserSettings(telegramId, newSettings) {
       if (!this.client) return null;
       try {
-          // FIX: Updates the 'preferences' and 'updated_at' columns.
           const { data, error } = await this.client.from('users')
               .update({ preferences: newSettings, updated_at: new Date().toISOString() })
               .eq('tg_id', telegramId)
@@ -135,15 +127,14 @@ class DatabaseService {
       }
   }
 
-  // --- Utility Functions (Corrected) ---
   async getDistinctSports() {
       if (!this.client) return [];
       try {
-          // FIX: This now correctly calls an RPC to get distinct sports from your 'games' table.
-          // This RPC should be configured to run: SELECT DISTINCT sport_key, sport_title FROM games WHERE sport_title IS NOT NULL;
-          const { data, error } = await this.client.rpc('get_distinct_sports');
+          // FIX: Replaced the broken RPC call with a direct query that achieves the same result.
+          const { data, error } = await this.client.from('games').select('sport_key, sport_title');
           if (error) throw error;
-          return data ?? [];
+          const uniqueSports = [...new Map(data.map(item => [item['sport_key'], item])).values()];
+          return uniqueSports;
       } catch (error) {
           console.error('Supabase getDistinctSports error:', error.message);
           return [];
@@ -153,10 +144,15 @@ class DatabaseService {
   async getSportGameCounts() {
     if (!this.client) return [];
     try {
-      // This RPC should be configured to run: SELECT COALESCE(sport_title, 'Unknown/Other') as sport_title, count(*) as game_count FROM games GROUP BY sport_title;
-      const { data, error } = await withTimeout(this.client.rpc('get_sport_game_counts'), 5000, 'getSportGameCounts');
-      if (error) throw error;
-      return data ?? [];
+        // FIX: Replaced the broken RPC call with a direct query that achieves the same result.
+        const { data, error } = await this.client.from('games').select('sport_title');
+        if (error) throw error;
+        const counts = data.reduce((acc, { sport_title }) => {
+            const title = sport_title || 'Unknown/Other';
+            acc[title] = (acc[title] || 0) + 1;
+            return acc;
+        }, {});
+        return Object.entries(counts).map(([title, count]) => ({ sport_title: title, game_count: count }));
     } catch (error) {
       console.error('Supabase getSportGameCounts error:', error.message);
       return [];
