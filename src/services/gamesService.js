@@ -1,4 +1,5 @@
 // src/services/gamesService.js
+
 import databaseService from './databaseService.js';
 import oddsService from './oddsService.js';
 import redisClient from './redisService.js';
@@ -6,7 +7,7 @@ import { sentryService } from './sentryService.js';
 import env from '../config/env.js';
 import axios from 'axios';
 
-const CACHE_TTL = env.CACHE_TTL_DEFAULT || 300;
+const CACHE_TTL = Number(env.CACHE_TTL_DEFAULT || 300);
 
 const SPORT_TITLES = {
   basketball_nba: 'NBA',
@@ -57,30 +58,18 @@ class GamesService {
     }
 
     try {
+      // Primary: DB distinct sports (schema uses sport_key + sport_title)
       let sports = await databaseService.getDistinctSports();
+      // Normalize to { sport, sport_title }
+      sports = (sports || []).map(s => ({ sport: s.sport_key || s.sport, sport_title: s.sport_title || '' }));
 
+      // Fallback: provider catalog
       if (!sports || sports.length === 0) {
-        console.warn('No sports in DB, using live API fallback...');
-        const liveGames = await oddsService.getSportOdds('upcoming');
-        if (liveGames && liveGames.length > 0) {
-          const map = new Map();
-          for (const g of liveGames) {
-            if (g?.sport) map.set(g.sport, g.sport_title || '');
-          }
-          sports = Array.from(map, ([sport, sport_title]) => ({ sport, sport_title }));
-        }
-      }
-
-      if (sports && sports.length > 0 && env.THE_ODDS_API_KEY) {
         const provider = await fetchProviderSports();
-        if (provider.length) {
-          const seen = new Set(sports.map(s => s.sport));
-          for (const p of provider) {
-            if (!seen.has(p.sport)) sports.push({ sport: p.sport, sport_title: p.sport_title || '' });
-          }
-        }
+        sports = provider.map(p => ({ sport: p.sport, sport_title: p.sport_title || '' }));
       }
 
+      // Normalize/merge titles and order
       const normalized = (sports || [])
         .filter(s => s?.sport)
         .map(s => ({
@@ -88,12 +77,13 @@ class GamesService {
           sport_title: s.sport_title || SPORT_TITLES[s.sport] || s.sport,
         }));
 
-      const deduped = [...new Map(normalized.map(item => [item['sport'], item])).values()];
+      const deduped = [...new Map(normalized.map(item => [item.sport, item])).values()];
       const ordered = sortSports(deduped);
 
       if (ordered.length > 0) {
-        await redis.set(cacheKey, JSON.stringify(ordered), 'EX', CACHE_TTL);
+        await redis.set(cacheKey, JSON.stringify(ordered), { EX: CACHE_TTL });
       }
+
       return ordered;
     } catch (error) {
       sentryService.captureError(error, { component: 'games_service', operation: 'getAvailableSports' });
@@ -102,21 +92,24 @@ class GamesService {
   }
 
   async getGamesForSport(sportKey) {
+    if (!sportKey) return [];
     const redis = await redisClient;
     const cacheKey = `games:sport:${sportKey}`;
+
     try {
       const cached = await redis.get(cacheKey);
       if (cached) return JSON.parse(cached);
     } catch (e) {
       sentryService.captureError(e, { component: 'games_service', operation: 'getGamesForSport_cache_read' });
     }
+
     try {
       let games = await databaseService.getGamesBySport(sportKey);
       if (!games || games.length === 0) {
         games = await oddsService.getSportOdds(sportKey);
       }
       if (games && games.length > 0) {
-        await redis.set(cacheKey, JSON.stringify(games), 'EX', CACHE_TTL);
+        await redis.set(cacheKey, JSON.stringify(games), { EX: CACHE_TTL });
       }
       return games || [];
     } catch (error) {
@@ -126,18 +119,21 @@ class GamesService {
   }
 
   async getGameDetails(gameId) {
+    if (!gameId) return null;
     const redis = await redisClient;
     const cacheKey = `games:details:${gameId}`;
+
     try {
       const cached = await redis.get(cacheKey);
       if (cached) return JSON.parse(cached);
     } catch (e) {
       sentryService.captureError(e, { component: 'games_service', operation: 'getGameDetails_cache_read' });
     }
+
     try {
       const game = await databaseService.getGameById(gameId);
       if (game) {
-        await redis.set(cacheKey, JSON.stringify(game), 'EX', CACHE_TTL * 2);
+        await redis.set(cacheKey, JSON.stringify(game), { EX: CACHE_TTL * 2 });
       }
       return game;
     } catch (error) {
