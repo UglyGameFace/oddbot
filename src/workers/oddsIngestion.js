@@ -1,11 +1,10 @@
-// src/workers/oddsIngestion.js - INSTITUTIONAL GRADE TRADING ENGINE
-import cron from 'node-cron';
+// src/workers/oddsIngestion.js - Manages on-demand ingestion of sports odds via a Redis trigger.
 import DatabaseService from '../services/databaseService.js';
 import OddsService from '../services/oddsService.js';
 import { sentryService } from '../services/sentryService.js';
-import env from '../config/env.js';
 import gamesService from '../services/gamesService.js'; 
 import redisClient from '../services/redisService.js';
+import env from '../config/env.js';
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ UNHANDLED REJECTION IN ODDS WORKER:', reason);
@@ -14,18 +13,28 @@ process.on('unhandledRejection', (reason, promise) => {
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-class InstitutionalOddsIngestionEngine {
+class OddsIngestionEngine {
   constructor() {
     this.isJobRunning = false;
-    this.initializeManualTrigger();
+    this.redisClient = null;
+    this.initialize();
+  }
+
+  async initialize() {
+    try {
+      this.redisClient = await redisClient;
+      this.initializeManualTrigger();
+    } catch (error) {
+      console.error('❌ Failed to initialize the main Redis client for the worker:', error);
+      sentryService.captureError(error, { component: 'odds_ingestion_worker_main_redis' });
+    }
   }
 
   async initializeManualTrigger() {
+    const subscriber = this.redisClient.duplicate();
+    const channel = 'odds_ingestion_trigger';
+    
     try {
-      const redis = await redisClient;
-      const subscriber = redis.duplicate();
-      
-      const channel = 'odds_ingestion_trigger';
       await subscriber.subscribe(channel);
       console.log(`✅ Worker listening for manual triggers on Redis channel: ${channel}`);
 
@@ -47,7 +56,7 @@ class InstitutionalOddsIngestionEngine {
       return;
     }
     this.isJobRunning = true;
-    console.log(`🚀 Starting institutional odds ingestion cycle (source: ${source})...`);
+    console.log(`🚀 Starting odds ingestion cycle (source: ${source})...`);
     let totalUpsertedCount = 0;
 
     try {
@@ -60,7 +69,9 @@ class InstitutionalOddsIngestionEngine {
       }
       
       console.log(`Dynamically fetched ${sportsToFetch.length} sports to process.`);
-      const batchSize = 5;
+      const batchSize = env.ODDS_INGESTION_BATCH_SIZE;
+      const interBatchDelay = env.ODDS_INGESTION_DELAY_MS;
+
       for (let i = 0; i < sportsToFetch.length; i += batchSize) {
         const batch = sportsToFetch.slice(i, i + batchSize);
         console.log(` -> Processing batch ${Math.floor(i / batchSize) + 1} of ${Math.ceil(sportsToFetch.length / batchSize)}...`);
@@ -80,8 +91,8 @@ class InstitutionalOddsIngestionEngine {
         }));
 
         if (i + batchSize < sportsToFetch.length) {
-            console.log(` -> Batch complete. Waiting for 2 seconds before next batch...`);
-            await delay(2000);
+            console.log(` -> Batch complete. Waiting for ${interBatchDelay / 1000} seconds before next batch...`);
+            await delay(interBatchDelay);
         }
       }
 
@@ -91,8 +102,7 @@ class InstitutionalOddsIngestionEngine {
         console.log('Ingestion cycle complete. No new odds were found across all sports.');
       }
       
-      const redis = await redisClient;
-      await redis.set('meta:last_successful_ingestion', new Date().toISOString());
+      await this.redisClient.set('meta:last_successful_ingestion', new Date().toISOString());
 
     } catch (error) {
       console.error('❌ A critical error occurred during the main ingestion cycle:', error);
@@ -103,4 +113,4 @@ class InstitutionalOddsIngestionEngine {
   }
 }
 
-new InstitutionalOddsIngestionEngine();
+new OddsIngestionEngine();
