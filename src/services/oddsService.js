@@ -6,10 +6,15 @@ import { sentryService } from './sentryService.js';
 import rateLimitService from './rateLimitService.js';
 
 const CACHE_TTL_ODDS = 60;
-const CACHE_TTL_PROPS = 120;
 const LOCK_MS = 8000;
 const RETRY_MS = 150;
 const ODDS_BASE = 'https://api.the-odds-api.com/v4';
+
+// Helper function to create a title from a key (e.g., 'americanfootball_nfl' -> 'Americanfootball NFL')
+const titleFromKey = (key) => {
+    if (!key) return 'Unknown Sport';
+    return key.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+};
 
 async function getOrSetJSON(redis, key, ttlSec, loader) {
   const cached = await redis.get(key);
@@ -35,7 +40,7 @@ async function getOrSetJSON(redis, key, ttlSec, loader) {
       if (again) return JSON.parse(again);
     }
     const data = await loader();
-    if (data && data.length > 0) {
+     if (data && data.length > 0) {
         await redis.set(key, JSON.stringify(data), { EX: ttlSec });
     }
     return data;
@@ -78,6 +83,7 @@ class OddsService {
   }
 
   async getPlayerPropsForGame(sportKey, gameId, { regions = 'us', bookmakers, markets = 'player_points,player_rebounds,player_assists', oddsFormat = 'american' } = {}) {
+    // This function remains unchanged as it functions correctly.
     const redis = await redisClient;
     const scope = bookmakers ? `bk:${bookmakers}` : `rg:${regions}`;
     const cacheKey = `player_props:${sportKey}:${gameId}:${scope}:${markets}:${oddsFormat}`;
@@ -128,18 +134,18 @@ class OddsService {
 
   _transformTheOddsAPIData(data) {
     return (data || []).reduce((acc, d) => {
-      // Validation to ensure the object has the minimum required data
       if (d.id && d.sport_key && d.commence_time && d.home_team && d.away_team) {
         acc.push({
-          // FIX: This structure now perfectly matches your 'games' table schema.
           event_id: d.id,
           sport_key: d.sport_key,
-          league_key: d.sport_title, // Using sport_title as league_key
+          league_key: d.sport_title || titleFromKey(d.sport_key),
           commence_time: d.commence_time,
           home_team: d.home_team,
           away_team: d.away_team,
           market_data: { bookmakers: d.bookmakers || [] },
-          sport_title: d.sport_title
+          // **THE FIX IS HERE**
+          // If sport_title is missing, create one from the sport_key.
+          sport_title: d.sport_title || titleFromKey(d.sport_key)
         });
       } else {
         console.warn(`[Data Validation] Discarding invalid game object from TheOddsAPI: ${JSON.stringify(d)}`);
@@ -151,16 +157,17 @@ class OddsService {
   _transformSportRadarData(events, sportKey) {
     return (events || []).reduce((acc, event) => {
         if (event.id && event.start_time) {
+            const title = event?.sport_event_context?.competition?.name || titleFromKey(sportKey);
             acc.push({
-                // FIX: This structure now perfectly matches your 'games' table schema.
                 event_id: `sr_${event.id}`,
                 sport_key: sportKey,
-                league_key: event?.sport_event_context?.competition?.name || 'Unknown',
+                league_key: title,
                 commence_time: event.start_time,
                 home_team: (event?.competitors || []).find(c => c.qualifier === 'home')?.name || 'N/A',
                 away_team: (event?.competitors || []).find(c => c.qualifier === 'away')?.name || 'N/A',
                 market_data: { bookmakers: [] },
-                sport_title: event?.sport_event_context?.competition?.name || 'Unknown'
+                // **THE FIX IS HERE**
+                sport_title: title
             });
         } else {
             console.warn(`[Data Validation] Discarding invalid game object from SportRadar: ${JSON.stringify(event)}`);
