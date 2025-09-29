@@ -11,6 +11,7 @@ import axios from 'axios';
 import { createClient } from '@supabase/supabase-js';
 import { MerkleTree } from 'merkletreejs';
 import SHA256 from 'crypto-js/sha256';
+import aiService from '../services/aiService.js'; // FIX: Added missing import
 
 class InstitutionalSettlementEngine {
   constructor() {
@@ -93,7 +94,7 @@ class InstitutionalSettlementEngine {
   }
 
   async monitorActiveGames() {
-    const activeGames = await DatabaseService.getActiveGames();
+    const activeGames = await databaseService.getActiveGames();
     
     for (const game of activeGames) {
       const liveScores = await this.acquireLiveScores(game);
@@ -117,7 +118,7 @@ class InstitutionalSettlementEngine {
   async fetchScoreFromSource(game, source) {
     if (source === 'perplexity_ai') {
       const prompt = `Provide the exact final score, winner, and key stats for the ${game.sport_key} game between ${game.home_team} and ${game.away_team} that started on ${game.commence_time} (UTC). Use only official, up-to-date sources like ESPN or league websites. If the game is not completed, say "ongoing". Respond in JSON: { "homeScore": number, "awayScore": number, "winner": string, "status": "completed" or "ongoing", "sources": array of strings }.`;
-      const result = await AIService.generateWithPerplexity(prompt);
+      const result = await aiService.generateWithPerplexity(prompt); // Corrected: was AIService
       const parsed = JSON.parse(result);
       return {
         provider: 'perplexity_ai',
@@ -177,14 +178,14 @@ class InstitutionalSettlementEngine {
   async updateGameState(game, consensusScore) {
     if (consensusScore.score && consensusScore.confidence >= this.consensusThreshold) {
       const [homeScore, awayScore] = consensusScore.score.split('-').map(Number);
-      await DatabaseService.updateGame({
+      await databaseService.updateGame({
         event_id: game.event_id,
         home_score: homeScore,
         away_score: awayScore,
         status: 'settled'
       });
     } else {
-      await DatabaseService.updateGame({
+      await databaseService.updateGame({
         event_id: game.event_id,
         status: 'pending'
       });
@@ -198,7 +199,7 @@ class InstitutionalSettlementEngine {
   async initiateEarlySettlement(game, consensusScore) {
     if (consensusScore.score) {
       const [homeScore, awayScore] = consensusScore.score.split('-').map(Number);
-      await DatabaseService.updateGame({
+      await databaseService.updateGame({
         event_id: game.event_id,
         home_score: homeScore,
         away_score: awayScore,
@@ -209,7 +210,7 @@ class InstitutionalSettlementEngine {
   }
 
   async processCompletedGames() {
-    const completedGames = await DatabaseService.getRecentlyCompletedGames();
+    const completedGames = await databaseService.getRecentlyCompletedGames();
     
     for (const game of completedGames) {
       if (game.status !== 'settled') {
@@ -263,40 +264,40 @@ class InstitutionalSettlementEngine {
   }
 
   async executeSettlementTransactions(settlementData) {
-    const transaction = await DatabaseService.beginTransaction();
+    const transaction = await databaseService.beginTransaction();
     
     try {
       const { homeScore, awayScore } = settlementData.finalScores[0]; // Use first as consensus
-      await DatabaseService.updateGame({
+      await databaseService.updateGame({
         event_id: settlementData.gameId,
         home_score: homeScore,
         away_score: awayScore,
         status: 'settled'
       });
 
-      const affectedParlays = await DatabaseService.getParlaysByGame(settlementData.gameId);
+      const affectedParlays = await databaseService.getParlaysByGame(settlementData.gameId);
       
       for (const parlay of affectedParlays) {
         const newStatus = this.calculateParlayStatus(parlay, settlementData);
-        await DatabaseService.updateParlay({
+        await databaseService.updateParlay({
           parlay_id: parlay.parlay_id,
           status: newStatus
         });
         
-        await DatabaseService.updateUserBettingStats(parlay.user_tg_id, newStatus);
+        await databaseService.updateUserBettingStats(parlay.user_tg_id, newStatus);
       }
 
       await this.recordSettlementLedger(settlementData);
       
-      await DatabaseService.commitTransaction(transaction);
+      await databaseService.commitTransaction(transaction);
     } catch (error) {
-      await DatabaseService.rollbackTransaction(transaction);
+      await databaseService.rollbackTransaction(transaction);
       throw this.enhanceSettlementError(error, settlementData);
     }
   }
 
   async resolveAffectedParlays(settlementData) {
-    const affectedParlays = await DatabaseService.getParlaysByGame(settlementData.gameId);
+    const affectedParlays = await databaseService.getParlaysByGame(settlementData.gameId);
     
     const resolutionBatch = affectedParlays.map(parlay => ({
       parlayId: parlay.parlay_id,
@@ -305,14 +306,14 @@ class InstitutionalSettlementEngine {
       verificationHash: settlementData.merkleRoot
     }));
 
-    await DatabaseService.batchUpdateParlayStatus(resolutionBatch);
+    await databaseService.batchUpdateParlayStatus(resolutionBatch);
     
     await this.triggerSettlementNotifications(resolutionBatch);
   }
 
   async triggerSettlementNotifications(resolutions) {
     for (const resolution of resolutions) {
-      const user = await DatabaseService.getUserByParlayId(resolution.parlayId);
+      const user = await databaseService.getUserByParlayId(resolution.parlayId);
       if (user) {
         await this.sendSettlementNotification(user, resolution);
       }
@@ -336,7 +337,7 @@ class InstitutionalSettlementEngine {
   }
 
   async resolveSettlementDisputes() {
-    const disputes = await DatabaseService.getSettlementDisputes();
+    const disputes = await databaseService.getSettlementDisputes();
     
     for (const dispute of disputes) {
       const resolution = await this.arbitrateDispute(dispute);
@@ -360,7 +361,7 @@ class InstitutionalSettlementEngine {
 
   async gatherDisputeEvidence(dispute) {
     // Gather evidence from AI source
-    const game = await DatabaseService.getGame(dispute.game_id);
+    const game = await databaseService.getGame(dispute.game_id);
     const aiResult = await this.fetchScoreFromSource(game, 'perplexity_ai');
     return { aiResult };
   }
