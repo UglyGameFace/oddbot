@@ -4,7 +4,7 @@
 // As a top sports analyst, I've optimized the consensus for AI reliability, added date/time handling in all outputs, and ensured parlay settlements show game times.
 
 import cron from 'node-cron';
-import DatabaseService from '../services/databaseService.js';
+import databaseService from '../services/databaseService.js';
 import * as Sentry from '@sentry/node';
 import env from '../config/env.js';
 import axios from 'axios';
