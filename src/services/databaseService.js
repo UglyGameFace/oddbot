@@ -27,8 +27,6 @@ class DatabaseService {
   async getOddsDateRange() {
     if (!this.client) return { min: null, max: null };
     try {
-      // This RPC should be configured to run: 
-      // SELECT min(start_time) as min_date, max(start_time) as max_date FROM games;
       const { data, error } = await withTimeout(this.client.rpc('get_odds_date_range'), 5000, 'getOddsDateRange');
       if (error) throw error;
       return data?.[0] || { min_date: null, max_date: null };
@@ -41,7 +39,6 @@ class DatabaseService {
   async upsertGames(gamesData) {
     if (!this.client || !gamesData?.length) return { data: [], error: null };
     try {
-      // FIX: Changed onConflict to use 'game_id_provider' which is the correct unique column from your schema.
       const { data, error } = await withTimeout(
         this.client.from('games').upsert(gamesData, { onConflict: 'game_id_provider' }).select(),
         5000, 'upsertGames'
@@ -58,7 +55,6 @@ class DatabaseService {
   async getGamesBySport(sportKey) {
     if (!this.client) return [];
     try {
-        // FIX: Changed 'sport_key' to 'sport' and 'commence_time' to 'start_time' to match your schema.
         const { data, error } = await withTimeout(
             this.client.from('games').select('*').eq('sport', sportKey).gte('start_time', new Date().toISOString()).order('start_time', { ascending: true }),
             5000, 'getGamesBySport'
@@ -71,18 +67,17 @@ class DatabaseService {
     }
   }
   
-  async getGameById(eventId) {
+  async getGameById(gameIdProvider) {
     if (!this.client) return null;
     try {
-      // FIX: Changed lookup column from 'event_id' to 'game_id_provider' to match the schema.
       const { data, error } = await withTimeout(
-        this.client.from('games').select('*').eq('game_id_provider', eventId).single(),
+        this.client.from('games').select('*').eq('game_id_provider', gameIdProvider).single(),
         4000, 'getGameById'
       );
       if (error && error.code !== 'PGRST116') throw error;
       return data ?? null;
     } catch (error) {
-      console.error(`Supabase getGameById error for ${eventId}:`, error.message);
+      console.error(`Supabase getGameById error for ${gameIdProvider}:`, error.message);
       return null;
     }
   }
@@ -90,7 +85,6 @@ class DatabaseService {
   async findOrCreateUser(telegramId, firstName = '', username = '') {
       if (!this.client) return null;
       try {
-          // FIX: Changed 'tg_id' to 'telegram_id' to match your 'users' table schema.
           let { data: user, error } = await this.client.from('users').select('*').eq('telegram_id', telegramId).single();
           if (error && error.code === 'PGRST116') {
               const { data: newUser, error: insertError } = await this.client.from('users').insert({
@@ -112,14 +106,12 @@ class DatabaseService {
 
   async getUserSettings(telegramId) {
     const user = await this.findOrCreateUser(telegramId);
-    // FIX: Changed 'preferences' to 'settings' to match your 'users' table schema.
     return user?.settings || {};
   }
 
   async updateUserSettings(telegramId, newSettings) {
       if (!this.client) return null;
       try {
-          // FIX: Changed 'preferences' to 'settings' and 'tg_id' to 'telegram_id'.
           const { data, error } = await this.client.from('users')
               .update({ settings: newSettings, updated_at: new Date().toISOString() })
               .eq('telegram_id', telegramId)
