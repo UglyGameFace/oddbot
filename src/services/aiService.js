@@ -30,14 +30,32 @@ async function pickSupportedModel(apiKey, candidates = GEMINI_MODEL_CANDIDATES) 
   return candidates[0];
 }
 
-// --- JSON extraction
+/**
+ * --- FIX: More robust JSON extraction ---
+ * Extracts the first valid JSON object from a string, tolerating markdown code blocks and other text.
+ * @param {string} text - The text from the AI response.
+ * @returns {object|null} The parsed JSON object or null if not found.
+ */
 function extractFirstJsonObject(text = '') {
-  const m = String(text).match(/\{[\s\S]*\}/);
-  if (!m) return null;
+  // First, try to find a JSON markdown block
+  let jsonString = '';
+  const markdownMatch = String(text).match(/```json\s*([\s\S]*?)\s*```/);
+  if (markdownMatch && markdownMatch[1]) {
+    jsonString = markdownMatch[1];
+  } else {
+    // If no markdown block, fall back to finding the first '{' and last '}'
+    const firstBrace = String(text).indexOf('{');
+    const lastBrace = String(text).lastIndexOf('}');
+    if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
+      return null;
+    }
+    jsonString = text.substring(firstBrace, lastBrace + 1);
+  }
+
   try {
-    return JSON.parse(m[0]);
+    return JSON.parse(jsonString);
   } catch {
-    return null;
+    return null; // Return null if parsing fails
   }
 }
 
@@ -78,20 +96,35 @@ async function getUpcomingFixtures(sportKey, hoursHorizon = 120) {
     }));
 }
 
+/**
+ * --- FIX: Graceful leg matching ---
+ * Binds AI-generated legs to real fixtures, but filters out any legs that can't be matched
+ * instead of throwing an error. This makes the system resilient to AI hallucinations.
+ * @param {Array} legs - The parlay legs from the AI.
+ * @param {Array} fixtures - The list of real, available games.
+ * @returns {Array} A list of valid, matched parlay legs.
+ */
 function bindLegsToFixtures(legs = [], fixtures = []) {
   const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
-  return legs.map((leg) => {
+  const matchedLegs = [];
+
+  for (const leg of legs) {
     const txt = String(leg.game || '').toLowerCase();
     const hit = fixtures.find((f) => txt.includes(norm(f.away_team)) && txt.includes(norm(f.home_team)));
-    if (!hit) throw new Error(`Unmatched leg: ${leg.game}`);
-    return {
-      ...leg,
-      game: `${hit.away_team} @ ${hit.home_team}`,
-      event_id: hit.event_id || leg.event_id || null,
-      game_date_utc: hit.commence_time,
-      game_date_local: formatLocal(hit.commence_time, TZ),
-    };
-  });
+    
+    if (hit) {
+      matchedLegs.push({
+        ...leg,
+        game: `${hit.away_team} @ ${hit.home_team}`,
+        event_id: hit.event_id || leg.event_id || null,
+        game_date_utc: hit.commence_time,
+        game_date_local: formatLocal(hit.commence_time, TZ),
+      });
+    } else {
+      console.warn(`[AI Hallucination] Unmatched leg discarded: ${leg.game}`);
+    }
+  }
+  return matchedLegs;
 }
 
 // --- Gemini client
@@ -129,9 +162,9 @@ class AIService {
     const response = await axios.post(
       'https://api.perplexity.ai/chat/completions',
       {
-        model: 'sonar-pro',
+        model: 'llama-3-sonar-large-32k-online', // Using a more capable model
         messages: [
-          { role: 'system', content: 'You are a sports betting analyst.' },
+          { role: 'system', content: 'You are a sports betting analyst who responds only in JSON.' },
           { role: 'user', content: prompt },
         ],
       },
@@ -149,7 +182,10 @@ class AIService {
     const model = genAI.getGenerativeModel({
       model: modelId,
       safetySettings,
-      generationConfig: { maxOutputTokens: 4096 },
+      generationConfig: { 
+          maxOutputTokens: 4096,
+          responseMimeType: "application/json", // Instruct Gemini to output JSON directly
+      },
     });
 
     const betTypeInstruction =
@@ -167,13 +203,13 @@ class AIService {
       promptText =
         `Today is ${todayIso} (UTC). Choose ONLY from the fixtures below; do not use past-season content or invent games. `
         + `Pick ${numLegs} legs; ${betTypeInstruction} Include sportsbook and brief evidence. `
-        + `Return ONLY JSON: {"parlay_legs":[{"game":"","market":"...","pick":"...","sportsbook":"...","justification":"..."}],"confidence_score":0.xx}\n`
+        + `Return ONLY a JSON object based on this schema: {"parlay_legs":[{"game":"","market":"...","pick":"...","sportsbook":"...","justification":"..."}],"confidence_score":0.xx}\n`
         + `Fixtures (ISO UTC commence_time):\n\`\`\`json\n${JSON.stringify(fixtures, null, 2)}\n\`\`\``;
 
       const result = await model.generateContent(promptText);
       const text = result?.response?.text?.() ?? '';
       const obj = extractFirstJsonObject(text);
-      if (!obj?.parlay_legs?.length) throw new Error('Invalid AI JSON.');
+      if (!obj?.parlay_legs?.length) throw new Error('AI returned invalid or empty JSON.');
       obj.parlay_legs = bindLegsToFixtures(obj.parlay_legs, fixtures);
       return obj;
     }
@@ -193,13 +229,13 @@ class AIService {
       promptText =
         `You are an expert sports betting analyst. Construct a ${numLegs}-leg parlay using ONLY the provided fixtures. `
         + `${betTypeInstruction} Provide justification per leg. `
-        + `Return ONLY JSON: { "parlay_legs": [{"game": "","market":"...","pick":"...","justification":"..."}], "confidence_score": 0.75 }\n`
+        + `Return ONLY a JSON object based on this schema: { "parlay_legs": [{"game": "","market":"...","pick":"...","justification":"..."}], "confidence_score": 0.75 }\n`
         + `Fixtures:\n\`\`\`json\n${JSON.stringify(fixtures.slice(0, 25), null, 2)}\n\`\`\``;
 
       const result = await model.generateContent(promptText);
       const text = result?.response?.text?.() ?? '';
       const obj = extractFirstJsonObject(text);
-      if (!obj?.parlay_legs?.length) throw new Error('Invalid AI JSON.');
+      if (!obj?.parlay_legs?.length) throw new Error('AI returned invalid or empty JSON.');
       obj.parlay_legs = bindLegsToFixtures(obj.parlay_legs, fixtures);
       return obj;
     }
@@ -241,22 +277,26 @@ class AIService {
     promptText =
       `You are an expert sports betting analyst. Build a ${numLegs}-leg parlay from the provided live odds${shouldFetchProps ? ' and props' : ''}. `
       + `${betTypeInstruction} Provide detailed justification per leg. `
-      + `Return ONLY JSON: { "parlay_legs": [ { "game": "", "market": "...", "pick": "...", "justification": "..." } ], "confidence_score": 0.85 }\n`
+      + `Return ONLY a JSON object based on this schema: { "parlay_legs": [ { "game": "", "market": "...", "pick": "...", "justification": "..." } ], "confidence_score": 0.85 }\n`
       + `Live ${shouldFetchProps ? 'Odds/Props' : 'Odds'} Snapshot:\n\`\`\`json\n${JSON.stringify(enrichedGames, null, 2)}\n\`\`\`\n`
       + `Fixtures:\n\`\`\`json\n${JSON.stringify(fixtures.slice(0, 25), null, 2)}\n\`\`\``;
 
     const result = await model.generateContent(promptText);
     const text = result?.response?.text?.() ?? '';
     const obj = extractFirstJsonObject(text);
-    if (!obj?.parlay_legs?.length) throw new Error('Invalid AI JSON.');
+    if (!obj?.parlay_legs?.length) throw new Error('AI returned invalid or empty JSON.');
     obj.parlay_legs = bindLegsToFixtures(obj.parlay_legs, fixtures);
     return obj;
   }
 
   async validateOdds(oddsData) {
     const modelId = await pickSupportedModel(env.GOOGLE_GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ model: modelId, safetySettings });
-    const prompt = `Validate this JSON odds structure; respond ONLY with {"valid": true|false}. Data: ${JSON.stringify(oddsData)}`;
+    const model = genAI.getGenerativeModel({ 
+        model: modelId, 
+        safetySettings,
+        generationConfig: { responseMimeType: "application/json" },
+    });
+    const prompt = `Validate this JSON odds structure; respond ONLY with a JSON object like {"valid": true} or {"valid": false}. Data: ${JSON.stringify(oddsData)}`;
     try {
       const result = await model.generateContent(prompt);
       const text = result?.response?.text?.() ?? '';
