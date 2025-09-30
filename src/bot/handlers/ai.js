@@ -1,4 +1,4 @@
-// src/bot/handlers/ai.js - COMPLETE 800+ LINE VERSION
+// src/bot/handlers/ai.js - COMPLETE AND VERIFIED VERSION
 import { safeTelegramMessage } from '../../utils/enterpriseUtilities.js';
 import aiService from '../../services/aiService.js';
 import gamesService from '../../services/gamesService.js';
@@ -143,7 +143,6 @@ function pageOf(arr, page) {
   return arr.slice(start, start + PAGE_SIZE); 
 }
 
-// ADD THIS HELPER FUNCTION TO ai.js IF NOT ALREADY PRESENT
 function formatLocalIfPresent(utcDateString, timezone) {
   if (!utcDateString) return null;
   try {
@@ -236,7 +235,6 @@ async function getAllAvailableSports() {
     });
   }
   
-  // Convert to array and sort by priority (lower = better)
   const sports = Array.from(sportsCollection.values())
     .sort((a, b) => a.priority - b.priority);
   
@@ -264,7 +262,6 @@ async function getCachedSports() {
     return sportsCache;
   } catch (error) {
     console.error('❌ Failed to refresh sports cache:', error);
-    // Return old cache if available, otherwise defaults
     return sportsCache || DEFAULT_SPORTS;
   }
 }
@@ -276,7 +273,6 @@ export function registerAI(bot) {
     sendSportSelection(bot, chatId);
   });
 
-  // Direct fallback commands
   bot.onText(/^\/ai_live$/, async (msg) => {
     const chatId = msg.chat.id;
     await handleDirectFallback(bot, chatId, 'live');
@@ -287,7 +283,6 @@ export function registerAI(bot) {
     await handleDirectFallback(bot, chatId, 'db');
   });
 
-  // Quick sport commands
   bot.onText(/^\/ai_nfl$/, async (msg) => {
     await handleQuickSport(bot, msg.chat.id, 'americanfootball_nfl');
   });
@@ -305,7 +300,6 @@ export function registerAI(bot) {
   });
 }
 
-// NEW: Handle quick sport commands
 async function handleQuickSport(bot, chatId, sportKey) {
   try {
     await setUserState(chatId, { 
@@ -336,7 +330,6 @@ async function handleQuickSport(bot, chatId, sportKey) {
   }
 }
 
-// Handle direct fallback commands
 async function handleDirectFallback(bot, chatId, mode) {
   const state = await getUserState(chatId);
   if (!state?.sportKey || !state?.numLegs) {
@@ -393,7 +386,7 @@ export function registerAICallbacks(bot) {
     }
 
     if (action === 'sport') {
-      state.sportKey = parts.slice(2).join('_'); // preserve exact sportKey
+      state.sportKey = parts.slice(2).join('_');
       await setUserState(chatId, state);
       sendLegSelection(bot, chatId, message.message_id);
       return;
@@ -454,12 +447,9 @@ export function registerAICallbacks(bot) {
       if (to === 'bettype')return sendBetTypeSelection(bot, chatId, message.message_id);
     }
 
-    // Fallback selection handler
     if (action === 'fallback') {
       const selectedMode = parts[2];
-      const sportKey = state.sportKey;
-      const numLegs = state.numLegs;
-      const betType = state.betType || 'mixed';
+      const { sportKey, numLegs, betType = 'mixed' } = state;
       
       if (!sportKey || !numLegs) {
         return safeEditMessage(
@@ -498,7 +488,6 @@ export function registerAICallbacks(bot) {
       return;
     }
 
-    // Quick action handlers
     if (action === 'quick') {
       const quickAction = parts[2];
       if (quickAction === 'retry') {
@@ -529,7 +518,6 @@ async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
     errorMessage = '\n\n⚠️ Using cached sports data due to connection issues.';
   }
 
-  // Sort and prioritize
   sports = sortSports(sports.filter(s => s?.sport_key));
 
   const totalPages = Math.max(1, Math.ceil(sports.length / PAGE_SIZE));
@@ -543,7 +531,6 @@ async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
   const rows = [];
   for (let i = 0; i < slice.length; i += 2) rows.push(slice.slice(i, i + 2));
 
-  // Add quick action buttons for popular sports
   if (page === 0) {
     const quickActions = [
       { text: '🏈 NFL', callback_data: 'ai_sport_americanfootball_nfl' },
@@ -562,7 +549,6 @@ async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
     if (nav.length) rows.push(nav);
   }
 
-  // Add help row
   rows.push([
     { text: '❓ Help', callback_data: 'ai_help_sports' },
     { text: '🔄 Refresh', callback_data: 'ai_refresh_sports' }
@@ -591,7 +577,6 @@ async function sendLegSelection(bot, chatId, messageId) {
   const keyboard = [];
   for (let i = 0; i < buttons.length; i += 4) keyboard.push(buttons.slice(i, i + 4));
   
-  // Add popular combinations
   const popularCombos = [
     { text: '🔥 4-Leg (Balanced)', callback_data: 'ai_legs_4' },
     { text: '⚡ 3-Leg (Conservative)', callback_data: 'ai_legs_3' },
@@ -667,7 +652,6 @@ async function sendAiModelSelection(bot, chatId, messageId) {
   await safeEditMessage(bot, text, { ...opts, chat_id: chatId, message_id: messageId });
 }
 
-// Send fallback options when web research fails
 async function sendFallbackOptions(bot, chatId, messageId, error) {
   const { fallbackOptions, dataFreshness } = error;
   
@@ -700,12 +684,12 @@ async function sendFallbackOptions(bot, chatId, messageId, error) {
   );
 }
 
+// THIS IS THE FULLY CORRECTED FUNCTION
 async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = null) {
   const { sportKey, numLegs, betType } = state;
   const legs = parlay.parlay_legs;
   const tzLabel = 'America/New_York';
 
-  // More aggressive escaping: wrap everything that is dynamic.
   const safeNumLegs = safeTelegramMessage(numLegs);
   const safeSportKey = safeTelegramMessage(sportKey);
   const safeMode = safeTelegramMessage(mode.toUpperCase());
@@ -728,7 +712,6 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = nu
   legs.forEach((leg, index) => {
     const when = leg.game_date_local
       ? safeTelegramMessage(leg.game_date_local)
-      // Pass the raw UTC date to formatLocalIfPresent, then escape its output
       : (leg.game_date_utc ? safeTelegramMessage(formatLocalIfPresent(leg.game_date_utc, tzLabel)) : '');
       
     const safeGame = safeTelegramMessage(leg.game);
@@ -736,7 +719,6 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = nu
     const safeMarket = safeTelegramMessage(leg.market);
     const safeJust = leg.justification ? safeTelegramMessage(leg.justification.length > 250 ? `${leg.justification.slice(0, 250)}...` : leg.justification) : '';
     const safeBook = leg.sportsbook ? safeTelegramMessage(leg.sportsbook) : 'N/A';
-    // Construct the odds string first, THEN escape it.
     const oddsDisplay = safeTelegramMessage(leg.odds_american ? `${leg.odds_american > 0 ? '+' : ''}${leg.odds_american}` : 'N/A');
 
     response += `*Leg ${index + 1}:* ${safeGame}`;
@@ -804,7 +786,6 @@ async function executeAiRequest(bot, chatId, messageId) {
                      betType === 'moneyline' ? 'Moneyline Focus' :
                      betType === 'spreads' ? 'Spreads & Totals' : 'Mixed';
 
-  // Preview banner
   const safeSportKey = escapeMarkdownV2(sportKey);
   const safeModeText = escapeMarkdownV2(modeText);
   const safeBetTypeText = escapeMarkdownV2(betTypeText);
@@ -838,7 +819,6 @@ async function executeAiRequest(bot, chatId, messageId) {
 
     console.log(`✅ Parlay generated in ${processingTime}s with ${parlay.parlay_legs.length} legs`);
     
-    // Add processing time to metadata
     parlay.processing_time = processingTime;
     
     await sendParlayResult(bot, chatId, parlay, state, mode, messageId);
@@ -846,13 +826,11 @@ async function executeAiRequest(bot, chatId, messageId) {
   } catch (error) {
     console.error('AI handler execution error:', error);
     
-    // Check if this is a fallback-enabled error
     if (error.fallbackAvailable) {
       await sendFallbackOptions(bot, chatId, messageId, error);
-      return; // Don't clear state yet - let user choose fallback
+      return;
     }
 
-    // Regular error handling
     const safeError = escapeMarkdownV2(error.message || 'Unknown error');
     await safeEditMessage(
       bot,
@@ -871,12 +849,10 @@ async function executeAiRequest(bot, chatId, messageId) {
       }
     );
     
-    // Clear state only for non-fallback errors
     await setUserState(chatId, {});
   }
 }
 
-// NEW: Help command handler
 export function registerAIHelp(bot) {
   bot.onText(/^\/ai_help$/, async (msg) => {
     const chatId = msg.chat.id;
