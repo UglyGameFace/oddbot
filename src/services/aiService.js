@@ -609,7 +609,6 @@ async function callGemini(prompt) {
     });
     
     throw new Error(`Gemini API call failed: ${error.message}`);
-}
 
 // ---------- ENHANCED provider calling with better JSON validation ----------
 async function callProvider(aiModel, prompt) {
