@@ -108,19 +108,24 @@ function parlayDecimal(legs) {
 }
 
 // ---------- ENHANCED Robust JSON Parsing/validation ----------
+// ENHANCED Robust JSON Parsing/validation with Perplexity Hotfix
+
 function extractJSON(text = '') {
   if (!text || typeof text !== 'string') {
     console.warn('⚠️ extractJSON: Empty or invalid text input');
     return null;
   }
   
-  console.log('🔧 Attempting JSON extraction from:', text.substring(0, 200) + '...');
+  // HOTFIX for Perplexity: Remove invalid '+' from numbers (e.g., "+125")
+  const cleanedText = text.replace(/:\s*\+/g, ': ');
+
+  console.log('🔧 Attempting JSON extraction from:', cleanedText.substring(0, 200) + '...');
   
-  // Multiple extraction strategies
+  // Multiple extraction strategies now run on the cleaned text
   const strategies = [
     // Strategy 1: Code fence extraction
     () => {
-      const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+      const fenceMatch = cleanedText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
       if (fenceMatch) {
         console.log('✅ Found JSON in code fence');
         try { 
@@ -133,10 +138,10 @@ function extractJSON(text = '') {
     },
     // Strategy 2: Find first { to last }
     () => {
-      const start = text.indexOf('{');
-      const end = text.lastIndexOf('}');
+      const start = cleanedText.indexOf('{');
+      const end = cleanedText.lastIndexOf('}');
       if (start !== -1 && end !== -1 && end > start) {
-        const candidate = text.substring(start, end + 1);
+        const candidate = cleanedText.substring(start, end + 1);
         console.log('✅ Found JSON candidate with braces');
         try { 
           return JSON.parse(candidate); 
@@ -151,7 +156,7 @@ function extractJSON(text = '') {
     // Strategy 3: Direct parse
     () => {
       try { 
-        return JSON.parse(text); 
+        return JSON.parse(cleanedText); 
       } catch (error) {
         console.warn('❌ Direct JSON parse failed:', error.message);
         return null;
@@ -159,13 +164,13 @@ function extractJSON(text = '') {
     },
     // Strategy 4: Aggressive cleaning and retry
     () => {
-      const cleaned = cleanJSONString(text);
-      if (cleaned !== text) {
-        console.log('🔄 Attempting with cleaned JSON string');
+      const cleaned = cleanJSONString(cleanedText);
+      if (cleaned !== cleanedText) {
+        console.log('🔄 Attempting with further cleaned JSON string');
         try {
           return JSON.parse(cleaned);
         } catch (error) {
-          console.warn('❌ Cleaned JSON parse failed:', error.message);
+          console.warn('❌ Further cleaned JSON parse failed:', error.message);
         }
       }
       return null;
@@ -183,7 +188,6 @@ function extractJSON(text = '') {
   console.error('❌ All JSON extraction strategies failed');
   return null;
 }
-
 // NEW: Enhanced JSON repair function
 function attemptJSONRepair(jsonString) {
   if (!jsonString || typeof jsonString !== 'string') return null;
@@ -556,19 +560,62 @@ async function callPerplexity(prompt) {
 }
 
 // ---------- ENHANCED Gemini 2.0 implementation with better JSON handling ----------
+// ENHANCED Gemini implementation with corrected JSON mode
+
 async function callGemini(prompt) {
   const { GOOGLE_GEMINI_API_KEY } = env;
   if (!GOOGLE_GEMINI_API_KEY) {
     throw new Error('Gemini API key missing - check environment configuration');
   }
-  
+
   console.log('🔄 Calling Gemini...');
-  
+
   try {
     const modelId = await pickSupportedModel(GOOGLE_GEMINI_API_KEY);
     console.log(`🔧 Using Gemini model: ${modelId}`);
     
     const genAI = new GoogleGenerativeAI(GOOGLE_GEMINI_API_KEY);
+    
+    // CORRECTED: The 'generationConfig' is simplified to use the modern JSON output method.
+    const model = genAI.getGenerativeModel({ 
+      model: modelId,
+      generationConfig: {
+        maxOutputTokens: MAX_OUTPUT_TOKENS,
+        temperature: 0.1,
+        // The 'response_mime_type' parameter correctly tells the model to output JSON.
+        // The complex 'responseSchema' is no longer needed with modern versions.
+        response_mime_type: "application/json", 
+      },
+      safetySettings: SAFETY,
+    });
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text();
+    
+    if (!text) {
+      throw new Error('Empty response from Gemini - no text generated');
+    }
+    
+    console.log('✅ Gemini response received successfully');
+    return text;
+
+  } catch (error) {
+    console.error('❌ Gemini API error:', error.message);
+    
+    // This will now catch the specific "400 Bad Request" if the prompt is malformed
+    if (error.message.includes('400')) {
+      throw new Error(`Gemini API Bad Request: ${error.message}. This may be an issue with the prompt or API version.`);
+    }
+    
+    sentryService.captureError(error, { 
+      component: 'ai_service', 
+      operation: 'callGemini' 
+    });
+    
+    throw new Error(`Gemini API call failed: ${error.message}`);
+  }
+}
     
     // Enhanced configuration for better reliability
     const model = genAI.getGenerativeModel({ 
