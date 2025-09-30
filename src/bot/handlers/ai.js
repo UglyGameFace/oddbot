@@ -5,6 +5,7 @@ import gamesService from '../../services/gamesService.js';
 import databaseService from '../../services/databaseService.js';
 import { setUserState, getUserState } from '../state.js';
 import { getSportEmoji, escapeMarkdownV2 } from '../../utils/enterpriseUtilities.js';
+import { safeEditMessage, safeSendMessage } from '../../bot.js';
 
 // ---- Safe edit helper ----
 async function safeEditMessage(bot, text, options) {
@@ -689,12 +690,12 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = nu
   const legs = parlay.parlay_legs;
   const tzLabel = 'America/New_York';
 
-  // More aggressive escaping: wrap everything that is dynamic.
-  const safeNumLegs = safeTelegramMessage(numLegs);
-  const safeSportKey = safeTelegramMessage(sportKey);
-  const safeMode = safeTelegramMessage(mode.toUpperCase());
-  const safeBetType = safeTelegramMessage(betType === 'props' ? 'Player Props Only' : 'Mixed');
-  const safeConfidence = safeTelegramMessage(Math.round((parlay.confidence_score || 0) * 100));
+  // Use escapeMarkdownV2 for ALL dynamic content
+  const safeNumLegs = escapeMarkdownV2(numLegs);
+  const safeSportKey = escapeMarkdownV2(sportKey);
+  const safeMode = escapeMarkdownV2(mode.toUpperCase());
+  const safeBetType = escapeMarkdownV2(betType === 'props' ? 'Player Props Only' : 'Mixed');
+  const safeConfidence = escapeMarkdownV2(Math.round((parlay.confidence_score || 0) * 100));
 
   let response = `🧠 *AI\\\\-Generated ${safeNumLegs}\\\\-Leg Parlay*\\n`;
   response += `*Sport:* ${safeSportKey}\\n`;
@@ -703,33 +704,33 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = nu
   response += `*Confidence:* ${safeConfidence}%\\n`;
   
   if (parlay.data_freshness) {
-    response += `*Data Age:* ${safeTelegramMessage(parlay.data_freshness.hours_ago)}h\\n`;
-    response += `_${safeTelegramMessage(parlay.data_freshness.message)}_\\n`;
+    response += `*Data Age:* ${escapeMarkdownV2(parlay.data_freshness.hours_ago)}h\\n`;
+    response += `_${escapeMarkdownV2(parlay.data_freshness.message)}_\\n`;
   }
   
-  response += `_Timezone: ${safeTelegramMessage(tzLabel)}_\\n\\n`;
+  response += `_Timezone: ${escapeMarkdownV2(tzLabel)}_\\n\\n`;
 
   legs.forEach((leg, index) => {
     const when = leg.game_date_local
-      ? safeTelegramMessage(leg.game_date_local)
-      : (leg.game_date_utc ? safeTelegramMessage(formatLocalIfPresent(leg.game_date_utc, tzLabel)) : '');
+      ? escapeMarkdownV2(leg.game_date_local)
+      : (leg.game_date_utc ? escapeMarkdownV2(formatLocalIfPresent(leg.game_date_utc, tzLabel)) : '');
       
-    const safeGame = safeTelegramMessage(leg.game);
-    const safePick = safeTelegramMessage(leg.pick);
-    const safeMarket = safeTelegramMessage(leg.market);
-    const safeJust = leg.justification ? safeTelegramMessage(leg.justification.length > 250 ? `${leg.justification.slice(0, 250)}...` : leg.justification) : '';
-    const safeBook = leg.sportsbook ? safeTelegramMessage(leg.sportsbook) : 'N/A';
-    const oddsDisplay = safeTelegramMessage(leg.odds_american ? `${leg.odds_american > 0 ? '+' : ''}${leg.odds_american}` : 'N/A');
+    const safeGame = escapeMarkdownV2(leg.game);
+    const safePick = escapeMarkdownV2(leg.pick);
+    const safeMarket = escapeMarkdownV2(leg.market);
+    const safeJust = leg.justification ? escapeMarkdownV2(leg.justification.length > 250 ? `${leg.justification.slice(0, 250)}...` : leg.justification) : '';
+    const safeBook = leg.sportsbook ? escapeMarkdownV2(leg.sportsbook) : 'N/A';
+    const oddsDisplay = escapeMarkdownV2(leg.odds_american ? `${leg.odds_american > 0 ? '+' : ''}${leg.odds_american}` : 'N/A');
 
     response += `*Leg ${index + 1}:* ${safeGame}`;
-    if (when) response += ` — ${when}`;
+    if (when) response += ` \\- ${when}`; // ESCAPED HYPHEN HERE
     response += `\\n*Pick:* *${safePick}* \\\\(${safeMarket}\\\\)\\n`;
     response += `*Odds:* ${oddsDisplay}\\n`;
     response += `*Book:* ${safeBook}\\n`;
     if (safeJust) response += `*Justification:* ${safeJust}\\n`;
     
     if (leg.confidence) {
-      response += `*Confidence:* ${safeTelegramMessage(Math.round(leg.confidence * 100))}%\\n`;
+      response += `*Confidence:* ${escapeMarkdownV2(Math.round(leg.confidence * 100))}%\\n`;
     }
     
     response += `\\n`;
@@ -737,15 +738,15 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = nu
 
   if (parlay.parlay_odds_american) {
     const oddsSign = parlay.parlay_odds_american > 0 ? '+' : '';
-    response += `*Parlay Odds:* ${oddsSign}${safeTelegramMessage(parlay.parlay_odds_american)}\\n`;
+    response += `*Parlay Odds:* ${oddsSign}${escapeMarkdownV2(parlay.parlay_odds_american)}\\n`;
   }
 
   if (parlay.parlay_odds_decimal) {
-    response += `*Decimal Odds:* ${safeTelegramMessage(parlay.parlay_odds_decimal.toFixed(2))}\\n`;
+    response += `*Decimal Odds:* ${escapeMarkdownV2(parlay.parlay_odds_decimal.toFixed(2))}\\n`;
   }
 
   if (parlay.parlay_ev !== null && parlay.parlay_ev !== undefined) {
-    response += `*Expected Value:* ${safeTelegramMessage((parlay.parlay_ev * 100).toFixed(1))}%\\n`;
+    response += `*Expected Value:* ${escapeMarkdownV2((parlay.parlay_ev * 100).toFixed(1))}%\\n`;
   }
 
   const finalKeyboard = [
