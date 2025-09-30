@@ -563,7 +563,6 @@ async function callGemini(prompt) {
         temperature: 0.1,
         topP: 0.8,
         topK: 40,
-        response_mime_type: "application/json",
       },
       safetySettings: SAFETY,
     });
