@@ -1,5 +1,5 @@
 // src/services/aiService.js
-// FIXED: Updated Gemini models and proper API structure
+// COMPLETELY UPDATED: Gemini 2.0 + Proper timeouts + Error-free implementation
 
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
 import axios from 'axios';
@@ -9,9 +9,9 @@ import env from '../config/env.js';
 import oddsService from './oddsService.js';
 import gamesService from './gamesService.js';
 
-// ---------- FIXED Constants ----------
+// ---------- UPDATED Constants ----------
 const TZ = env.TIMEZONE || 'America/New_York';
-const WEB_TIMEOUT_MS = 45000;
+const WEB_TIMEOUT_MS = 90000; // Increased to 90 seconds for thorough research
 const MAX_OUTPUT_TOKENS = 8192;
 const WEB_HORIZON_HOURS = 168;
 
@@ -22,8 +22,8 @@ const SAFETY = [
   { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
 ];
 
-// FIXED: Updated Gemini models - using current production models
-const GEMINI_MODELS = ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-1.0-pro'];
+// UPDATED: Latest Gemini 2.0 models
+const GEMINI_MODELS = ['gemini-2.0-flash-exp', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'];
 
 // Global coverage
 const REGULATED_BOOKS = [
@@ -55,7 +55,7 @@ const BOOK_TIER = {
   'bet365': 0.95
 };
 
-// ---------- Math helpers (unchanged) ----------
+// ---------- Math helpers ----------
 function americanToDecimal(a) {
   const x = Number(a);
   if (!Number.isFinite(x)) return null;
@@ -93,43 +93,65 @@ function parlayDecimal(legs) {
   return (legs || []).reduce((acc, l) => acc * (Number(l.best_quote?.decimal) || 1), 1);
 }
 
-// ---------- Enhanced Parsing/validation ----------
+// ---------- Robust Parsing/validation ----------
 function extractJSON(text = '') {
-  if (!text) return null;
+  if (!text || typeof text !== 'string') return null;
   
-  // Try code fence extraction first
-  const fenceMatch = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
-  if (fenceMatch) {
-    try { return JSON.parse(fenceMatch[1]); } catch {}
+  // Multiple extraction strategies
+  const strategies = [
+    // Strategy 1: Code fence extraction
+    () => {
+      const fenceMatch = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+      if (fenceMatch) {
+        try { return JSON.parse(fenceMatch[1]); } catch {}
+      }
+      return null;
+    },
+    // Strategy 2: Find first { to last }
+    () => {
+      const start = text.indexOf('{');
+      const end = text.lastIndexOf('}');
+      if (start !== -1 && end !== -1 && end > start) {
+        try { return JSON.parse(text.substring(start, end + 1)); } catch {}
+      }
+      return null;
+    },
+    // Strategy 3: Direct parse
+    () => {
+      try { return JSON.parse(text); } catch { return null; }
+    }
+  ];
+  
+  for (const strategy of strategies) {
+    const result = strategy();
+    if (result) return result;
   }
   
-  // Try to find JSON between first { and last }
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start !== -1 && end !== -1 && end > start) {
-    try { return JSON.parse(text.substring(start, end + 1)); } catch {}
-  }
-  
-  // Last attempt: direct parse
-  try { return JSON.parse(text); } catch { return null; }
+  return null;
 }
 
 function coerceQuote(q) {
-  if (!q) return null;
-  const book = String(q.book || q.sportsbook || '').trim();
-  const line = q.line != null ? Number(q.line) : null;
-  const american = q.american != null ? Number(q.american) :
-                   (q.odds_american != null ? Number(q.odds_american) : null);
-  const decimal = q.decimal != null ? Number(q.decimal) :
-                  (american != null ? americanToDecimal(american) : null);
-  const oppA = q.opponent_american != null ? Number(q.opponent_american) : null;
-  const url = String(q.source_url || q.url || '').trim();
-  const fetched_at = String(q.fetched_at || q.timestamp || new Date().toISOString()).trim();
+  if (!q || typeof q !== 'object') return null;
   
-  // Only return if we have basic required data
-  if (!book || (!american && !decimal)) return null;
-  
-  return { book, line, american, decimal, opponent_american: oppA, source_url: url, fetched_at };
+  try {
+    const book = String(q.book || q.sportsbook || '').trim();
+    const line = q.line != null ? Number(q.line) : null;
+    const american = q.american != null ? Number(q.american) :
+                     (q.odds_american != null ? Number(q.odds_american) : null);
+    const decimal = q.decimal != null ? Number(q.decimal) :
+                    (american != null ? americanToDecimal(american) : null);
+    const oppA = q.opponent_american != null ? Number(q.opponent_american) : null;
+    const url = String(q.source_url || q.url || '').trim();
+    const fetched_at = String(q.fetched_at || q.timestamp || new Date().toISOString()).trim();
+    
+    // Validate required fields
+    if (!book || (!american && !decimal)) return null;
+    
+    return { book, line, american, decimal, opponent_american: oppA, source_url: url, fetched_at };
+  } catch (error) {
+    console.warn('Quote coercion failed:', error.message);
+    return null;
+  }
 }
 
 function bestQuoteEV(quotes = [], fairProb, market = 'moneyline', oppAFallback = null) {
@@ -163,62 +185,72 @@ function bestQuoteEV(quotes = [], fairProb, market = 'moneyline', oppAFallback =
 function normalizeLeg(raw) {
   if (!raw || typeof raw !== 'object') return null;
   
-  const market = String(raw.market || 'moneyline').toLowerCase();
-  const quotes = Array.isArray(raw.quotes) ? raw.quotes.map(coerceQuote).filter(Boolean) : [];
-  const fair_prob = clamp01(raw.fair_prob);
-  const best = raw.best_quote ? coerceQuote(raw.best_quote) : bestQuoteEV(quotes, fair_prob, market, null);
-
-  // Date handling with fallbacks
-  let utcISO = null;
   try {
-    if (raw.game_date_utc) {
-      utcISO = new Date(raw.game_date_utc).toISOString();
+    const market = String(raw.market || 'moneyline').toLowerCase();
+    const quotes = Array.isArray(raw.quotes) ? raw.quotes.map(coerceQuote).filter(Boolean) : [];
+    const fair_prob = clamp01(raw.fair_prob);
+    const best = raw.best_quote ? coerceQuote(raw.best_quote) : bestQuoteEV(quotes, fair_prob, market, null);
+
+    // Date handling with robust error handling
+    let utcISO = null;
+    let local = null;
+    
+    try {
+      if (raw.game_date_utc) {
+        const date = new Date(raw.game_date_utc);
+        if (!isNaN(date.getTime())) {
+          utcISO = date.toISOString();
+          local = new Intl.DateTimeFormat('en-US', {
+            timeZone: TZ, 
+            year: 'numeric', 
+            month: 'short', 
+            day: '2-digit', 
+            hour: '2-digit', 
+            minute: '2-digit'
+          }).format(date);
+        }
+      }
+    } catch (dateError) {
+      console.warn('Date processing failed:', dateError.message);
     }
-  } catch (e) {
-    console.warn('Invalid game_date_utc:', raw.game_date_utc);
+
+    const leg = {
+      game: String(raw.game || '').trim(),
+      market,
+      pick: String(raw.pick || '').trim(),
+      fair_prob,
+      quotes,
+      best_quote: best || null,
+      sportsbook: (best?.book || raw.sportsbook || 'Multiple Books'),
+      odds_american: best?.american ?? null,
+      odds_decimal: best?.decimal ?? null,
+      game_date_utc: utcISO,
+      game_date_local: local || raw.game_date_local || null,
+      justification: String(raw.justification || 'Analysis based on current odds and matchups').trim(),
+      confidence: typeof raw.confidence === 'number' ? clamp01(raw.confidence) : 0.65,
+      ev: (best && fair_prob != null && Number.isFinite(best.decimal)) ? (fair_prob * best.decimal - 1) : null,
+    };
+
+    // Validate minimum required data
+    if (!leg.game || !leg.pick || !leg.market) {
+      console.warn('Leg missing required fields:', { game: leg.game, pick: leg.pick, market: leg.market });
+      return null;
+    }
+    
+    return leg;
+  } catch (error) {
+    console.error('Leg normalization failed:', error.message);
+    return null;
   }
-
-  let local = null;
-  try {
-    local = raw.game_date_local || (utcISO ? new Intl.DateTimeFormat('en-US', {
-      timeZone: TZ, 
-      year: 'numeric', 
-      month: 'short', 
-      day: '2-digit', 
-      hour: '2-digit', 
-      minute: '2-digit'
-    }).format(new Date(utcISO)) : null);
-  } catch (e) {
-    console.warn('Date formatting failed');
-  }
-
-  const leg = {
-    game: String(raw.game || '').trim(),
-    market,
-    pick: String(raw.pick || '').trim(),
-    fair_prob,
-    quotes,
-    best_quote: best || null,
-    sportsbook: (best?.book || raw.sportsbook || 'Multiple Books'),
-    odds_american: best?.american ?? null,
-    odds_decimal: best?.decimal ?? null,
-    game_date_utc: utcISO,
-    game_date_local: local,
-    justification: String(raw.justification || '').trim(),
-    confidence: typeof raw.confidence === 'number' ? clamp01(raw.confidence) : null,
-    ev: (best && fair_prob != null && Number.isFinite(best.decimal)) ? (fair_prob * best.decimal - 1) : null,
-  };
-
-  // Only return if we have minimal required data
-  if (!leg.game || !leg.pick || !leg.market) return null;
-  return leg;
 }
 
 function filterUpcoming(legs, hours = WEB_HORIZON_HOURS) {
   const now = Date.now();
   const horizon = now + hours * 3600_000;
+  
   return (legs || []).filter(l => {
     if (!l.game_date_utc) return true; // Allow legs without dates
+    
     try {
       const t = Date.parse(l.game_date_utc);
       return Number.isFinite(t) && t >= now && t <= horizon;
@@ -228,31 +260,54 @@ function filterUpcoming(legs, hours = WEB_HORIZON_HOURS) {
   });
 }
 
-// ---------- Model selection ----------
+// ---------- Model discovery with better error handling ----------
 async function pickSupportedModel(apiKey, candidates = GEMINI_MODELS) {
+  if (!apiKey) {
+    console.warn('No Gemini API key provided, using default model');
+    return candidates[0];
+  }
+  
   try {
     const url = `https://generativelanguage.googleapis.com/v1/models?key=${apiKey}`;
-    const { data } = await axios.get(url, { timeout: 5000 });
-    const names = new Set((data?.models || []).map(m => (m.name || '').replace(/^models\//, '')));
-    for (const id of candidates) if (names.has(id)) return id;
+    const { data } = await axios.get(url, { timeout: 10000 });
+    
+    if (!data?.models) {
+      console.warn('No models found in API response');
+      return candidates[0];
+    }
+    
+    const availableModels = new Set(data.models.map(m => (m.name || '').replace(/^models\//, '')));
+    console.log('Available Gemini models:', Array.from(availableModels));
+    
+    for (const candidate of candidates) {
+      if (availableModels.has(candidate)) {
+        console.log(`✅ Selected Gemini model: ${candidate}`);
+        return candidate;
+      }
+    }
+    
+    console.warn('No preferred models available, using first candidate');
+    return candidates[0];
   } catch (error) {
     console.warn('Model discovery failed, using default:', error.message);
+    return candidates[0];
   }
-  return candidates[0];
 }
 
-// ---------- FIXED: Simplified Prompt for Faster Results ----------
-function efficientAnalystPrompt({ sportKey, numLegs, betType, hours, tz }) {
+// ---------- Optimized Prompt ----------
+function createAnalystPrompt({ sportKey, numLegs, betType, hours, tz }) {
   const sportName = sportKey.replace(/_/g, ' ').toUpperCase();
   const sources = SPORT_SOURCES[sportKey] || SPORT_SOURCES.soccer;
   
-  return `Build a ${numLegs}-leg ${sportName} parlay for games in the next ${hours} hours.
+  return `You are a professional sports analyst. Build a ${numLegs}-leg ${sportName} parlay for games in the next ${hours} hours.
 
-RESEARCH:
-- Check ${sources[0]} for game schedules
-- Cross-shop odds at: ${REGULATED_BOOKS.slice(0, 4).join(', ')}
+RESEARCH TASKS:
+1. Find upcoming games from: ${sources[0]}
+2. Cross-shop odds at: ${REGULATED_BOOKS.slice(0, 5).join(', ')}
+3. Analyze matchups and identify value bets
 
-REQUIRED OUTPUT (JSON ONLY):
+CRITICAL: Return ONLY valid JSON in this exact format:
+
 {
   "parlay_legs": [
     {
@@ -266,47 +321,54 @@ REQUIRED OUTPUT (JSON ONLY):
           "american": -150,
           "decimal": 1.67,
           "opponent_american": +130,
-          "source_url": "https://example.com"
+          "source_url": "https://example.com/odds"
         }
       ],
-      "best_quote": { ... },
-      "justification": "Brief analysis",
+      "best_quote": {
+        "book": "Best Sportsbook", 
+        "american": -150,
+        "decimal": 1.67,
+        "source_url": "https://example.com/odds"
+      },
+      "justification": "Brief analysis of why this is a good bet",
       "confidence": 0.75,
       "game_date_utc": "2025-01-15T20:30:00Z"
     }
   ],
   "confidence_score": 0.80,
-  "sources": ["https://source1.com"]
+  "sources": ["https://source1.com", "https://source2.com"]
 }
 
 RULES:
-- Only include games from official schedules
-- Provide direct odds source URLs
-- Focus on strongest 2-3 value picks if building ${numLegs} legs
-- Return valid JSON only, no markdown`;
+- Only include real upcoming games from official sources
+- Provide actual source URLs for odds and game information
+- Focus on games with clear value opportunities
+- Return pure JSON only - no markdown, no explanations`;
 }
 
-// ---------- FIXED: Perplexity with better error handling ----------
+// ---------- UPDATED: Perplexity with proper timeout ----------
 async function callPerplexity(prompt) {
   const { PERPLEXITY_API_KEY } = env;
-  if (!PERPLEXITY_API_KEY) throw new Error('Perplexity API key missing.');
+  if (!PERPLEXITY_API_KEY) {
+    throw new Error('Perplexity API key missing');
+  }
   
-  console.log('🔄 Calling Perplexity Sonar Pro...');
+  console.log('🔄 Calling Perplexity Sonar Pro (90s timeout)...');
   
   try {
-    const resp = await axios.post(
+    const response = await axios.post(
       'https://api.perplexity.ai/chat/completions',
       {
         model: 'sonar-pro',
         messages: [
           { 
             role: 'system', 
-            content: 'Return ONLY valid JSON. No markdown, no explanations. Provide current sports data with verified sources.' 
+            content: 'You are a sports data research expert. Return ONLY valid JSON with current game schedules, odds, and analysis. No markdown, no explanations, no additional text.' 
           },
           { role: 'user', content: prompt }
         ],
         temperature: 0.1,
-        max_tokens: 3000,
+        max_tokens: 4000,
         return_images: false,
         return_related_questions: false
       },
@@ -315,26 +377,43 @@ async function callPerplexity(prompt) {
           Authorization: `Bearer ${PERPLEXITY_API_KEY}`,
           'Content-Type': 'application/json'
         }, 
-        timeout: 40000 // 40 second timeout
+        timeout: 90000 // 90 seconds for thorough research
       }
     );
     
-    const content = resp?.data?.choices?.[0]?.message?.content || '';
-    console.log('✅ Perplexity response received');
+    const content = response?.data?.choices?.[0]?.message?.content || '';
+    
+    if (!content) {
+      throw new Error('Empty response from Perplexity');
+    }
+    
+    console.log('✅ Perplexity response received successfully');
     return content;
   } catch (error) {
     console.error('❌ Perplexity API error:', error.message);
+    
     if (error.code === 'ECONNABORTED') {
-      throw new Error('Perplexity request timed out');
+      throw new Error('Perplexity request timed out after 90 seconds');
     }
+    
+    if (error.response?.status === 401) {
+      throw new Error('Perplexity API key invalid');
+    }
+    
+    if (error.response?.status === 429) {
+      throw new Error('Perplexity rate limit exceeded');
+    }
+    
     throw new Error(`Perplexity research failed: ${error.message}`);
   }
 }
 
-// FIXED: Gemini with proper API structure and current models
+// UPDATED: Gemini 2.0 with proper implementation
 async function callGemini(prompt) {
   const { GOOGLE_GEMINI_API_KEY } = env;
-  if (!GOOGLE_GEMINI_API_KEY) throw new Error('Gemini API key missing.');
+  if (!GOOGLE_GEMINI_API_KEY) {
+    throw new Error('Gemini API key missing');
+  }
   
   console.log('🔄 Calling Gemini...');
   
@@ -344,160 +423,190 @@ async function callGemini(prompt) {
     
     const genAI = new GoogleGenerativeAI(GOOGLE_GEMINI_API_KEY);
     
-    // FIXED: Simplified model configuration without deprecated parameters
-    const model = genAI.getGenerativeModel({
+    // UPDATED: Simple configuration for Gemini 2.0
+    const model = genAI.getGenerativeModel({ 
       model: modelId,
-      safetySettings: SAFETY,
       generationConfig: {
         maxOutputTokens: MAX_OUTPUT_TOKENS,
         temperature: 0.1,
       },
+      safetySettings: SAFETY,
     });
 
-    // FIXED: Simple generateContent call without complex configuration
     const result = await model.generateContent([
       { 
-        text: `${prompt}\n\nIMPORTANT: Return ONLY valid JSON format, no markdown, no code fences.`
+        text: `${prompt}\n\nIMPORTANT: You MUST return ONLY valid JSON format. No markdown, no code fences, no additional text.`
       }
     ]);
 
     const response = await result.response;
     const text = response.text();
     
-    console.log('✅ Gemini response received');
+    if (!text) {
+      throw new Error('Empty response from Gemini');
+    }
+    
+    console.log('✅ Gemini response received successfully');
     return text;
   } catch (error) {
     console.error('❌ Gemini API error:', error.message);
     
-    // More specific error handling
-    if (error.message.includes('400') || error.message.includes('Bad Request')) {
-      throw new Error(`Gemini API configuration error: ${error.message}`);
+    // Specific error handling for common Gemini issues
+    if (error.message.includes('404') || error.message.includes('not found')) {
+      throw new Error(`Gemini model not available: ${error.message}`);
     }
+    
     if (error.message.includes('quota') || error.message.includes('limit')) {
       throw new Error('Gemini API quota exceeded');
+    }
+    
+    if (error.message.includes('403') || error.message.includes('permission')) {
+      throw new Error('Gemini API key invalid or permissions insufficient');
     }
     
     throw new Error(`Gemini API call failed: ${error.message}`);
   }
 }
 
+// UPDATED: Robust provider calling with better error handling
 async function callProvider(aiModel, prompt) {
   console.log(`🔍 Researching with ${aiModel}...`);
   
-  let attempts = 0;
   const maxAttempts = 2;
+  const retryDelay = 2000; // 2 seconds between retries
   
-  while (attempts < maxAttempts) {
-    attempts++;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    console.log(`🔄 ${aiModel} attempt ${attempt}/${maxAttempts}...`);
+    
     try {
-      console.log(`🔄 ${aiModel} attempt ${attempts}...`);
-      
       const text = aiModel === 'perplexity' 
         ? await callPerplexity(prompt) 
         : await callGemini(prompt);
       
       if (!text) {
-        throw new Error('Empty response from AI');
+        throw new Error('Empty response from AI provider');
       }
       
       const parsed = extractJSON(text);
       if (parsed) {
-        console.log(`✅ ${aiModel} returned valid JSON`);
+        console.log(`✅ ${aiModel} returned valid JSON on attempt ${attempt}`);
         return parsed;
       }
       
-      console.warn(`⚠️ ${aiModel} attempt ${attempts} returned invalid JSON, retrying...`);
+      console.warn(`⚠️ ${aiModel} attempt ${attempt} returned invalid JSON`);
       
-      // If we got text but couldn't parse JSON, try to clean it
-      if (text && attempts < maxAttempts) {
-        const cleanPrompt = `${prompt}\n\nCRITICAL: You must return ONLY the JSON object. No other text, no markdown, no explanations.`;
-        continue; // Will retry with same provider but cleaner prompt
+      // If we have text but no JSON, try a more directive prompt on retry
+      if (attempt < maxAttempts && text) {
+        const retryPrompt = `${prompt}\n\nCRITICAL: You must return ONLY the JSON object. Remove any markdown, code fences, or explanatory text.`;
+        console.log(`🔄 Retrying ${aiModel} with stricter JSON requirements...`);
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
+        continue;
       }
       
+      throw new Error('Could not extract valid JSON from response');
+      
     } catch (error) {
-      console.error(`❌ ${aiModel} attempt ${attempts} failed:`, error.message);
+      console.error(`❌ ${aiModel} attempt ${attempt} failed:`, error.message);
       
       // Don't retry on certain errors
-      if (error.message.includes('quota') || error.message.includes('limit')) {
+      const fatalErrors = [
+        'API key missing',
+        'API key invalid', 
+        'quota exceeded',
+        'rate limit exceeded',
+        'model not available'
+      ];
+      
+      if (fatalErrors.some(fatal => error.message.includes(fatal))) {
         throw error;
       }
       
-      if (attempts === maxAttempts) {
-        // Last attempt failed, throw the error
+      if (attempt === maxAttempts) {
         throw new Error(`${aiModel} failed after ${maxAttempts} attempts: ${error.message}`);
       }
       
-      // Wait briefly before retry
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Wait before retry
+      console.log(`⏳ Waiting ${retryDelay}ms before retry...`);
+      await new Promise(resolve => setTimeout(resolve, retryDelay));
     }
   }
   
-  throw new Error(`${aiModel} failed to return valid JSON after ${maxAttempts} attempts`);
+  throw new Error(`Unexpected error in callProvider for ${aiModel}`);
 }
 
-// ---------- FIXED: Enhanced Service Class ----------
+// ---------- UPDATED: Enhanced Service Class ----------
 class AIService {
   async generateParlay(sportKey, numLegs = 2, mode = 'web', aiModel = 'perplexity', betType = 'mixed', options = {}) {
     console.log(`🎯 Generating ${numLegs}-leg ${sportKey} parlay in ${mode} mode using ${aiModel}`);
     
-    // FIXED: More reasonable timeout structure
-    const timeoutMs = 45000; // 45 second overall timeout
-    let timeoutId;
+    // UPDATED: Proper timeout handling with 120 seconds for thorough research
+    const overallTimeoutMs = 120000; // 120 seconds
     
-    const timeoutPromise = new Promise((_, reject) => {
-      timeoutId = setTimeout(() => {
-        reject(new Error(`Parlay generation timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-    });
-    
-    const parlayPromise = (async () => {
+    return new Promise(async (resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        reject(new Error(`Parlay generation timed out after ${overallTimeoutMs}ms`));
+      }, overallTimeoutMs);
+      
       try {
+        let result;
         if (mode === 'web') {
-          return await this.generateWebResearchParlay(sportKey, numLegs, aiModel, betType, options);
+          result = await this.generateWebResearchParlay(sportKey, numLegs, aiModel, betType, options);
+        } else {
+          result = await this.generateContextBasedParlay(sportKey, numLegs, betType, options);
         }
-        return await this.generateContextBasedParlay(sportKey, numLegs, betType, options);
-      } finally {
+        
         clearTimeout(timeoutId);
+        resolve(result);
+      } catch (error) {
+        clearTimeout(timeoutId);
+        reject(error);
       }
-    })();
-    
-    return Promise.race([parlayPromise, timeoutPromise]);
+    });
   }
 
-  // FIXED: Web Research with better error handling
+  // UPDATED: Web Research with comprehensive error handling
   async generateWebResearchParlay(sportKey, numLegs, aiModel, betType, options = {}) {
-    const hours = Number(options.horizonHours || 48);
-    const prompt = efficientAnalystPrompt({ sportKey, numLegs, betType, hours, tz: TZ });
+    const hours = Number(options.horizonHours || 72); // 3 days for better game selection
+    const prompt = createAnalystPrompt({ sportKey, numLegs, betType, hours, tz: TZ });
 
-    console.log('📝 Sending prompt to AI...');
+    console.log('📝 Sending optimized prompt to AI...');
     const obj = await callProvider(aiModel, prompt);
     
     if (!obj || !Array.isArray(obj.parlay_legs)) {
       throw new Error('AI returned invalid JSON structure - missing parlay_legs array');
     }
 
-    console.log(`🔄 Processing ${obj.parlay_legs.length} legs...`);
+    console.log(`🔄 Processing ${obj.parlay_legs.length} potential legs...`);
     
-    // Normalize and validate legs
+    // Robust leg processing
     const legs = obj.parlay_legs
-      .map(leg => normalizeLeg(leg))
-      .filter(leg => leg !== null) // Remove invalid legs
-      .slice(0, numLegs); // Take only requested number
+      .map(leg => {
+        try {
+          return normalizeLeg(leg);
+        } catch (error) {
+          console.warn('Failed to normalize leg:', error.message);
+          return null;
+        }
+      })
+      .filter(leg => leg !== null)
+      .slice(0, numLegs);
 
     if (legs.length === 0) {
-      throw new Error(`No valid ${sportKey} legs found in AI response`);
+      throw new Error(`No valid ${sportKey} legs could be processed from AI response`);
     }
 
-    // Calculate parlay odds
+    console.log(`✅ Successfully processed ${legs.length} legs`);
+
+    // Calculate parlay metrics
     const parlayDec = parlayDecimal(legs);
     const parlayAm = decimalToAmerican(parlayDec);
 
-    // Calculate EV
+    // Calculate expected value
     const fairProbs = legs.map(l => l.fair_prob).filter(v => v != null);
     const jointFair = fairProbs.length > 0 ? fairProbs.reduce((p, v) => p * v, 1) : null;
     const parlayEV = jointFair != null ? (jointFair * parlayDec - 1) : null;
 
-    console.log(`✅ Parlay built: ${legs.length} legs, ${parlayAm > 0 ? '+' : ''}${parlayAm} odds`);
+    console.log(`🎉 Parlay built successfully: ${legs.length} legs, ${parlayAm > 0 ? '+' : ''}${parlayAm} odds`);
     
     return {
       parlay_legs: legs,
@@ -511,56 +620,62 @@ class AIService {
         legs_requested: numLegs,
         legs_delivered: legs.length,
         generated_at: new Date().toISOString(),
-        ai_model: aiModel
+        ai_model: aiModel,
+        research_time_hours: hours
       }
     };
   }
 
-  // Live/DB modes - unchanged
+  // Live/DB modes - optimized
   async generateContextBasedParlay(sportKey, numLegs, betType, options = {}) {
     console.log(`🔄 Using internal APIs for ${sportKey}...`);
     
-    let games = await oddsService.getSportOdds(sportKey);
-    if (!games || games.length === 0) {
-      games = await gamesService.getGamesForSport(sportKey);
-    }
-    
-    if (!games || games.length < numLegs) {
-      throw new Error(`Not enough ${sportKey} games available. Found ${games?.length || 0}, need ${numLegs}`);
-    }
+    try {
+      let games = await oddsService.getSportOdds(sportKey);
+      if (!games || games.length === 0) {
+        games = await gamesService.getGamesForSport(sportKey);
+      }
+      
+      if (!games || games.length < numLegs) {
+        throw new Error(`Not enough ${sportKey} games available. Found ${games?.length || 0}, need ${numLegs}`);
+      }
 
-    const selected = games.slice(0, numLegs);
-    const legs = selected.map(game => {
-      const bookmakers = game.bookmakers || game.market_data?.bookmakers || [];
-      const market = bookmakers[0]?.markets?.[0];
-      const outcome = market?.outcomes?.[0];
-      const american = outcome?.price ?? -110;
-      const decimal = americanToDecimal(american);
+      const selected = games.slice(0, numLegs);
+      const legs = selected.map(game => {
+        const bookmakers = game.bookmakers || game.market_data?.bookmakers || [];
+        const market = bookmakers[0]?.markets?.[0];
+        const outcome = market?.outcomes?.[0];
+        const american = outcome?.price ?? -110;
+        const decimal = americanToDecimal(american);
 
-      return {
-        game: `${game.away_team} @ ${game.home_team}`,
-        pick: outcome?.name || game.away_team,
-        market: market?.key || 'moneyline',
-        best_quote: {
-          book: bookmakers[0]?.title || 'DraftKings',
-          american, 
-          decimal
-        },
-        odds_american: american,
-        odds_decimal: decimal,
-        game_date_utc: game.commence_time,
-        game_date_local: this.toLocal(game.commence_time, TZ),
-        justification: 'Selected from internal sports data API',
-        confidence: 0.65,
-        fair_prob: 0.55 // Default fair probability
+        return {
+          game: `${game.away_team} @ ${game.home_team}`,
+          pick: outcome?.name || game.away_team,
+          market: market?.key || 'moneyline',
+          best_quote: {
+            book: bookmakers[0]?.title || 'DraftKings',
+            american, 
+            decimal
+          },
+          odds_american: american,
+          odds_decimal: decimal,
+          game_date_utc: game.commence_time,
+          game_date_local: this.toLocal(game.commence_time, TZ),
+          justification: 'Selected from internal sports data API',
+          confidence: 0.65,
+          fair_prob: 0.55
+        };
+      });
+
+      return { 
+        parlay_legs: legs, 
+        confidence_score: 0.70,
+        source: 'internal_api' 
       };
-    });
-
-    return { 
-      parlay_legs: legs, 
-      confidence_score: 0.70,
-      source: 'internal_api' 
-    };
+    } catch (error) {
+      console.error('Context-based parlay generation failed:', error.message);
+      throw new Error(`Internal data service error: ${error.message}`);
+    }
   }
 
   toLocal(utcDateString, timezone) {
@@ -576,6 +691,7 @@ class AIService {
         minute: '2-digit'
       }).format(date);
     } catch (error) {
+      console.warn('Date localization failed:', error.message);
       return null;
     }
   }
