@@ -684,12 +684,12 @@ async function sendFallbackOptions(bot, chatId, messageId, error) {
   );
 }
 
-// THIS IS THE FULLY CORRECTED FUNCTION
 async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = null) {
   const { sportKey, numLegs, betType } = state;
   const legs = parlay.parlay_legs;
   const tzLabel = 'America/New_York';
 
+  // More aggressive escaping: wrap everything that is dynamic.
   const safeNumLegs = safeTelegramMessage(numLegs);
   const safeSportKey = safeTelegramMessage(sportKey);
   const safeMode = safeTelegramMessage(mode.toUpperCase());
