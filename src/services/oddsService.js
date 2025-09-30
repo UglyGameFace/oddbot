@@ -1,4 +1,3 @@
-ort default new OddsService();
 // src/services/oddsService.js - UPDATED TO MATCH NEW ARCHITECTURE
 import axios from 'axios';
 import env from '../config/env.js';
