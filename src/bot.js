@@ -36,26 +36,21 @@ const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = '0.0.0.0';
 
-// --- Global state and instances
+// --- Global Config & State (FIXED: Moved to global scope for access by all functions)
+const TOKEN = env.TELEGRAM_BOT_TOKEN;
+const APP_URL = env.APP_URL || '';
+const WEBHOOK_SECRET = (env.WEBHOOK_SECRET || env.TELEGRAM_WEBHOOK_SECRET || env.TG_WEBHOOK_SECRET || '').trim();
+const USE_WEBHOOK = (env.USE_WEBHOOK === true) || APP_URL.startsWith('https');
+
 let bot;
 let server;
 let keepAliveInterval;
 let isServiceReady = false;
 let healthCheckCount = 0;
-const startupTime = Date.now();
 
-// ====================================================================
-//  IMMEDIATE SERVER STARTUP & HEALTH ENDPOINTS
-//
-//  These endpoints are defined and started immediately to respond to
-//  platform health checks while the main bot initializes.
-// ====================================================================
-
-// Simple health check for liveness probes (e.g., /health for Railway)
+// --- Health endpoints (Defined and started immediately)
 app.get('/health', (_req, res) => res.sendStatus(200));
-app.head('/health', (_req, res) => res.sendStatus(200));
 
-// Your original, more detailed health endpoints are preserved
 app.get('/', (_req, res) => {
   healthCheckCount++;
   console.log(`✅ Root health check #${healthCheckCount}`);
@@ -101,15 +96,14 @@ app.get('/healthz', async (_req, res) => {
 app.get('/liveness', async (_req, res) => {
   healthCheckCount++;
   console.log(`✅ /liveness check #${healthCheckCount}`);
-  res.status(200).json({
-    status: 'LIVE',
+  res.status(isServiceReady ? 200 : 503).json({
+    status: isServiceReady ? 'LIVE' : 'STARTING',
     ready: isServiceReady,
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     checks: healthCheckCount
   });
 });
-app.head('/liveness', (_req, res) => res.sendStatus(200));
 
 app.get('/readiness', async (_req, res) => {
   healthCheckCount++;
@@ -139,31 +133,21 @@ app.get('/readiness', async (_req, res) => {
     });
   }
 });
+
+app.head('/health', (_req, res) => res.sendStatus(200));
+app.head('/liveness', (_req, res) => res.sendStatus(200));
 app.head('/readiness', (_req, res) => res.sendStatus(200));
 
-// Start the server immediately
+// Start the server immediately to pass health checks
 server = app.listen(PORT, HOST, () => {
   console.log(`✅ Server listening on ${HOST}:${PORT}. Health checks are live.`);
 });
 
-// ====================================================================
-//  ASYNCHRONOUS BOT INITIALIZATION
-//
-//  This function contains all the original startup logic. It's now
-//  called after the server is already running.
-// ====================================================================
-
-async function initializeBotAndServices() {
+// Main async function to initialize bot and services
+async function initializeBot() {
   console.log('🚀 Starting ParlayBot initialization...');
 
-  const TOKEN = env.TELEGRAM_BOT_TOKEN;
   if (!TOKEN) throw new Error('TELEGRAM_BOT_TOKEN is required');
-
-  const APP_URL = env.APP_URL || '';
-  const WEBHOOK_SECRET = (env.WEBHOOK_SECRET || '').trim();
-  const USE_WEBHOOK = APP_URL.startsWith('https');
-
-  // Initialize bot instance and assign to the outer scope variable
   bot = new TelegramBot(TOKEN, { polling: !USE_WEBHOOK });
 
   // Register handlers
@@ -188,22 +172,35 @@ async function initializeBotAndServices() {
 
     const currentWebhook = await bot.getWebHookInfo();
     if (currentWebhook.url !== targetWebhookUrl) {
-      await bot.setWebHook(targetWebhookUrl, { secret_token: WEBHOOK_SECRET || undefined });
+      await bot.setWebHook(targetWebhookUrl, {
+        secret_token: WEBHOOK_SECRET || undefined,
+      });
       console.log(`✅ Webhook set: ${targetWebhookUrl}`);
     } else {
       console.log('✅ Webhook is already correctly configured.');
     }
 
-    app.post(webhookPath, (req, res) => {
-        if (WEBHOOK_SECRET && req.headers['x-telegram-bot-api-secret-token'] !== WEBHOOK_SECRET) {
-            return res.sendStatus(403);
+    app.post(
+      webhookPath,
+      (req, res, next) => {
+        if (WEBHOOK_SECRET) {
+          const incoming = req.headers['x-telegram-bot-api-secret-token'];
+          if (incoming !== WEBHOOK_SECRET) return res.sendStatus(403);
         }
+        next();
+      },
+      (req, res) => {
         bot.processUpdate(req.body);
         res.sendStatus(200);
-    });
+      }
+    );
   }
 
   sentryService.attachExpressPostRoutes?.(app);
+
+  // Mark service as ready AFTER server is confirmed listening
+  isServiceReady = true;
+  console.log('🎯 Service marked as ready for health checks');
 
   // Telegram commands
   const commands = [
@@ -227,9 +224,6 @@ async function initializeBotAndServices() {
     }
   }, 600000);
 
-  // Mark service as fully ready for readiness probes
-  isServiceReady = true;
-  console.log('🎯 Service marked as ready for health checks');
   console.log('🎉 Application startup complete!');
 }
 
@@ -271,8 +265,8 @@ const shutdown = async (signal) => {
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
-// Kick off the main initialization
-initializeBotAndServices().catch((error) => {
+// Kick off the initialization
+initializeBot().catch((error) => {
   console.error('💥 Fatal initialization error:', error.message);
   sentryService.captureError(error);
   if (!String(error.message).includes('429')) {
