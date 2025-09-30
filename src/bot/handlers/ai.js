@@ -7,19 +7,6 @@ import { setUserState, getUserState } from '../state.js';
 import { getSportEmoji, escapeMarkdownV2 } from '../../utils/enterpriseUtilities.js';
 import { safeEditMessage, safeSendMessage } from '../../bot.js';
 
-// ---- Safe edit helper ----
-async function safeEditMessage(bot, text, options) {
-  try {
-    await bot.editMessageText(text, options);
-  } catch (error) {
-    if (error?.message?.includes('message is not modified')) {
-      // benign
-    } else {
-      console.error('editMessageText error:', error?.message || error);
-    }
-  }
-}
-
 const propsToggleLabel = (on) => `${on ? '✅' : '☑️'} Include Player Props`;
 
 // EXPANDED SPORT SUPPORT - All major sports
