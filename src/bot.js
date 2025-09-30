@@ -83,6 +83,28 @@ async function safeEditMessage(chatId, messageId, text, options = {}) {
       parse_mode: 'HTML',
       ...options
     };
+
+/**
+ * Escape Telegram reserved characters to avoid parse errors
+ */
+function escapeTelegramText(text) {
+  if (typeof text !== 'string') return text;
+  
+  // Escape characters that need to be escaped in Telegram
+  return text
+    .replace(/-/g, '\\-')  // Escape dash
+    .replace(/\./g, '\\.') // Escape dot
+    .replace(/!/g, '\\!')  // Escape exclamation
+    .replace(/#/g, '\\#')  // Escape hash
+    .replace(/\(/g, '\\(') // Escape parentheses
+    .replace(/\)/g, '\\)')
+    .replace(/</g, '&lt;')  // Escape for HTML mode
+    .replace(/>/g, '&gt;')
+    .replace(/&/g, '&amp;');
+}
+// Use it when sending parlay messages:
+const safeMessage = escapeTelegramText(parlayMessage);
+await bot.sendMessage(chatId, safeMessage, { parse_mode: 'HTML' });
     
     // Always provide reply_markup to avoid "inline keyboard expected" error
     if (!editOptions.reply_markup) {
