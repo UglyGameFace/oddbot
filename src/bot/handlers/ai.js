@@ -2,6 +2,7 @@
 
 import aiService from '../../services/aiService.js';
 import gamesService from '../../services/gamesService.js';
+import databaseService from '../../services/databaseService.js'; // NEW
 import { setUserState, getUserState } from '../state.js';
 import { getSportEmoji, escapeMarkdownV2 } from '../../utils/enterpriseUtilities.js';
 
@@ -33,6 +34,16 @@ const SPORT_TITLES = {
 const PREFERRED_FIRST = ['football_ncaaf', 'americanfootball_ncaaf'];
 const DEPRIORITIZE_LAST = ['hockey_nhl', 'icehockey_nhl'];
 const PAGE_SIZE = 10;
+
+// NEW: last-resort static fallback sports
+const DEFAULT_SPORTS = [
+  { sport_key: 'americanfootball_nfl', sport_title: 'NFL' },
+  { sport_key: 'americanfootball_ncaaf', sport_title: 'NCAAF' },
+  { sport_key: 'basketball_nba', sport_title: 'NBA' },
+  { sport_key: 'basketball_wnba', sport_title: 'WNBA' },
+  { sport_key: 'baseball_mlb', sport_title: 'MLB' },
+  { sport_key: 'icehockey_nhl', sport_title: 'NHL' },
+];
 
 function sortSports(sports) {
   const rank = (k) => {
@@ -130,11 +141,28 @@ export function registerAICallbacks(bot) {
 }
 
 async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
-  const sportsRaw = await gamesService.getAvailableSports();
-  const sports = sortSports((sportsRaw || []).filter(s => s?.sport_key));
-  
-  if (!sports || sports.length === 0) {
-    return bot.sendMessage(chatId, 'Error: No sports are available to analyze. Please contact support.');
+  // 1) Primary: gamesService
+  let sportsRaw = [];
+  try {
+    sportsRaw = await gamesService.getAvailableSports();
+  } catch {
+    sportsRaw = [];
+  }
+  let sports = sortSports((sportsRaw || []).filter(s => s?.sport_key));
+
+  // 2) Fallback: databaseService comprehensive list
+  if (!sports.length) {
+    try {
+      const dbList = await databaseService.getDistinctSports();
+      sports = sortSports((dbList || []).filter(s => s?.sport_key));
+    } catch {
+      // ignore
+    }
+  }
+
+  // 3) Last resort: static defaults
+  if (!sports.length) {
+    sports = DEFAULT_SPORTS;
   }
 
   const totalPages = Math.max(1, Math.ceil(sports.length / PAGE_SIZE));
@@ -230,7 +258,7 @@ async function executeAiRequest(bot, chatId, messageId) {
 
   await safeEditMessage(
     bot,
-    `🤖 Accessing advanced analytics\\.\\.\\.\n\n*Sport:* ${safeSportKey}\n*Legs:* ${numLegs}\n*Mode:* ${safeModeText}\n*Type:* ${safeBetTypeText}\n*Props:* ${safeIncludeProps}\n\nThis may take a moment\\.`,
+    `🤖 Accessing advanced analytics\\.\\.\\.\\n\\n*Sport:* ${safeSportKey}\\n*Legs:* ${numLegs}\\n*Mode:* ${safeModeText}\\n*Type:* ${safeBetTypeText}\\n*Props:* ${safeIncludeProps}\\n\\nThis may take a moment\\.`,
     { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: null }
   );
 
@@ -246,7 +274,7 @@ async function executeAiRequest(bot, chatId, messageId) {
       ? `Timezone: ${escapeMarkdownV2(tzLabel)}`
       : null;
 
-    let response = `🧠 *AI\\-Generated ${numLegs}\\-Leg Parlay*\n*Mode: ${safeModeText}*\n*Type: ${safeBetTypeText}*\n*Confidence: ${Math.round((parlay.confidence_score || 0) * 100)}%*`;
+    let response = `🧠 *AI\\-Generated ${numLegs}\\-Leg Parlay*\\n*Mode: ${safeModeText}*\\n*Type: ${safeBetTypeText}*\\n*Confidence: ${Math.round((parlay.confidence_score || 0) * 100)}%*`;
     if (headerLine) response += `\n_${headerLine}_`;
     response += `\n\n`;
 
@@ -275,7 +303,7 @@ async function executeAiRequest(bot, chatId, messageId) {
   } catch (error) {
     console.error('AI handler execution error:', error);
     const safeError = escapeMarkdownV2(error.message || 'Unknown error');
-    await safeEditMessage(bot, `❌ I encountered a critical error: \`${safeError}\`\\.\nPlease try again later, or select the Web Research mode which does not depend on live API data\\.`, {
+    await safeEditMessage(bot, `❌ I encountered a critical error: \`${safeError}\`\\.\\nPlease try again later, or select the Web Research mode which does not depend on live API data\\.`, {
       chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2',
       reply_markup: { inline_keyboard: [[{ text: 'Start Over', callback_data: 'ai_back_sport' }]] }
     });
