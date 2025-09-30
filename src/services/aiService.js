@@ -107,17 +107,27 @@ function parlayDecimal(legs) {
   return (legs || []).reduce((acc, l) => acc * (Number(l.best_quote?.decimal) || 1), 1);
 }
 
-// ---------- Enhanced Robust Parsing/validation ----------
+// ---------- ENHANCED Robust JSON Parsing/validation ----------
 function extractJSON(text = '') {
-  if (!text || typeof text !== 'string') return null;
+  if (!text || typeof text !== 'string') {
+    console.warn('⚠️ extractJSON: Empty or invalid text input');
+    return null;
+  }
+  
+  console.log('🔧 Attempting JSON extraction from:', text.substring(0, 200) + '...');
   
   // Multiple extraction strategies
   const strategies = [
     // Strategy 1: Code fence extraction
     () => {
-      const fenceMatch = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+      const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
       if (fenceMatch) {
-        try { return JSON.parse(fenceMatch[1]); } catch {}
+        console.log('✅ Found JSON in code fence');
+        try { 
+          return JSON.parse(fenceMatch[1]); 
+        } catch (error) {
+          console.warn('❌ Code fence JSON parse failed:', error.message);
+        }
       }
       return null;
     },
@@ -126,22 +136,119 @@ function extractJSON(text = '') {
       const start = text.indexOf('{');
       const end = text.lastIndexOf('}');
       if (start !== -1 && end !== -1 && end > start) {
-        try { return JSON.parse(text.substring(start, end + 1)); } catch {}
+        const candidate = text.substring(start, end + 1);
+        console.log('✅ Found JSON candidate with braces');
+        try { 
+          return JSON.parse(candidate); 
+        } catch (error) {
+          console.warn('❌ Brace-based JSON parse failed:', error.message);
+          // Try to fix common JSON issues
+          return attemptJSONRepair(candidate);
+        }
       }
       return null;
     },
     // Strategy 3: Direct parse
     () => {
-      try { return JSON.parse(text); } catch { return null; }
+      try { 
+        return JSON.parse(text); 
+      } catch (error) {
+        console.warn('❌ Direct JSON parse failed:', error.message);
+        return null;
+      }
+    },
+    // Strategy 4: Aggressive cleaning and retry
+    () => {
+      const cleaned = cleanJSONString(text);
+      if (cleaned !== text) {
+        console.log('🔄 Attempting with cleaned JSON string');
+        try {
+          return JSON.parse(cleaned);
+        } catch (error) {
+          console.warn('❌ Cleaned JSON parse failed:', error.message);
+        }
+      }
+      return null;
     }
   ];
   
   for (const strategy of strategies) {
     const result = strategy();
-    if (result) return result;
+    if (result) {
+      console.log('✅ JSON extraction successful');
+      return result;
+    }
   }
   
+  console.error('❌ All JSON extraction strategies failed');
   return null;
+}
+
+// NEW: Enhanced JSON repair function
+function attemptJSONRepair(jsonString) {
+  if (!jsonString || typeof jsonString !== 'string') return null;
+  
+  console.log('🔄 Attempting JSON repair...');
+  
+  try {
+    // Fix 1: Remove trailing commas
+    let repaired = jsonString.replace(/,\s*([}\]])/g, '$1');
+    
+    // Fix 2: Add missing quotes around keys
+    repaired = repaired.replace(/([{,]\s*)(\w+)(\s*:)/g, '$1"$2"$3');
+    
+    // Fix 3: Fix single quotes to double quotes
+    repaired = repaired.replace(/'/g, '"');
+    
+    // Fix 4: Remove comments
+    repaired = repaired.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    
+    // Fix 5: Escape unescaped quotes in strings
+    repaired = repaired.replace(/"([^"\\]*(\\.[^"\\]*)*)"?/g, (match) => {
+      if (match.endsWith('"') && !match.endsWith('\\"')) {
+        return match;
+      }
+      // Basic escaping - for complex cases we'll rely on the original
+      return match;
+    });
+    
+    console.log('🔧 Repaired JSON:', repaired.substring(0, 200) + '...');
+    
+    const parsed = JSON.parse(repaired);
+    console.log('✅ JSON repair successful');
+    return parsed;
+  } catch (repairError) {
+    console.warn('❌ JSON repair failed:', repairError.message);
+    return null;
+  }
+}
+
+// NEW: Enhanced JSON string cleaning
+function cleanJSONString(text) {
+  if (!text || typeof text !== 'string') return text;
+  
+  let cleaned = text.trim();
+  
+  // Remove common non-JSON prefixes/suffixes
+  cleaned = cleaned.replace(/^[^{[]*/, '').replace(/[^}\]]*$/, '');
+  
+  // Remove markdown formatting
+  cleaned = cleaned.replace(/```json/g, '').replace(/```/g, '');
+  
+  // Remove extra whitespace but preserve structure
+  cleaned = cleaned.replace(/\s+/g, ' ').trim();
+  
+  // Ensure it starts with { or [
+  if (!cleaned.startsWith('{') && !cleaned.startsWith('[')) {
+    const braceIndex = cleaned.indexOf('{');
+    const bracketIndex = cleaned.indexOf('[');
+    const startIndex = Math.max(braceIndex, bracketIndex);
+    if (startIndex !== -1) {
+      cleaned = cleaned.substring(startIndex);
+    }
+  }
+  
+  return cleaned;
 }
 
 function coerceQuote(q) {
@@ -312,12 +419,12 @@ async function pickSupportedModel(apiKey, candidates = GEMINI_MODELS) {
   }
 }
 
-// ---------- Enhanced Prompt Engineering ----------
+// ---------- ENHANCED Prompt Engineering with Strict JSON Formatting ----------
 function createAnalystPrompt({ sportKey, numLegs, betType, hours, tz }) {
   const sportName = sportKey.replace(/_/g, ' ').toUpperCase();
   const sources = SPORT_SOURCES[sportKey] || SPORT_SOURCES.soccer;
   
-  // Enhanced prompt with better guidance
+  // Enhanced prompt with strict JSON formatting requirements
   return `You are a professional sports analyst with expertise in ${sportName}. Build a ${numLegs}-leg parlay for games in the next ${hours} hours.
 
 RESEARCH REQUIREMENTS:
@@ -327,7 +434,7 @@ RESEARCH REQUIREMENTS:
 4. Provide ACTUAL source URLs for verification
 5. Focus on games with clear statistical advantages or mispriced odds
 
-CRITICAL FORMAT REQUIREMENTS - Return ONLY valid JSON in this exact structure:
+CRITICAL JSON FORMAT REQUIREMENTS - Return ONLY valid JSON in this exact structure:
 
 {
   "parlay_legs": [
@@ -366,7 +473,12 @@ STRICT RULES:
 - Ensure all team/player names are accurate and current
 - Focus on statistically supported value opportunities
 - Return PURE JSON only - no markdown, no explanations, no additional text
-- Validate all odds are realistic for the sport/market`;
+- Validate all odds are realistic for the sport/market
+- Use double quotes for all JSON strings
+- Do NOT include trailing commas in arrays or objects
+- Ensure all brackets and braces are properly closed
+
+IMPORTANT: Your response must be valid JSON that can be parsed by JSON.parse() without any modifications.`;
 }
 
 // ---------- Enhanced Perplexity with better error handling ----------
@@ -443,7 +555,7 @@ async function callPerplexity(prompt) {
   }
 }
 
-// ---------- Enhanced Gemini 2.0 implementation ----------
+// ---------- ENHANCED Gemini 2.0 implementation with better JSON handling ----------
 async function callGemini(prompt) {
   const { GOOGLE_GEMINI_API_KEY } = env;
   if (!GOOGLE_GEMINI_API_KEY) {
@@ -466,16 +578,39 @@ async function callGemini(prompt) {
         temperature: 0.1,
         topP: 0.8,
         topK: 40,
+        responseMimeType: 'application/json', // NEW: Explicitly request JSON
+        responseSchema: {
+          type: 'object',
+          properties: {
+            parlay_legs: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  game: { type: 'string' },
+                  market: { type: 'string' },
+                  pick: { type: 'string' },
+                  fair_prob: { type: 'number' },
+                  quotes: { type: 'array' },
+                  best_quote: { type: 'object' },
+                  justification: { type: 'string' },
+                  confidence: { type: 'number' },
+                  game_date_utc: { type: 'string' }
+                }
+              }
+            },
+            confidence_score: { type: 'number' },
+            sources: { type: 'array', items: { type: 'string' } }
+          }
+        }
       },
       safetySettings: SAFETY,
     });
 
-    const result = await model.generateContent([
-      { 
-        text: `${prompt}\n\nCRITICAL: You MUST return ONLY the JSON object. Remove any markdown, code fences, or explanatory text. Validate all sports data is current and accurate.`
-      }
-    ]);
+    // Enhanced prompt with strict JSON instructions
+    const enhancedPrompt = `${prompt}\n\nCRITICAL: You MUST return ONLY the JSON object. Remove any markdown, code fences, or explanatory text. Validate all sports data is current and accurate. Ensure the JSON is properly formatted with double quotes and no trailing commas.`;
 
+    const result = await model.generateContent([{ text: enhancedPrompt }]);
     const response = await result.response;
     const text = response.text();
     
@@ -484,6 +619,8 @@ async function callGemini(prompt) {
     }
     
     console.log('✅ Gemini response received successfully');
+    console.log('📄 Response preview:', text.substring(0, 200) + '...');
+    
     return text;
   } catch (error) {
     console.error('❌ Gemini API error:', error.message);
@@ -514,7 +651,7 @@ async function callGemini(prompt) {
   }
 }
 
-// ---------- Enhanced provider calling with fallbacks ----------
+// ---------- ENHANCED provider calling with better JSON validation ----------
 async function callProvider(aiModel, prompt) {
   console.log(`🔍 Researching with ${aiModel}...`);
   
@@ -540,10 +677,11 @@ async function callProvider(aiModel, prompt) {
       }
       
       console.warn(`⚠️ ${aiModel} attempt ${attempt} returned invalid JSON`);
+      console.log('📄 Raw response for debugging:', text.substring(0, 500));
       
-      // Enhanced retry logic with better prompt
+      // Enhanced retry logic with better prompt for JSON formatting
       if (attempt < maxAttempts && text) {
-        const retryPrompt = `${prompt}\n\nCRITICAL: Previous response was invalid. You must return ONLY the JSON object with no additional text, markdown, or code fences. Validate the JSON structure is correct.`;
+        const retryPrompt = `${prompt}\n\nCRITICAL: Previous response was invalid JSON. You must return ONLY the JSON object with no additional text, markdown, or code fences. Ensure:\n- All strings use double quotes\n- No trailing commas in arrays or objects\n- All brackets and braces are properly closed\n- The JSON structure matches exactly the required format`;
         console.log(`🔄 Retrying ${aiModel} with stricter JSON requirements...`);
         await new Promise(resolve => setTimeout(resolve, retryDelay));
         continue;
