@@ -8,11 +8,11 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "start": "NODE_OPTIONS='--max-old-space-size=192' node src/bot.js",
-    "dev": "NODE_ENV=development nodemon src/bot.js",
-    "worker:settlement": "NODE_OPTIONS='--max-old-space-size=128' node src/workers/resultsSettlement.js",
-    "worker:odds": "NODE_OPTIONS='--max-old-space-size=128' node src/workers/oddsIngestion.js",
-    "worker:notifications": "NODE_OPTIONS='--max-old-space-size=128' node src/workers/notificationWorker.js",
+    "start": "NODE_OPTIONS='--max-old-space-size=512' node src/bot.js",
+    "dev": "NODE_ENV=development NODE_OPTIONS='--max-old-space-size=1024' nodemon src/bot.js",
+    "worker:settlement": "NODE_OPTIONS='--max-old-space-size=256' node src/workers/resultsSettlement.js",
+    "worker:odds": "NODE_OPTIONS='--max-old-space-size=256' node src/workers/oddsIngestion.js",
+    "worker:notifications": "NODE_OPTIONS='--max-old-space-size=256' node src/workers/notificationWorker.js",
     "lint": "eslint . --ext .js",
     "format": "prettier --write \"src/**/*.js\""
   },
