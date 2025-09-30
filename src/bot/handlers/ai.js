@@ -1,5 +1,6 @@
 // src/bot/handlers/ai.js - COMPLETE 800+ LINE VERSION
-
+// ADD THIS IMPORT LINE AT THE TOP OF ai.js WITH THE OTHER IMPORTS
+import { safeTelegramMessage } from '../../utils/enterpriseUtilities.js';
 import aiService from '../../services/aiService.js';
 import gamesService from '../../services/gamesService.js';
 import databaseService from '../../services/databaseService.js';
