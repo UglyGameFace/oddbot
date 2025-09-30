@@ -479,7 +479,7 @@ export function registerAICallbacks(bot) {
           { 
             chat_id: chatId, 
             message_id: message.message_id, 
-            parse_mode: 'MarkdownV2',
+            parse_mode: 'HTML',
             reply_markup: { inline_keyboard: [[{ text: 'Start Over', callback_data: 'ai_back_sport' }]] }
           }
         );
@@ -690,63 +690,57 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = nu
   const legs = parlay.parlay_legs;
   const tzLabel = 'America/New_York';
 
-  // Use escapeMarkdownV2 for ALL dynamic content
-  const safeNumLegs = escapeMarkdownV2(numLegs);
-  const safeSportKey = escapeMarkdownV2(sportKey);
-  const safeMode = escapeMarkdownV2(mode.toUpperCase());
-  const safeBetType = escapeMarkdownV2(betType === 'props' ? 'Player Props Only' : 'Mixed');
-  const safeConfidence = escapeMarkdownV2(Math.round((parlay.confidence_score || 0) * 100));
-
-  let response = `🧠 *AI\\\\-Generated ${safeNumLegs}\\\\-Leg Parlay*\\n`;
-  response += `*Sport:* ${safeSportKey}\\n`;
-  response += `*Mode:* ${safeMode}\\n`;
-  response += `*Type:* ${safeBetType}\\n`;
-  response += `*Confidence:* ${safeConfidence}%\\n`;
+  // No need for Markdown escaping with HTML - just use the raw values
+  let response = `<b>AI-Generated ${numLegs}-Leg Parlay</b>\n`;
+  response += `<b>Sport:</b> ${sportKey}\n`;
+  response += `<b>Mode:</b> ${mode.toUpperCase()}\n`;
+  response += `<b>Type:</b> ${betType === 'props' ? 'Player Props Only' : 'Mixed'}\n`;
+  response += `<b>Confidence:</b> ${Math.round((parlay.confidence_score || 0) * 100)}%\n`;
   
   if (parlay.data_freshness) {
-    response += `*Data Age:* ${escapeMarkdownV2(parlay.data_freshness.hours_ago)}h\\n`;
-    response += `_${escapeMarkdownV2(parlay.data_freshness.message)}_\\n`;
+    response += `<b>Data Age:</b> ${parlay.data_freshness.hours_ago}h\n`;
+    response += `<i>${parlay.data_freshness.message}</i>\n`;
   }
   
-  response += `_Timezone: ${escapeMarkdownV2(tzLabel)}_\\n\\n`;
+  response += `<i>Timezone: ${tzLabel}</i>\n\n`;
 
   legs.forEach((leg, index) => {
     const when = leg.game_date_local
-      ? escapeMarkdownV2(leg.game_date_local)
-      : (leg.game_date_utc ? escapeMarkdownV2(formatLocalIfPresent(leg.game_date_utc, tzLabel)) : '');
+      ? leg.game_date_local
+      : (leg.game_date_utc ? formatLocalIfPresent(leg.game_date_utc, tzLabel) : '');
       
-    const safeGame = escapeMarkdownV2(leg.game);
-    const safePick = escapeMarkdownV2(leg.pick);
-    const safeMarket = escapeMarkdownV2(leg.market);
-    const safeJust = leg.justification ? escapeMarkdownV2(leg.justification.length > 250 ? `${leg.justification.slice(0, 250)}...` : leg.justification) : '';
-    const safeBook = leg.sportsbook ? escapeMarkdownV2(leg.sportsbook) : 'N/A';
-    const oddsDisplay = escapeMarkdownV2(leg.odds_american ? `${leg.odds_american > 0 ? '+' : ''}${leg.odds_american}` : 'N/A');
+    const game = leg.game || '';
+    const pick = leg.pick || '';
+    const market = leg.market || '';
+    const justification = leg.justification ? (leg.justification.length > 250 ? `${leg.justification.slice(0, 250)}...` : leg.justification) : '';
+    const book = leg.sportsbook || 'N/A';
+    const oddsDisplay = leg.odds_american ? `${leg.odds_american > 0 ? '+' : ''}${leg.odds_american}` : 'N/A';
 
-    response += `*Leg ${index + 1}:* ${safeGame}`;
-    if (when) response += ` \\- ${when}`; // ESCAPED HYPHEN HERE
-    response += `\\n*Pick:* *${safePick}* \\\\(${safeMarket}\\\\)\\n`;
-    response += `*Odds:* ${oddsDisplay}\\n`;
-    response += `*Book:* ${safeBook}\\n`;
-    if (safeJust) response += `*Justification:* ${safeJust}\\n`;
+    response += `<b>Leg ${index + 1}:</b> ${game}`;
+    if (when) response += ` — ${when}`;
+    response += `\n<b>Pick:</b> <b>${pick}</b> (${market})\n`;
+    response += `<b>Odds:</b> ${oddsDisplay}\n`;
+    response += `<b>Book:</b> ${book}\n`;
+    if (justification) response += `<b>Justification:</b> ${justification}\n`;
     
     if (leg.confidence) {
-      response += `*Confidence:* ${escapeMarkdownV2(Math.round(leg.confidence * 100))}%\\n`;
+      response += `<b>Confidence:</b> ${Math.round(leg.confidence * 100)}%\n`;
     }
     
-    response += `\\n`;
+    response += `\n`;
   });
 
   if (parlay.parlay_odds_american) {
     const oddsSign = parlay.parlay_odds_american > 0 ? '+' : '';
-    response += `*Parlay Odds:* ${oddsSign}${escapeMarkdownV2(parlay.parlay_odds_american)}\\n`;
+    response += `<b>Parlay Odds:</b> ${oddsSign}${parlay.parlay_odds_american}\n`;
   }
 
   if (parlay.parlay_odds_decimal) {
-    response += `*Decimal Odds:* ${escapeMarkdownV2(parlay.parlay_odds_decimal.toFixed(2))}\\n`;
+    response += `<b>Decimal Odds:</b> ${parlay.parlay_odds_decimal.toFixed(2)}\n`;
   }
 
   if (parlay.parlay_ev !== null && parlay.parlay_ev !== undefined) {
-    response += `*Expected Value:* ${escapeMarkdownV2((parlay.parlay_ev * 100).toFixed(1))}%\\n`;
+    response += `<b>Expected Value:</b> ${(parlay.parlay_ev * 100).toFixed(1)}%\n`;
   }
 
   const finalKeyboard = [
@@ -756,7 +750,7 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = nu
   ];
   
   const messageOpts = {
-    parse_mode: 'MarkdownV2',
+    parse_mode: 'HTML', // Changed to HTML
     reply_markup: { 
       inline_keyboard: finalKeyboard 
     }
