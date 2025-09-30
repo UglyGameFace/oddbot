@@ -542,8 +542,6 @@ async function callPerplexity(prompt) {
   }
 }
 
-// ---------- FIXED Gemini 2.0 implementation - REMOVED unsupported parameters ----------
-// ---------- FIXED Gemini 2.0 implementation - REMOVED unsupported parameters ----------
 async function callGemini(prompt) {
   const { GOOGLE_GEMINI_API_KEY } = env;
   if (!GOOGLE_GEMINI_API_KEY) {
@@ -558,7 +556,6 @@ async function callGemini(prompt) {
     
     const genAI = new GoogleGenerativeAI(GOOGLE_GEMINI_API_KEY);
     
-    // FIXED: Remove unsupported parameters that cause 400 errors
     const model = genAI.getGenerativeModel({ 
       model: modelId,
       generationConfig: {
@@ -566,7 +563,7 @@ async function callGemini(prompt) {
         temperature: 0.1,
         topP: 0.8,
         topK: 40,
-        // REMOVED: responseMimeType and responseSchema - not supported
+        response_mime_type: "application/json",
       },
       safetySettings: SAFETY,
     });
@@ -581,12 +578,11 @@ async function callGemini(prompt) {
     
     console.log('✅ Gemini response received successfully');
     return text;
+
   } catch (error) {
     console.error('❌ Gemini API error:', error.message);
-  }
-}
     
-    // Enhanced error handling
+    // Enhanced error handling is now correctly inside the catch block
     if (error.message.includes('404') || error.message.includes('not found')) {
       throw new Error(`Gemini model not available: ${error.message}`);
     }
@@ -609,6 +605,8 @@ async function callGemini(prompt) {
     });
     
     throw new Error(`Gemini API call failed: ${error.message}`);
+  }
+}
 
 // ---------- ENHANCED provider calling with better JSON validation ----------
 async function callProvider(aiModel, prompt) {
