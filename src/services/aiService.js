@@ -32,7 +32,7 @@ async function pickSupportedModel(apiKey, candidates = GEMINI_MODEL_CANDIDATES) 
 
 function extractFirstJsonObject(text = '') {
   let jsonString = '';
-  const markdownMatch = String(text).match(/```json\s*([\s\S]*?)\s*```/);
+  const markdownMatch = String(text).match(/``````/);
   if (markdownMatch && markdownMatch[1]) {
     jsonString = markdownMatch[1];
   } else {
@@ -109,38 +109,79 @@ function bindLegsToFixtures(legs = [], fixtures = []) {
 const genAI = new GoogleGenerativeAI(env.GOOGLE_GEMINI_API_KEY);
 
 class AIService {
-  // --- UPDATED: Main router function ---
+  // UPDATED: resilient router with cascading fallback: requested mode → sibling context → web
   async generateParlay(sportKey, numLegs = 2, mode = 'live', aiModel = 'gemini', betType = 'mixed', opts = {}) {
     const includeProps = !!opts.includeProps;
-    if (mode === 'web') {
-      if (aiModel === 'perplexity' && env.PERPLEXITY_API_KEY) {
-        return this._generateWithPerplexityWeb(sportKey, numLegs, betType);
+    const preferPerplexity = aiModel === 'perplexity' && !!env.PERPLEXITY_API_KEY;
+
+    // helper to choose a web provider and auto-fallback to the other if the first fails
+    const runWeb = async () => {
+      try {
+        if (preferPerplexity) return await this._generateWithPerplexityWeb(sportKey, numLegs, betType);
+        return await this._generateWithGeminiWeb(sportKey, numLegs, betType);
+      } catch (e) {
+        if (preferPerplexity) {
+          // try Gemini as alternate
+          return await this._generateWithGeminiWeb(sportKey, numLegs, betType);
+        }
+        if (env.PERPLEXITY_API_KEY) {
+          // try Perplexity as alternate
+          return await this._generateWithPerplexityWeb(sportKey, numLegs, betType);
+        }
+        throw e;
       }
-      return this._generateWithGeminiWeb(sportKey, numLegs, betType);
+    };
+
+    // force web mode (then fixture bind)
+    if (mode === 'web') {
+      const web = await runWeb();
+      return await this._postProcessWithFixtureBinding(sportKey, web);
     }
-    // 'live' and 'db' modes are handled by the context-based method
-    return this._generateWithGeminiContext(sportKey, numLegs, mode, betType, { includeProps });
+
+    // try requested context first
+    const first = await this._generateWithGeminiContext(sportKey, numLegs, mode, betType, { includeProps });
+    if (first) return first;
+
+    // then the sibling context
+    const siblingMode = mode === 'live' ? 'db' : 'live';
+    const second = await this._generateWithGeminiContext(sportKey, numLegs, siblingMode, betType, { includeProps });
+    if (second) return second;
+
+    // finally, web research
+    const web = await runWeb();
+    return await this._postProcessWithFixtureBinding(sportKey, web);
   }
 
-  // --- ADDED: Helper for consistent instructions ---
+  // NEW: best-effort enrichment to attach event_id and local times to web legs
+  async _postProcessWithFixtureBinding(sportKey, obj) {
+    try {
+      const fixtures = await getUpcomingFixtures(sportKey, 120);
+      if (Array.isArray(obj?.parlay_legs) && fixtures?.length) {
+        obj.parlay_legs = bindLegsToFixtures(obj.parlay_legs, fixtures);
+      }
+      return obj;
+    } catch {
+      return obj;
+    }
+  }
+
+  // helper for consistent instructions
   _getBetTypeInstruction(betType) {
     return betType === 'props'
-        ? 'Each leg of the parlay MUST be a Player Prop bet (e.g., player points, assists, touchdowns, yards).'
-        : 'The parlay can be a mix of moneyline, spread, totals, or player props.';
+      ? 'Each leg of the parlay MUST be a Player Prop bet (e.g., player points, assists, touchdowns, yards).'
+      : 'The parlay can be a mix of moneyline, spread, totals, or player props.';
   }
 
-  // --- ADDED: Specialized function for Perplexity Web Research ---
+  // Perplexity Web Research
   async _generateWithPerplexityWeb(sportKey, numLegs, betType) {
     console.log(`AI Service: Using Perplexity Web Research for ${betType}.`);
-    const betTypeInstruction = this._getBetTypeInstruction(betType);
     const currentDate = new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York' });
-
-    const prompt = `Act as a senior sports betting analyst. Today is ${currentDate}. Your task is to perform a deep web search for upcoming games in ${sportKey} and construct the most statistically sound ${numLegs}-leg parlay. Your analysis must prioritize recent performance trends (last 5-10 games), head-to-head matchups, and confirmed injury reports. For each leg, provide a sharp, data-driven justification. Your final output must be ONLY a valid JSON object with no introductory text. JSON FORMAT: { "parlay_legs": [ { "game": "Away Team @ Home Team", "market": "...", "pick": "...", "sportsbook": "FanDuel", "justification": "..." } ], "confidence_score": 0.85 }`;
+    const prompt = `Act as a senior sports betting analyst. Today is ${currentDate}. Your task is to perform a deep web search for upcoming games in ${sportKey} and construct the most statistically sound ${numLegs}-leg parlay. Your analysis must prioritize recent performance trends (last 5-10 games), head-to-head matchups, and confirmed injury reports. For each leg, provide a sharp, data-driven justification. Your final output must be ONLY a valid JSON object with no introductory text. JSON FORMAT: { \"\"parlay_legs\"\": [ { \"\"game\"\": \"\"Away Team @ Home Team\"\", \"\"market\"\": \"\"...\"\", \"\"pick\"\": \"\"...\"\", \"\"sportsbook\"\": \"\"FanDuel\"\", \"\"justification\"\": \"\"...\"\" } ], \"\"confidence_score\"\": 0.85 }`;
 
     const response = await axios.post(
       'https://api.perplexity.ai/chat/completions',
       {
-        model: 'sonar-pro', // Corrected model name
+        model: 'sonar-pro',
         messages: [
           { role: 'system', content: 'You are a sports betting analyst who responds only in valid JSON format.' },
           { role: 'user', content: prompt },
@@ -153,17 +194,16 @@ class AIService {
     if (!obj) throw new Error('Perplexity did not return valid JSON.');
     return obj;
   }
-  
-  // --- ADDED: Specialized function for Gemini Web Research ---
+
+  // Gemini Web Research
   async _generateWithGeminiWeb(sportKey, numLegs, betType) {
     console.log(`AI Service: Using Gemini Web Research for ${betType}.`);
     const modelId = await pickSupportedModel(env.GOOGLE_GEMINI_API_KEY);
     const model = genAI.getGenerativeModel({ model: modelId, safetySettings, generationConfig: { maxOutputTokens: 4096, responseMimeType: "application/json" } });
-    const betTypeInstruction = this._getBetTypeInstruction(betType);
     const currentDate = new Date().toISOString();
 
-    const promptText = `As a top-tier sports analyst, your task is to use your internal knowledge and web search capabilities to find upcoming games for the ${sportKey} league. Today's date is ${currentDate}. Construct a ${numLegs}-leg parlay with a high probability of success. Your reasoning must be sharp, referencing key player stats, team dynamics, and any critical news like injuries. ${betTypeInstruction} Return ONLY a valid JSON object adhering to this schema: {"parlay_legs":[{"game":"Away Team @ Home Team","market":"e.g., Moneyline or Player Points","pick":"e.g., Team Name or Player Name Over 25.5","sportsbook":"DraftKings","justification":"Concise, data-driven reason."}],"confidence_score":0.80}`;
-    
+    const promptText = `As a top-tier sports analyst, your task is to use your internal knowledge and web search capabilities to find upcoming games for the ${sportKey} league. Today's date is ${currentDate}. Construct a ${numLegs}-leg parlay with a high probability of success. Your reasoning must be sharp, referencing key player stats, team dynamics, and any critical news like injuries. ${this._getBetTypeInstruction(betType)} Return ONLY a valid JSON object adhering to this schema: {\"\"parlay_legs\"\":[{\"\"game\"\":\"\"Away Team @ Home Team\"\",\"\"market\"\":\"\"e.g., Moneyline or Player Points\"\",\"\"pick\"\":\"\"e.g., Team Name or Player Name Over 25.5\"\",\"\"sportsbook\"\":\"\"DraftKings\"\",\"\"justification\"\":\"\"Concise, data-driven reason.\"\"}],\"\"confidence_score\"\":0.80}`;
+
     const result = await model.generateContent(promptText);
     const text = result?.response?.text?.() ?? '';
     const obj = extractFirstJsonObject(text);
@@ -171,18 +211,17 @@ class AIService {
     return obj;
   }
 
-  // --- ADDED: Specialized function for Live/DB Context Modes ---
+  // Live/DB context modes with SOFT returns (null) on empty data to enable fallback
   async _generateWithGeminiContext(sportKey, numLegs, mode, betType, { includeProps } = {}) {
     console.log(`AI Service: Using Gemini with ${mode} context for ${betType}.`);
     const modelId = await pickSupportedModel(env.GOOGLE_GEMINI_API_KEY);
     const model = genAI.getGenerativeModel({ model: modelId, safetySettings, generationConfig: { maxOutputTokens: 8192, responseMimeType: "application/json" } });
-    const betTypeInstruction = this._getBetTypeInstruction(betType);
 
     let contextData, fixtures;
     if (mode === 'live') {
       const liveGames = await oddsService.getSportOdds(sportKey);
-      if (!liveGames?.length) throw new Error('Could not fetch live odds. The API key may be maxed out or no games are available.');
-      
+      if (!liveGames?.length) return null;
+
       const shouldFetchProps = includeProps || betType === 'props';
       contextData = await Promise.all(
         liveGames.slice(0, 10).map(async (g) => {
@@ -192,8 +231,7 @@ class AIService {
           try {
             const props = await oddsService.getPlayerPropsForGame(sportKey, eventId);
             return { ...g, player_props: props };
-          } catch (e) {
-            console.warn(`Props unavailable for ${eventId}: ${e?.response?.status || e?.message}`);
+          } catch {
             return { ...g, player_props: null };
           }
         }),
@@ -201,16 +239,16 @@ class AIService {
       fixtures = liveGames;
     } else { // mode === 'db'
       contextData = await gamesService.getGamesForSport(sportKey);
-      if (!contextData?.length) throw new Error('No games found in the database for the specified sport.');
+      if (!contextData?.length) return null;
       fixtures = contextData;
     }
 
-    const promptText = `You are an expert sports betting analyst. From the provided JSON data of upcoming games, construct a ${numLegs}-leg parlay. ${betTypeInstruction} For each leg, provide a detailed justification based ONLY on the data provided. Return ONLY a valid JSON object based on this schema: { "parlay_legs": [ { "game": "Away Team @ Home Team", "market": "...", "pick": "...", "justification": "..." } ], "confidence_score": 0.85 }\n\nHere is the game data:\n\`\`\`json\n${JSON.stringify(contextData.slice(0, 20), null, 2)}\n\`\`\``;
+    const promptText = `You are an expert sports betting analyst. From the provided JSON data of upcoming games, construct a ${numLegs}-leg parlay. ${this._getBetTypeInstruction(betType)} For each leg, provide a detailed justification based ONLY on the data provided. Return ONLY a valid JSON object based on this schema: { \"\"parlay_legs\"\": [ { \"\"game\"\": \"\"Away Team @ Home Team\"\", \"\"market\"\": \"\"...\"\", \"\"pick\"\": \"\"...\"\", \"\"justification\"\": \"\"...\"\" } ], \"\"confidence_score\"\": 0.85 }\n\nHere is the game data:\n\`\`\`json\n${JSON.stringify(contextData.slice(0, 20), null, 2)}\n\`\`\``;
 
     const result = await model.generateContent(promptText);
     const text = result?.response?.text?.() ?? '';
     const obj = extractFirstJsonObject(text);
-    if (!obj?.parlay_legs?.length) throw new Error('AI returned invalid or empty JSON.');
+    if (!obj?.parlay_legs?.length) return null;
     obj.parlay_legs = bindLegsToFixtures(obj.parlay_legs, fixtures);
     return obj;
   }
@@ -218,7 +256,7 @@ class AIService {
   async validateOdds(oddsData) {
     const modelId = await pickSupportedModel(env.GOOGLE_GEMINI_API_KEY);
     const model = genAI.getGenerativeModel({ model: modelId, safetySettings, generationConfig: { responseMimeType: "application/json" } });
-    const prompt = `Validate this JSON odds structure; respond ONLY with a JSON object like {"valid": true} or {"valid": false}. Data: ${JSON.stringify(oddsData)}`;
+    const prompt = `Validate this JSON odds structure; respond ONLY with a JSON object like {\"\"valid\"\": true} or {\"\"valid\"\": false}. Data: ${JSON.stringify(oddsData)}`;
     try {
       const result = await model.generateContent(prompt);
       const text = result?.response?.text?.() ?? '';
