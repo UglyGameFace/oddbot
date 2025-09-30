@@ -423,67 +423,49 @@ async function pickSupportedModel(apiKey, candidates = GEMINI_MODELS) {
   }
 }
 
-// ---------- ENHANCED Prompt Engineering with Strict JSON Formatting ----------
+// ---------- ENHANCED Prompt Engineering with BETTER JSON Formatting ----------
 function createAnalystPrompt({ sportKey, numLegs, betType, hours, tz }) {
   const sportName = sportKey.replace(/_/g, ' ').toUpperCase();
   const sources = SPORT_SOURCES[sportKey] || SPORT_SOURCES.soccer;
   
-  // Enhanced prompt with strict JSON formatting requirements
-  return `You are a professional sports analyst with expertise in ${sportName}. Build a ${numLegs}-leg parlay for games in the next ${hours} hours.
+  // SIMPLIFIED but still comprehensive prompt
+  return `As a professional ${sportName} analyst, create a ${numLegs}-leg parlay for games in the next ${hours} hours.
 
-RESEARCH REQUIREMENTS:
-1. Find REAL upcoming games from official sources: ${sources.join(', ')}
-2. Cross-shop odds at regulated books: ${REGULATED_BOOKS.slice(0, 6).join(', ')}
-3. Analyze matchups, recent performance, and identify genuine value bets
-4. Provide ACTUAL source URLs for verification
-5. Focus on games with clear statistical advantages or mispriced odds
-
-CRITICAL JSON FORMAT REQUIREMENTS - Return ONLY valid JSON in this exact structure:
+CRITICAL: Return ONLY valid JSON in this exact structure:
 
 {
   "parlay_legs": [
     {
-      "game": "Away Team @ Home Team (Real Teams Only)",
-      "market": "moneyline|spread|total|player_points|player_rebounds|player_assists",
-      "pick": "Specific selection with team/player name",
+      "game": "Team A @ Team B",
+      "market": "moneyline",
+      "pick": "Team A", 
       "fair_prob": 0.65,
       "quotes": [
         {
-          "book": "Sportsbook Name",
+          "book": "DraftKings",
           "american": -150,
           "decimal": 1.67,
           "opponent_american": 130,
-          "source_url": "https://real-odds-site.com/game-odds"
+          "source_url": "https://example.com/odds"
         }
       ],
-      "best_quote": {
-        "book": "Best Sportsbook Found", 
-        "american": -150,
-        "decimal": 1.67,
-        "source_url": "https://real-odds-site.com/game-odds"
-      },
-      "justification": "Data-driven analysis explaining the edge (min 50 words)",
+      "justification": "Detailed analysis here...",
       "confidence": 0.75,
       "game_date_utc": "2025-01-15T20:30:00Z"
     }
   ],
   "confidence_score": 0.80,
-  "sources": ["https://real-source1.com", "https://real-source2.com"]
+  "sources": ["https://source1.com"]
 }
 
-STRICT RULES:
-- Only include REAL upcoming games from official league sources
-- Provide ACTUAL working source URLs (no placeholder URLs)
-- Ensure all team/player names are accurate and current
-- Focus on statistically supported value opportunities
-- Return PURE JSON only - no markdown, no explanations, no additional text
-- Validate all odds are realistic for the sport/market
-- Use double quotes for all JSON strings
-- Do NOT include trailing commas in arrays or objects
-- Ensure all brackets and braces are properly closed
-- IMPORTANT: For American odds, DO NOT use + signs for positive numbers. Use 125 instead of +125.
+STRICT REQUIREMENTS:
+- Use REAL teams and accurate odds from ${REGULATED_BOOKS.slice(0, 4).join(', ')}
+- For American odds: use -150 or 125 (NO + signs)
+- Return PURE JSON only - no markdown, no explanations
+- Validate JSON syntax: double quotes, no trailing commas
+- All brackets must be properly closed
 
-IMPORTANT: Your response must be valid JSON that can be parsed by JSON.parse() without any modifications.`;
+Your response must be valid JSON that can be parsed by JSON.parse() without modifications.`;
 }
 
 // ---------- Enhanced Perplexity with better error handling ----------
@@ -722,68 +704,88 @@ class AIService {
     };
   }
 
-  async generateParlay(sportKey, numLegs = 2, mode = 'web', aiModel = 'perplexity', betType = 'mixed', options = {}) {
-    const requestId = `parlay_${sportKey}_${Date.now()}`;
-    console.log(`🎯 Generating ${numLegs}-leg ${sportKey} parlay in ${mode} mode using ${aiModel} (${requestId})`);
-    
-    this.generationStats.totalRequests++;
-    this.generationStats.lastRequest = new Date().toISOString();
-    
-    const startTime = Date.now();
-    
-    // Enhanced timeout handling
-    const overallTimeoutMs = 120000; // 120 seconds
-    
-    try {
-      let result;
-      if (mode === 'web') {
-        result = await this._executeWithTimeout(
-          this.generateWebResearchParlay(sportKey, numLegs, aiModel, betType, options),
-          overallTimeoutMs,
-          `Web research parlay generation for ${sportKey}`
-        );
-      } else {
-        result = await this._executeWithTimeout(
-          this.generateContextBasedParlay(sportKey, numLegs, betType, options),
-          overallTimeoutMs,
-          `Context-based parlay generation for ${sportKey}`
-        );
-      }
+  async function generateParlay(sportKey, numLegs = 2, mode = 'web', aiModel = 'perplexity', betType = 'mixed', options = {}) {
+  const requestId = `parlay_${sportKey}_${Date.now()}`;
+  console.log(`🎯 Generating ${numLegs}-leg ${sportKey} parlay in ${mode} mode using ${aiModel} (${requestId})`);
+  
+  this.generationStats.totalRequests++;
+  this.generationStats.lastRequest = new Date().toISOString();
+  
+  const startTime = Date.now();
+  
+  try {
+    let result;
+    if (mode === 'web') {
+      result = await this._executeWithTimeout(
+        this.generateWebResearchParlay(sportKey, numLegs, aiModel, betType, options),
+        120000,
+        `Web research parlay generation for ${sportKey}`
+      );
+    } else {
+      result = await this._executeWithTimeout(
+        this.generateContextBasedParlay(sportKey, numLegs, betType, options),
+        120000,
+        `Context-based parlay generation for ${sportKey}`
+      );
+    }
 
-      const processingTime = Date.now() - startTime;
-      this._updateStats(true, processingTime);
-      
-      console.log(`✅ Parlay generated successfully in ${processingTime}ms (${requestId})`);
-      return {
-        ...result,
-        metadata: {
-          ...result.metadata,
+    const processingTime = Date.now() - startTime;
+    this._updateStats(true, processingTime);
+    
+    console.log(`✅ Parlay generated successfully in ${processingTime}ms (${requestId})`);
+    return {
+      ...result,
+      metadata: {
+        ...result.metadata,
+        request_id: requestId,
+        processing_time_ms: processingTime,
+        service_version: '2.1-fixed'
+      }
+    };
+
+  } catch (error) {
+    const processingTime = Date.now() - startTime;
+    this._updateStats(false, processingTime);
+    
+    console.error(`❌ Parlay generation failed for ${requestId}:`, error.message);
+    
+    // CRITICAL FIX: Automatic fallback to internal data
+    if (mode === 'web') {
+      console.log('🔄 Attempting automatic fallback to internal data...');
+      try {
+        const fallbackResult = await this.generateContextBasedParlay(sportKey, numLegs, betType, options);
+        console.log(`✅ Fallback parlay generated successfully with ${fallbackResult.parlay_legs.length} legs`);
+        
+        // Mark as fallback in metadata
+        fallbackResult.metadata = {
+          ...fallbackResult.metadata,
           request_id: requestId,
           processing_time_ms: processingTime,
-          service_version: '2.1-fixed'
-        }
-      };
-
-    } catch (error) {
-      const processingTime = Date.now() - startTime;
-      this._updateStats(false, processingTime);
-      
-      console.error(`❌ Parlay generation failed for ${requestId}:`, error.message);
-      sentryService.captureError(error, { 
-        component: 'ai_service', 
-        operation: 'generateParlay',
-        sportKey,
-        mode,
-        aiModel,
-        betType,
-        requestId,
-        processingTime 
-      });
-      
-      // Enhanced error with more context
-      throw new Error(`Parlay generation failed: ${error.message} (${requestId})`);
+          service_version: '2.1-fixed',
+          fallback_used: true,
+          original_error: error.message
+        };
+        
+        return fallbackResult;
+      } catch (fallbackError) {
+        console.error('❌ Fallback also failed:', fallbackError.message);
+      }
     }
+    
+    sentryService.captureError(error, { 
+      component: 'ai_service', 
+      operation: 'generateParlay',
+      sportKey,
+      mode,
+      aiModel,
+      betType,
+      requestId,
+      processingTime 
+    });
+    
+    throw new Error(`Parlay generation failed: ${error.message} (${requestId})`);
   }
+}
 
   // Enhanced Web Research with comprehensive error handling
   async generateWebResearchParlay(sportKey, numLegs, aiModel, betType, options = {}) {
