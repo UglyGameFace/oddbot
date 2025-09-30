@@ -22,13 +22,16 @@ export default function makeCache(redis) {
       }
 
       const lockKey = `lock:${key}`;
-      const gotLock = await redis.set(lockKey, '1', { NX: true, PX: lockMs });
+      
+      // FIXED: Proper Redis SET command with correct syntax
+      const gotLock = await redis.set(lockKey, '1', 'PX', lockMs, 'NX');
 
-      if (gotLock) {
+      if (gotLock === 'OK') {
         try {
           const data = await loader();
           if (data !== undefined && data !== null) {
-            await redis.set(key, JSON.stringify(data), { EX: ttlSec });
+            // FIXED: Proper Redis SET command for main data
+            await redis.set(key, JSON.stringify(data), 'EX', ttlSec);
           }
           return data;
         } catch (loaderError) {
@@ -39,7 +42,7 @@ export default function makeCache(redis) {
             cacheKey: key,
             ...context
           });
-          throw loaderError; // Re-throw to let caller handle
+          throw loaderError;
         } finally {
           await redis.del(lockKey).catch(delError => {
             console.warn(`⚠️ Failed to delete lock key: ${lockKey}`, delError);
@@ -56,16 +59,15 @@ export default function makeCache(redis) {
               return JSON.parse(again);
             } catch (parseError) {
               console.warn(`❌ Failed to parse cached JSON during retry for key: ${key}`);
-              break; // Break out of retry loop if data is corrupt
+              break;
             }
           }
         }
         
         // If we get here, either deadline passed or data was corrupt
-        // Compute the data ourselves
         const data = await loader();
         if (data !== undefined && data !== null) {
-          await redis.set(key, JSON.stringify(data), { EX: ttlSec });
+          await redis.set(key, JSON.stringify(data), 'EX', ttlSec);
         }
         return data;
       }
