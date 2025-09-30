@@ -1,4 +1,4 @@
-// src/services/aiService.js - UPDATED TO MATCH NEW ARCHITECTURE
+// src/services/aiService.js - FIXED VERSION
 
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
 import axios from 'axios';
@@ -108,24 +108,19 @@ function parlayDecimal(legs) {
 }
 
 // ---------- ENHANCED Robust JSON Parsing/validation ----------
-// ENHANCED Robust JSON Parsing/validation with Perplexity Hotfix
-
 function extractJSON(text = '') {
   if (!text || typeof text !== 'string') {
     console.warn('⚠️ extractJSON: Empty or invalid text input');
     return null;
   }
   
-  // HOTFIX for Perplexity: Remove invalid '+' from numbers (e.g., "+125")
-  const cleanedText = text.replace(/:\s*\+/g, ': ');
-
-  console.log('🔧 Attempting JSON extraction from:', cleanedText.substring(0, 200) + '...');
+  console.log('🔧 Attempting JSON extraction from:', text.substring(0, 200) + '...');
   
-  // Multiple extraction strategies now run on the cleaned text
+  // Multiple extraction strategies
   const strategies = [
     // Strategy 1: Code fence extraction
     () => {
-      const fenceMatch = cleanedText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+      const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
       if (fenceMatch) {
         console.log('✅ Found JSON in code fence');
         try { 
@@ -136,12 +131,12 @@ function extractJSON(text = '') {
       }
       return null;
     },
-    // Strategy 2: Find first { to last }
+    // Strategy 2: Find first { to last } with enhanced cleaning
     () => {
-      const start = cleanedText.indexOf('{');
-      const end = cleanedText.lastIndexOf('}');
+      const start = text.indexOf('{');
+      const end = text.lastIndexOf('}');
       if (start !== -1 && end !== -1 && end > start) {
-        const candidate = cleanedText.substring(start, end + 1);
+        const candidate = text.substring(start, end + 1);
         console.log('✅ Found JSON candidate with braces');
         try { 
           return JSON.parse(candidate); 
@@ -156,7 +151,7 @@ function extractJSON(text = '') {
     // Strategy 3: Direct parse
     () => {
       try { 
-        return JSON.parse(cleanedText); 
+        return JSON.parse(text); 
       } catch (error) {
         console.warn('❌ Direct JSON parse failed:', error.message);
         return null;
@@ -164,13 +159,13 @@ function extractJSON(text = '') {
     },
     // Strategy 4: Aggressive cleaning and retry
     () => {
-      const cleaned = cleanJSONString(cleanedText);
-      if (cleaned !== cleanedText) {
-        console.log('🔄 Attempting with further cleaned JSON string');
+      const cleaned = cleanJSONString(text);
+      if (cleaned !== text) {
+        console.log('🔄 Attempting with cleaned JSON string');
         try {
           return JSON.parse(cleaned);
         } catch (error) {
-          console.warn('❌ Further cleaned JSON parse failed:', error.message);
+          console.warn('❌ Cleaned JSON parse failed:', error.message);
         }
       }
       return null;
@@ -188,46 +183,68 @@ function extractJSON(text = '') {
   console.error('❌ All JSON extraction strategies failed');
   return null;
 }
-// NEW: Enhanced JSON repair function
+
+// ENHANCED: JSON repair function with better positive odds handling
 function attemptJSONRepair(jsonString) {
   if (!jsonString || typeof jsonString !== 'string') return null;
   
   console.log('🔄 Attempting JSON repair...');
   
   try {
-    // Fix 1: Remove trailing commas
-    let repaired = jsonString.replace(/,\s*([}\]])/g, '$1');
+    let repaired = jsonString;
     
-    // Fix 2: Add missing quotes around keys
+    // Fix 1: Handle positive American odds with + signs (CRITICAL FIX)
+    // Replace "american": +125 with "american": 125
+    repaired = repaired.replace(/"american":\s*\+(\d+)/g, '"american": $1');
+    
+    // Fix 2: Handle opponent_american with + signs
+    repaired = repaired.replace(/"opponent_american":\s*\+(\d+)/g, '"opponent_american": $1');
+    
+    // Fix 3: Remove trailing commas
+    repaired = repaired.replace(/,\s*([}\]])/g, '$1');
+    
+    // Fix 4: Add missing quotes around keys
     repaired = repaired.replace(/([{,]\s*)(\w+)(\s*:)/g, '$1"$2"$3');
     
-    // Fix 3: Fix single quotes to double quotes
+    // Fix 5: Fix single quotes to double quotes
     repaired = repaired.replace(/'/g, '"');
     
-    // Fix 4: Remove comments
+    // Fix 6: Remove comments
     repaired = repaired.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
     
-    // Fix 5: Escape unescaped quotes in strings
+    // Fix 7: Escape unescaped quotes in strings
     repaired = repaired.replace(/"([^"\\]*(\\.[^"\\]*)*)"?/g, (match) => {
       if (match.endsWith('"') && !match.endsWith('\\"')) {
         return match;
       }
-      // Basic escaping - for complex cases we'll rely on the original
       return match;
     });
     
-    console.log('🔧 Repaired JSON:', repaired.substring(0, 200) + '...');
+    console.log('🔧 Repaired JSON sample:', repaired.substring(0, 300) + '...');
     
     const parsed = JSON.parse(repaired);
     console.log('✅ JSON repair successful');
     return parsed;
   } catch (repairError) {
     console.warn('❌ JSON repair failed:', repairError.message);
+    
+    // Final attempt: extract just the array if object parse fails
+    try {
+      const arrayMatch = jsonString.match(/"parlay_legs"\s*:\s*(\[[\s\S]*?\])/);
+      if (arrayMatch) {
+        const legsArray = JSON.parse(arrayMatch[1]);
+        console.log('✅ Extracted legs array directly');
+        return { parlay_legs: legsArray };
+      }
+    } catch (finalError) {
+      console.warn('❌ Final array extraction failed:', finalError.message);
+    }
+    
     return null;
   }
 }
 
-// NEW: Enhanced JSON string cleaning
+// ENHANCED: JSON string cleaning with positive odds handling
 function cleanJSONString(text) {
   if (!text || typeof text !== 'string') return text;
   
@@ -238,6 +255,10 @@ function cleanJSONString(text) {
   
   // Remove markdown formatting
   cleaned = cleaned.replace(/```json/g, '').replace(/```/g, '');
+  
+  // Fix positive American odds before other processing
+  cleaned = cleaned.replace(/"american":\s*\+(\d+)/g, '"american": $1');
+  cleaned = cleaned.replace(/"opponent_american":\s*\+(\d+)/g, '"opponent_american": $1');
   
   // Remove extra whitespace but preserve structure
   cleaned = cleaned.replace(/\s+/g, ' ').trim();
@@ -452,7 +473,7 @@ CRITICAL JSON FORMAT REQUIREMENTS - Return ONLY valid JSON in this exact structu
           "book": "Sportsbook Name",
           "american": -150,
           "decimal": 1.67,
-          "opponent_american": +130,
+          "opponent_american": 130,
           "source_url": "https://real-odds-site.com/game-odds"
         }
       ],
@@ -481,6 +502,7 @@ STRICT RULES:
 - Use double quotes for all JSON strings
 - Do NOT include trailing commas in arrays or objects
 - Ensure all brackets and braces are properly closed
+- IMPORTANT: For American odds, DO NOT use + signs for positive numbers. Use 125 instead of +125.
 
 IMPORTANT: Your response must be valid JSON that can be parsed by JSON.parse() without any modifications.`;
 }
@@ -502,7 +524,7 @@ async function callPerplexity(prompt) {
         messages: [
           { 
             role: 'system', 
-            content: 'You are a professional sports data research expert. Return ONLY valid JSON with current game schedules, real odds from regulated books, and data-driven analysis. No markdown, no explanations, no additional text. Validate all information is current and accurate.' 
+            content: 'You are a professional sports data research expert. Return ONLY valid JSON with current game schedules, real odds from regulated books, and data-driven analysis. No markdown, no explanations, no additional text. Validate all information is current and accurate. For American odds, use numbers without + signs (e.g., 125 instead of +125).' 
           },
           { role: 'user', content: prompt }
         ],
@@ -559,65 +581,22 @@ async function callPerplexity(prompt) {
   }
 }
 
-// ---------- ENHANCED Gemini 2.0 implementation with better JSON handling ----------
-// ENHANCED Gemini implementation with corrected JSON mode
-
+// ---------- FIXED Gemini 2.0 implementation - REMOVED unsupported parameters ----------
 async function callGemini(prompt) {
   const { GOOGLE_GEMINI_API_KEY } = env;
   if (!GOOGLE_GEMINI_API_KEY) {
     throw new Error('Gemini API key missing - check environment configuration');
   }
-
+  
   console.log('🔄 Calling Gemini...');
-
+  
   try {
     const modelId = await pickSupportedModel(GOOGLE_GEMINI_API_KEY);
     console.log(`🔧 Using Gemini model: ${modelId}`);
     
     const genAI = new GoogleGenerativeAI(GOOGLE_GEMINI_API_KEY);
     
-    // CORRECTED: The 'generationConfig' is simplified to use the modern JSON output method.
-    const model = genAI.getGenerativeModel({ 
-      model: modelId,
-      generationConfig: {
-        maxOutputTokens: MAX_OUTPUT_TOKENS,
-        temperature: 0.1,
-        // The 'response_mime_type' parameter correctly tells the model to output JSON.
-        // The complex 'responseSchema' is no longer needed with modern versions.
-        response_mime_type: "application/json", 
-      },
-      safetySettings: SAFETY,
-    });
-
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
-    
-    if (!text) {
-      throw new Error('Empty response from Gemini - no text generated');
-    }
-    
-    console.log('✅ Gemini response received successfully');
-    return text;
-
-  } catch (error) {
-    console.error('❌ Gemini API error:', error.message);
-    
-    // This will now catch the specific "400 Bad Request" if the prompt is malformed
-    if (error.message.includes('400')) {
-      throw new Error(`Gemini API Bad Request: ${error.message}. This may be an issue with the prompt or API version.`);
-    }
-    
-    sentryService.captureError(error, { 
-      component: 'ai_service', 
-      operation: 'callGemini' 
-    });
-    
-    throw new Error(`Gemini API call failed: ${error.message}`);
-  }
-}
-    
-    // Enhanced configuration for better reliability
+    // FIXED: Removed responseMimeType and responseSchema which are not supported
     const model = genAI.getGenerativeModel({ 
       model: modelId,
       generationConfig: {
@@ -625,37 +604,13 @@ async function callGemini(prompt) {
         temperature: 0.1,
         topP: 0.8,
         topK: 40,
-        responseMimeType: 'application/json', // NEW: Explicitly request JSON
-        responseSchema: {
-          type: 'object',
-          properties: {
-            parlay_legs: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  game: { type: 'string' },
-                  market: { type: 'string' },
-                  pick: { type: 'string' },
-                  fair_prob: { type: 'number' },
-                  quotes: { type: 'array' },
-                  best_quote: { type: 'object' },
-                  justification: { type: 'string' },
-                  confidence: { type: 'number' },
-                  game_date_utc: { type: 'string' }
-                }
-              }
-            },
-            confidence_score: { type: 'number' },
-            sources: { type: 'array', items: { type: 'string' } }
-          }
-        }
+        // REMOVED: responseMimeType and responseSchema - not supported in current API
       },
       safetySettings: SAFETY,
     });
 
     // Enhanced prompt with strict JSON instructions
-    const enhancedPrompt = `${prompt}\n\nCRITICAL: You MUST return ONLY the JSON object. Remove any markdown, code fences, or explanatory text. Validate all sports data is current and accurate. Ensure the JSON is properly formatted with double quotes and no trailing commas.`;
+    const enhancedPrompt = `${prompt}\n\nCRITICAL: You MUST return ONLY the JSON object. Remove any markdown, code fences, or explanatory text. Validate all sports data is current and accurate. Ensure the JSON is properly formatted with double quotes and no trailing commas. For American odds, use numbers without + signs (e.g., 125 instead of +125).`;
 
     const result = await model.generateContent([{ text: enhancedPrompt }]);
     const response = await result.response;
@@ -724,11 +679,11 @@ async function callProvider(aiModel, prompt) {
       }
       
       console.warn(`⚠️ ${aiModel} attempt ${attempt} returned invalid JSON`);
-      console.log('📄 Raw response for debugging:', text.substring(0, 500));
+      console.log('📄 Raw response sample:', text.substring(0, 500));
       
       // Enhanced retry logic with better prompt for JSON formatting
       if (attempt < maxAttempts && text) {
-        const retryPrompt = `${prompt}\n\nCRITICAL: Previous response was invalid JSON. You must return ONLY the JSON object with no additional text, markdown, or code fences. Ensure:\n- All strings use double quotes\n- No trailing commas in arrays or objects\n- All brackets and braces are properly closed\n- The JSON structure matches exactly the required format`;
+        const retryPrompt = `${prompt}\n\nCRITICAL: Previous response was invalid JSON. You must return ONLY the JSON object with no additional text, markdown, or code fences. Ensure:\n- All strings use double quotes\n- No trailing commas in arrays or objects\n- All brackets and braces are properly closed\n- For American odds, use numbers without + signs (e.g., 125 instead of +125)\n- The JSON structure matches exactly the required format`;
         console.log(`🔄 Retrying ${aiModel} with stricter JSON requirements...`);
         await new Promise(resolve => setTimeout(resolve, retryDelay));
         continue;
@@ -828,7 +783,7 @@ class AIService {
           ...result.metadata,
           request_id: requestId,
           processing_time_ms: processingTime,
-          service_version: '2.0-enhanced'
+          service_version: '2.1-fixed'
         }
       };
 
