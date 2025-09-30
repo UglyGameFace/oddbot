@@ -1,6 +1,8 @@
 // src/services/cacheService.js - ENHANCED WITH ERROR HANDLING
 
 import { sentryService } from './sentryService.js';
+// FIXED: Import pattern to match other services
+import redisClient from './redisService.js'; // Consistent with other services
 
 export default function makeCache(redis) {
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
