@@ -1,10 +1,10 @@
-// src/utils/enterpriseUtilities.js
+// src/utils/enterpriseUtilities.js - COMPLETE ENHANCED VERSION
 
 import { createHash } from 'crypto';
 import CryptoJS from 'crypto-js';
 import MerkleTree from 'merkletreejs';
 
-// --- NEW FUNCTION TO PREVENT TELEGRAM FORMATTING ERRORS ---
+// --- ENHANCED TELEGRAM MARKDOWN ESCAPING ---
 /**
  * Escapes characters that have special meaning in Telegram's MarkdownV2.
  * @param {string | number} text The text to escape.
@@ -17,6 +17,24 @@ export function escapeMarkdownV2(text) {
   return textString.replace(/([_*\[\]()~`>#\+\-=|{}.!])/g, '\\$1');
 }
 
+/**
+ * Comprehensive message sanitizer for Telegram with length management
+ * @param {string} text The text to sanitize
+ * @param {number} maxLength Maximum length (default 3800 for Telegram)
+ * @returns {string} Safe Telegram message
+ */
+export function safeTelegramMessage(text, maxLength = 3800) {
+  if (!text) return '';
+  
+  let safeText = escapeMarkdownV2(text);
+  
+  // Truncate if too long
+  if (safeText.length > maxLength) {
+    safeText = safeText.substring(0, maxLength - 3) + '...';
+  }
+  
+  return safeText;
+}
 
 // --- CONSOLIDATED ANALYSIS FUNCTIONS ---
 
