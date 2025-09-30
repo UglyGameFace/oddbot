@@ -690,173 +690,91 @@ async function callProvider(aiModel, prompt) {
   throw new Error(`Unexpected error in callProvider for ${aiModel}`);
 }
 
-// ---------- ENHANCED Service Class ----------
+// ---------- Service Class ----------
 class AIService {
   constructor() {
-    this.generationStats = {
-      totalRequests: 0,
-      successfulRequests: 0,
-      failedRequests: 0,
-      averageProcessingTime: 0,
-      lastRequest: null
-    };
+    this.generationStats = { totalRequests: 0, successfulRequests: 0, failedRequests: 0, averageProcessingTime: 0, lastRequest: null };
   }
 
+  // THIS IS THE CORRECTED generateParlay METHOD
   async generateParlay(sportKey, numLegs = 2, mode = 'web', aiModel = 'perplexity', betType = 'mixed', options = {}) {
-  const requestId = `parlay_${sportKey}_${Date.now()}`;
-  console.log(`🎯 Generating ${numLegs}-leg ${sportKey} parlay in ${mode} mode using ${aiModel} (${requestId})`);
-  
-  this.generationStats.totalRequests++;
-  this.generationStats.lastRequest = new Date().toISOString();
-  
-  const startTime = Date.now();
-  
-  try {
-    let result;
-    if (mode === 'web') {
-      result = await this._executeWithTimeout(
-        this.generateWebResearchParlay(sportKey, numLegs, aiModel, betType, options),
-        120000, // 120-second timeout for web research
-        `Web research for ${sportKey}`
-      );
-    } else {
-      result = await this.generateContextBasedParlay(sportKey, numLegs, betType, options);
-    }
-
-    const processingTime = Date.now() - startTime;
-    this._updateStats(true, processingTime);
+    const requestId = `parlay_${sportKey}_${Date.now()}`;
+    console.log(`🎯 Generating ${numLegs}-leg ${sportKey} parlay in ${mode} mode using ${aiModel} (${requestId})`);
     
-    console.log(`✅ Parlay generated successfully in ${processingTime}ms (${requestId})`);
-    return {
-      ...result,
-      metadata: { ...result.metadata, request_id: requestId, processing_time_ms: processingTime }
-    };
-
-  } catch (error) {
-    const processingTime = Date.now() - startTime;
-    this._updateStats(false, processingTime);
+    this.generationStats.totalRequests++;
+    this.generationStats.lastRequest = new Date().toISOString();
     
-    console.error(`❌ Parlay generation failed for ${requestId}:`, error.message);
-    sentryService.captureError(error, { 
-      component: 'ai_service', 
-      operation: 'generateParlay',
-      sportKey, mode, aiModel, requestId 
-    });
+    const startTime = Date.now();
     
-    // --- THIS IS THE FIX ---
-    // If web research fails, create a special error that tells the bot UI to offer fallback options.
-    if (mode === 'web') {
-      const fallbackError = new Error(`Web research failed: ${error.message}`);
-      fallbackError.fallbackAvailable = true; // This flag is read by ai.js
-      fallbackError.originalError = error.message;
-
-      // This data will be displayed to the user in the fallback menu
-      fallbackError.fallbackOptions = {
-        live_mode: { description: 'Use direct API data (may use quota).' },
-        db_mode: { description: 'Use stored historical data (may be outdated).', warning: 'Could not get real-time data.' }
-      };
-      fallbackError.dataFreshness = {
-        lastRefresh: new Date(Date.now() - 2 * 3600 * 1000).toISOString(), // Mock 2 hours old
-        hoursAgo: 2 
-      };
-      
-      throw fallbackError; // Throw the special error for the UI to catch
-    }
-    
-    // For other errors (like Live/DB mode failing), throw a standard error.
-    throw new Error(`Parlay generation failed: ${error.message} (${requestId})`);
-  }
-}
-    
-    // CRITICAL FIX: Automatic fallback to internal data
-    if (mode === 'web') {
-      console.log('🔄 Attempting automatic fallback to internal data...');
-      try {
-        const fallbackResult = await this.generateContextBasedParlay(sportKey, numLegs, betType, options);
-        console.log(`✅ Fallback parlay generated successfully with ${fallbackResult.parlay_legs.length} legs`);
-        
-        // Mark as fallback in metadata
-        fallbackResult.metadata = {
-          ...fallbackResult.metadata,
-          request_id: requestId,
-          processing_time_ms: processingTime,
-          service_version: '2.1-fixed',
-          fallback_used: true,
-          original_error: error.message
-        };
-        
-        return fallbackResult;
-      } catch (fallbackError) {
-        console.error('❌ Fallback also failed:', fallbackError.message);
+    try {
+      let result;
+      if (mode === 'web') {
+        result = await this._executeWithTimeout(
+          this.generateWebResearchParlay(sportKey, numLegs, aiModel, betType, options),
+          120000,
+          `Web research for ${sportKey}`
+        );
+      } else {
+        result = await this.generateContextBasedParlay(sportKey, numLegs, betType, options);
       }
+  
+      const processingTime = Date.now() - startTime;
+      this._updateStats(true, processingTime);
+      
+      console.log(`✅ Parlay generated successfully in ${processingTime}ms (${requestId})`);
+      return {
+        ...result,
+        metadata: { ...result.metadata, request_id: requestId, processing_time_ms: processingTime }
+      };
+  
+    } catch (error) {
+      const processingTime = Date.now() - startTime;
+      this._updateStats(false, processingTime);
+      
+      console.error(`❌ Parlay generation failed for ${requestId}:`, error.message);
+      sentryService.captureError(error, { 
+        component: 'ai_service', 
+        operation: 'generateParlay',
+        sportKey, mode, aiModel, requestId 
+      });
+      
+      if (mode === 'web') {
+        const fallbackError = new Error(`Web research failed: ${error.message}`);
+        fallbackError.fallbackAvailable = true;
+        fallbackError.originalError = error.message;
+        fallbackError.fallbackOptions = {
+          live_mode: { description: 'Use direct API data (may use quota).' },
+          db_mode: { description: 'Use stored historical data (may be outdated).', warning: 'Could not get real-time data.' }
+        };
+        fallbackError.dataFreshness = {
+          lastRefresh: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
+          hoursAgo: 2 
+        };
+        throw fallbackError;
+      }
+      
+      throw new Error(`Parlay generation failed: ${error.message} (${requestId})`);
     }
-    
-    sentryService.captureError(error, { 
-      component: 'ai_service', 
-      operation: 'generateParlay',
-      sportKey,
-      mode,
-      aiModel,
-      betType,
-      requestId,
-      processingTime 
-    });
-    
-    throw new Error(`Parlay generation failed: ${error.message} (${requestId})`);
   }
-}
 
-  // Enhanced Web Research with comprehensive error handling
   async generateWebResearchParlay(sportKey, numLegs, aiModel, betType, options = {}) {
     const hours = Number(options.horizonHours || 72);
-    const prompt = createAnalystPrompt({ sportKey, numLegs, betType, hours, tz: TZ });
-
+    const prompt = createAnalystPrompt({ sportKey, numLegs, betType, hours });
     console.log('📝 Sending enhanced prompt to AI...');
     const obj = await callProvider(aiModel, prompt);
-    
     if (!obj || !Array.isArray(obj.parlay_legs)) {
       throw new Error('AI returned invalid JSON structure - missing parlay_legs array');
     }
-
     console.log(`🔄 Processing ${obj.parlay_legs.length} potential legs...`);
-    
-    // Enhanced leg processing with validation
-    const legs = obj.parlay_legs
-      .map((leg, index) => {
-        try {
-          const normalized = normalizeLeg(leg);
-          if (!normalized) {
-            console.warn(`⚠️ Discarding invalid leg ${index + 1}:`, leg);
-          }
-          return normalized;
-        } catch (error) {
-          console.warn(`⚠️ Failed to normalize leg ${index + 1}:`, error.message);
-          return null;
-        }
-      })
-      .filter(leg => leg !== null)
-      .slice(0, numLegs);
-
-    if (legs.length === 0) {
-      throw new Error(`No valid ${sportKey} legs could be processed from AI response`);
-    }
-
+    const legs = obj.parlay_legs.map(normalizeLeg).filter(Boolean).slice(0, numLegs);
+    if (legs.length === 0) throw new Error(`No valid ${sportKey} legs could be processed`);
     console.log(`✅ Successfully processed ${legs.length} legs`);
-
-    // Enhanced parlay metrics
     const parlayDec = parlayDecimal(legs);
     const parlayAm = decimalToAmerican(parlayDec);
-
-    // Enhanced expected value calculation
     const fairProbs = legs.map(l => l.fair_prob).filter(v => v != null);
     const jointFair = fairProbs.length > 0 ? fairProbs.reduce((p, v) => p * v, 1) : null;
     const parlayEV = jointFair != null ? (jointFair * parlayDec - 1) : null;
-
-    // Enhanced data quality assessment
-    const dataQuality = this._assessParlayDataQuality(legs);
-
     console.log(`🎉 Parlay built successfully: ${legs.length} legs, ${parlayAm > 0 ? '+' : ''}${parlayAm} odds`);
-    
     return {
       parlay_legs: legs,
       confidence_score: typeof obj.confidence_score === 'number' ? clamp01(obj.confidence_score) : 0.75,
@@ -864,17 +782,8 @@ class AIService {
       parlay_odds_american: parlayAm,
       parlay_ev: parlayEV,
       sources: Array.isArray(obj.sources) ? obj.sources : [],
-      data_quality: dataQuality,
-      research_metadata: {
-        sport: sportKey,
-        legs_requested: numLegs,
-        legs_delivered: legs.length,
-        generated_at: new Date().toISOString(),
-        ai_model: aiModel,
-        research_time_hours: hours,
-        data_sources: obj.sources?.length || 0,
-        success_rate: (legs.length / obj.parlay_legs.length * 100).toFixed(1) + '%'
-      }
+      data_quality: this._assessParlayDataQuality(legs),
+      research_metadata: { sport: sportKey, legs_requested: numLegs, legs_delivered: legs.length, ai_model: aiModel }
     };
   }
 
