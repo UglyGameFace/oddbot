@@ -1,4 +1,5 @@
 // src/bot/handlers/custom.js
+
 import env from '../../config/env.js';
 import {
   getBuilderConfig,
@@ -30,13 +31,13 @@ const SPORT_TITLES = {
 const PREFERRED_FIRST = ['football_ncaaf', 'americanfootball_ncaaf'];
 const DEPRIORITIZE_LAST = ['hockey_nhl', 'icehockey_nhl'];
 
-const getSportEmoji = (key) =>
+const getSportEmoji = (key = '') =>
   key.includes('americanfootball') ? '🏈'
-    : key.includes('basketball') ? '🏀'
-    : key.includes('baseball') ? '⚾'
-    : key.includes('icehockey') || key.includes('hockey') ? '🏒'
-    : key.includes('soccer') ? '⚽'
-    : '🏆';
+  : key.includes('basketball') ? '🏀'
+  : key.includes('baseball') ? '⚾'
+  : key.includes('icehockey') || key.includes('hockey') ? '🏒'
+  : key.includes('soccer') ? '⚽'
+  : '🏆';
 
 function sortSports(sports) {
   const rank = (k) => {
@@ -55,7 +56,7 @@ function applyFilters(games, { cutoffHours, excludedTeams }) {
   const horizon = cutoffHours && cutoffHours > 0 ? now + cutoffHours * 3600 * 1000 : Number.POSITIVE_INFINITY;
   return (games || []).filter((g) => {
     const t = new Date(g.commence_time).getTime();
-    if (t > horizon) return false;
+    if (Number.isFinite(t) && t > horizon) return false;
     if (ex.length) {
       const a = (g.away_team || '').toLowerCase();
       const h = (g.home_team || '').toLowerCase();
@@ -65,11 +66,17 @@ function applyFilters(games, { cutoffHours, excludedTeams }) {
   });
 }
 
+// Normalize bookmakers whether coming straight from live odds or DB row
+function getBookmakers(g) {
+  return g?.bookmakers || g?.market_data?.bookmakers || [];
+}
+
 async function getCustomSelectedSports(chatId) {
   const redisClient = await redis;
   const s = await redisClient.get(`custom:sports:${chatId}`);
   return s ? JSON.parse(s) : [];
 }
+
 async function setCustomSelectedSports(chatId, arr) {
   const redisClient = await redis;
   await redisClient.set(`custom:sports:${chatId}`, JSON.stringify(arr), 'EX', 3600);
@@ -84,7 +91,6 @@ export function registerCustomCallbacks(bot) {
     const { data, message } = cbq || {};
     if (!data || !message || !data.startsWith('c')) return;
     const chatId = message.chat.id;
-
     try { await bot.answerCallbackQuery(cbq.id); } catch {}
 
     if (data === 'cback_sports') return sendCustomSportSelection(bot, chatId, message.message_id);
@@ -106,15 +112,16 @@ export function registerCustomCallbacks(bot) {
     }
 
     if (data.startsWith('cg_')) {
-      const gameId = data.substring(3);
-      return sendMarketSelection(bot, chatId, gameId, message.message_id);
+      const eventId = data.substring(3);
+      return sendMarketSelection(bot, chatId, eventId, message.message_id);
     }
 
     if (data.startsWith('cm_')) {
+      // cm_<eventId>_<marketKey or props>
       const parts = data.split('_');
-      const gameId = parts[1];
+      const eventId = parts[1];
       const marketKey = parts.slice(2).join('_');
-      return sendPickSelection(bot, chatId, gameId, marketKey, message.message_id);
+      return sendPickSelection(bot, chatId, eventId, marketKey, message.message_id);
     }
 
     if (data.startsWith('cp_')) {
@@ -131,27 +138,30 @@ export function registerCustomCallbacks(bot) {
         await setParlaySlip(chatId, { ...slip, messageId: null });
         return sendCustomSportSelection(bot, chatId);
       }
+
       if (action === 'clear') {
         try { if (slip.messageId) await bot.deleteMessage(chatId, slip.messageId); } catch {}
         await setParlaySlip(chatId, { picks: [], messageId: null, totalOdds: 0, stake: slip.stake || 10 });
         return bot.sendMessage(chatId, 'Parlay slip cleared.');
       }
+
       if (action === 'manage') {
         const rows = slip.picks.map((_, i) => [{ text: `Remove #${i + 1}`, callback_data: `cslip_rm_${i}` }]);
         rows.push([{ text: '« Back', callback_data: 'cslip_back' }]);
         return bot.sendMessage(chatId, 'Select a leg to remove:', { reply_markup: { inline_keyboard: rows } });
       }
-      if (action === 'back') return renderParlaySlip(bot, chatId);
-    }
 
-    if (data.startsWith('cslip_rm_')) {
-      const idx = parseInt(data.substring('cslip_rm_'.length), 10);
-      const slip = await getParlaySlip(chatId);
-      if (Number.isInteger(idx) && idx >= 0 && idx < slip.picks.length) {
-        slip.picks.splice(idx, 1);
-        await setParlaySlip(chatId, slip);
+      if (action === 'back') return renderParlaySlip(bot, chatId);
+
+      if (data.startsWith('cslip_rm_')) {
+        const idx = parseInt(data.substring('cslip_rm_'.length), 10);
+        const slip2 = await getParlaySlip(chatId);
+        if (Number.isInteger(idx) && idx >= 0 && idx < slip2.picks.length) {
+          slip2.picks.splice(idx, 1);
+          await setParlaySlip(chatId, slip2);
+        }
+        return renderParlaySlip(bot, chatId);
       }
-      return renderParlaySlip(bot, chatId);
     }
   });
 }
@@ -167,8 +177,8 @@ async function sendCustomSportSelection(bot, chatId, messageId = null) {
     const active = chosen.has(s.sport_key);
     const tok = await saveToken('csp', { sport_key: s.sport_key });
     const safeTitle = s?.sport_title ?? SPORT_TITLES[s.sport_key] ?? s.sport_key;
-    const text = `${active ? '✅' : '☑️'} ${getSportEmoji(s.sport_key)} ${safeTitle}`;
-    rows.push([{ text, callback_data: `csp_${tok}` }]);
+    const label = `${active ? '✅' : '☑️'} ${getSportEmoji(s.sport_key)} ${safeTitle}`;
+    rows.push([{ text: label, callback_data: `csp_${tok}` }]);
   }
   rows.push([{ text: 'Proceed with selected', callback_data: 'custom_sports_proceed' }]);
 
@@ -180,10 +190,9 @@ async function sendCustomSportSelection(bot, chatId, messageId = null) {
 
 async function sendCustomGamesFromSelected(bot, chatId, messageId) {
   const selected = await getCustomSelectedSports(chatId);
-  const sports = selected.length
-    ? selected
-    : (await gamesService.getAvailableSports()).map((s) => s.sport_key);
+  const sports = selected.length ? selected : (await gamesService.getAvailableSports()).map((s) => s.sport_key);
   const b = await getBuilderConfig(chatId);
+
   const perSport = await Promise.all(sports.map((k) => gamesService.getGamesForSport(k)));
   const pooled = applyFilters(perSport.flat(), { cutoffHours: b.cutoffHours, excludedTeams: b.excludedTeams });
 
@@ -193,34 +202,36 @@ async function sendCustomGamesFromSelected(bot, chatId, messageId) {
 
   const rows = pooled.slice(0, 10).map((g) => [{
     text: `${g.away_team} @ ${g.home_team} — ${formatGameTimeTZ(g.commence_time)}`,
-    callback_data: `cg_${g.id}`
+    callback_data: `cg_${g.event_id || g.id || g.game_id}`
   }]);
   rows.push([{ text: '« Back to Sports', callback_data: 'cback_sports' }]);
+
   await bot.editMessageText('Select a game:', { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: rows } });
 }
 
-async function sendMarketSelection(bot, chatId, gameId, messageId) {
-  const g = await gamesService.getGameDetails(gameId);
-  if (!g?.bookmakers?.length) {
+async function sendMarketSelection(bot, chatId, eventId, messageId) {
+  const g = await gamesService.getGameDetails(eventId);
+  const bks = getBookmakers(g);
+  if (!bks?.length) {
     return bot.editMessageText('Could not find market data.', { chat_id: chatId, message_id: messageId });
   }
-
-  const keys = g.bookmakers[0].markets.map((m) => m.key);
+  const keys = (bks[0]?.markets || []).map((m) => m.key);
   const row = [];
-  if (keys.includes('h2h')) row.push({ text: 'Moneyline', callback_data: `cm_${g.id}_h2h` });
-  if (keys.includes('spreads')) row.push({ text: 'Spreads', callback_data: `cm_${g.id}_spreads` });
-  if (keys.includes('totals')) row.push({ text: 'Totals', callback_data: `cm_${g.id}_totals` });
-  const rows = [row, [{ text: '« Back to Games', callback_data: 'custom_sports_proceed' }]];
+  if (keys.includes('h2h')) row.push({ text: 'Moneyline', callback_data: `cm_${g.event_id}_h2h` });
+  if (keys.includes('spreads')) row.push({ text: 'Spreads', callback_data: `cm_${g.event_id}_spreads` });
+  if (keys.includes('totals')) row.push({ text: 'Totals', callback_data: `cm_${g.event_id}_totals` });
 
+  const rows = [row, [{ text: '« Back to Games', callback_data: 'custom_sports_proceed' }]];
   await bot.editMessageText(
     `*${g.away_team} @ ${g.home_team}*\n${formatGameTimeTZ(g.commence_time)}\n\nSelect a market:`,
     { parse_mode: 'Markdown', chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: rows } }
   );
 }
 
-async function sendPickSelection(bot, chatId, gameId, marketKey, messageId) {
-  const g = await gamesService.getGameDetails(gameId);
-  const m = g?.bookmakers?.[0]?.markets?.find((x) => x.key === marketKey);
+async function sendPickSelection(bot, chatId, eventId, marketKey, messageId) {
+  const g = await gamesService.getGameDetails(eventId);
+  const bks = getBookmakers(g);
+  const m = bks?.[0]?.markets?.find((x) => x.key === marketKey);
   if (!m) {
     return bot.editMessageText('Market not available.', { chat_id: chatId, message_id: messageId });
   }
@@ -228,14 +239,14 @@ async function sendPickSelection(bot, chatId, gameId, marketKey, messageId) {
   const rows = [];
   for (const o of m.outcomes || []) {
     const tok = await saveToken('cp', {
-      gameId: g.id, marketKey, name: o.name, point: o.point ?? 0, price: o.price,
+      gameId: g.event_id, marketKey, name: o.name, point: o.point ?? 0, price: o.price,
       gameLabel: `${g.away_team} @ ${g.home_team}`, commence_time: g.commence_time || null
     });
     const pointText = o.point ? (o.point > 0 ? `+${o.point}` : `${o.point}`) : '';
     const priceText = o.price > 0 ? `+${o.price}` : `${o.price}`;
     rows.push([{ text: `${o.name} ${pointText} (${priceText})`, callback_data: `cp_${tok}` }]);
   }
-  rows.push([{ text: '« Back to Markets', callback_data: `cg_${g.id}` }]);
+  rows.push([{ text: '« Back to Markets', callback_data: `cg_${g.event_id}` }]);
 
   await bot.editMessageText(`Select your pick for *${marketKey}*:`, {
     parse_mode: 'Markdown', chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: rows }
@@ -245,6 +256,7 @@ async function sendPickSelection(bot, chatId, gameId, marketKey, messageId) {
 async function handlePickToken(bot, chatId, tok, messageId) {
   const p = await loadToken('cp', tok);
   if (!p) return;
+
   const b = await getBuilderConfig(chatId);
   const slip = await getParlaySlip(chatId);
 
@@ -252,6 +264,7 @@ async function handlePickToken(bot, chatId, tok, messageId) {
     await bot.sendMessage(chatId, 'Avoiding same‑game legs (toggle in /settings).');
     return;
   }
+
   if (p.price < b.minOdds || p.price > b.maxOdds) {
     await bot.sendMessage(chatId, `Pick outside allowed odds range (${b.minOdds} to ${b.maxOdds}).`);
     return;
@@ -262,6 +275,7 @@ async function handlePickToken(bot, chatId, tok, messageId) {
     game: p.gameLabel, selection: `${p.name} ${pointText}`.trim(), odds: parseInt(p.price, 10),
     marketKey: p.marketKey, gameId: p.gameId, commence_time: p.commence_time || null
   });
+
   await setParlaySlip(chatId, slip);
   try { await bot.deleteMessage(chatId, messageId); } catch {}
   await renderParlaySlip(bot, chatId);
