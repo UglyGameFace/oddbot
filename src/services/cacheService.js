@@ -1,8 +1,5 @@
-// src/services/cacheService.js - ENHANCED WITH ERROR HANDLING
-
+// src/services/cacheService.js - COMPLETE FIXED VERSION
 import { sentryService } from './sentryService.js';
-// FIXED: Import pattern to match other services
-import redisClient from './redisService.js'; // Consistent with other services
 
 export default function makeCache(redis) {
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -17,7 +14,7 @@ export default function makeCache(redis) {
       const cached = await redis.get(key);
       if (cached) {
         try {
-          return { getOrSetJSON, deleteKey, getKeys, flushPattern, getCacheInfo, keyInfo };
+          return JSON.parse(cached);
         } catch (parseError) {
           console.warn(`❌ Failed to parse cached JSON for key: ${key}`, parseError);
           // If cached data is corrupt, continue to refresh it
