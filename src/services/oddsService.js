@@ -1,10 +1,10 @@
-// src/services/oddsService.js - UPDATED TO MATCH NEW ARCHITECTURE
+// src/services/oddsService.js - COMPLETE FIXED VERSION
 import axios from 'axios';
 import env from '../config/env.js';
 import redisClient from './redisService.js';
 import { sentryService } from './sentryService.js';
 import rateLimitService from './rateLimitService.js';
-import cacheService from './cacheService.js';
+import makeCache from './cacheService.js';
 
 // Cache configuration aligned with other services
 const CACHE_TTL = {
@@ -94,6 +94,17 @@ class OddsService {
     
     // Sort providers by priority
     this.apiProviders.sort((a, b) => a.priority - b.priority);
+    
+    // Initialize cache
+    this.cache = null;
+  }
+
+  async _getCache() {
+    if (!this.cache) {
+      const redis = await redisClient;
+      this.cache = makeCache(redis);
+    }
+    return this.cache;
   }
 
   /**
@@ -103,8 +114,9 @@ class OddsService {
     const cacheKey = 'available_sports_odds';
     
     try {
-      const redis = await redisClient;
-      const cache = cacheService.getOrSetJSON(redis, cacheKey, CACHE_TTL.SPORTS, async () => {
+      const cache = await this._getCache();
+      
+      const sports = await cache.getOrSetJSON(cacheKey, CACHE_TTL.SPORTS, async () => {
         console.log('🔄 Fetching sports list from The Odds API...');
         
         try {
@@ -149,7 +161,7 @@ class OddsService {
         }
       });
 
-      return cache;
+      return sports;
 
     } catch (error) {
       console.error('❌ Sports list cache error:', error);
@@ -181,15 +193,14 @@ class OddsService {
     const cacheKey = `odds:${sportKey}:${regions}:${markets}:${oddsFormat}:${includeLive}:${hoursAhead}`;
     
     try {
-      const redis = await redisClient;
+      const cache = await this._getCache();
       
       if (!useCache) {
         console.log(`🔄 Bypassing cache for ${sportKey} odds...`);
         return await this._fetchSportOddsWithFallback(sportKey, options);
       }
 
-      return await cacheService.getOrSetJSON(
-        redis, 
+      return await cache.getOrSetJSON(
         cacheKey, 
         CACHE_TTL.ODDS,
         async () => {
@@ -226,15 +237,14 @@ class OddsService {
     const cacheKey = `player_props:${sportKey}:${gameId}:${scope}:${markets}:${oddsFormat}`;
     
     try {
-      const redis = await redisClient;
+      const cache = await this._getCache();
       
       if (!useCache) {
         console.log(`🔄 Bypassing cache for ${sportKey} player props...`);
         return await this._fetchPlayerProps(sportKey, gameId, options);
       }
 
-      return await cacheService.getOrSetJSON(
-        redis,
+      return await cache.getOrSetJSON(
         cacheKey,
         CACHE_TTL.PROPS,
         async () => {
