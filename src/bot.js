@@ -227,7 +227,7 @@ async function initializeBot() {
   console.log('🎉 Application startup complete!');
 }
 
-// Graceful shutdown
+// --- Graceful shutdown
 const shutdown = async (signal) => {
   console.log(`\n🛑 Received ${signal}. Starting graceful shutdown...`);
   isServiceReady = false;
@@ -237,10 +237,15 @@ const shutdown = async (signal) => {
   }
 
   try {
-    if (!USE_WEBHOOK && bot && bot.isPolling()) {
+    // FIX: Check if webhook mode is enabled properly
+    const useWebhook = (env.USE_WEBHOOK === true) || (env.APP_URL || '').startsWith('https');
+    
+    if (!useWebhook && bot && bot.isPolling()) {
       await bot.stopPolling({ cancel: true, reason: 'Graceful shutdown' });
       console.log('✅ Bot polling stopped.');
     }
+    
+    // Close Redis connection
     const redis = await redisClient;
     await redis.quit();
     console.log('✅ Redis connection closed.');
@@ -248,6 +253,7 @@ const shutdown = async (signal) => {
     console.warn('⚠️ Error during bot/redis shutdown:', error.message);
   }
 
+  // Close HTTP server
   if (server) {
     server.close(() => {
       console.log('✅ HTTP server closed.');
