@@ -47,6 +47,65 @@ let server;
 let keepAliveInterval;
 let isServiceReady = false;
 let healthCheckCount = 0;
+let initializationPromise = null;
+
+// --- Utility Functions
+
+/**
+ * Validate required environment variables
+ */
+function validateEnvironment() {
+  const required = ['TELEGRAM_BOT_TOKEN'];
+  const missing = required.filter(key => !env[key]);
+  
+  if (missing.length > 0) {
+    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+  }
+
+  // Log webhook configuration for debugging
+  console.log('🔧 Webhook Configuration:', {
+    USE_WEBHOOK: env.USE_WEBHOOK,
+    APP_URL: env.APP_URL ? `${env.APP_URL.substring(0, 20)}...` : 'Not set',
+    HAS_WEBHOOK_SECRET: !!WEBHOOK_SECRET
+  });
+}
+
+/**
+ * Safely edit Telegram messages to avoid inline keyboard errors
+ */
+async function safeEditMessage(chatId, messageId, text, options = {}) {
+  try {
+    // Ensure we have some markup to avoid "inline keyboard expected" error
+    const editOptions = {
+      ...options,
+      parse_mode: options.parse_mode || 'HTML'
+    };
+    
+    // If the original message had a keyboard, we must include one when editing
+    if (!editOptions.reply_markup) {
+      // Provide empty inline keyboard if no markup specified
+      editOptions.reply_markup = { inline_keyboard: [] };
+    }
+    
+    return await bot.editMessageText(text, {
+      chat_id: chatId,
+      message_id: messageId,
+      ...editOptions
+    });
+  } catch (error) {
+    if (error.response?.body?.error_code === 400 && 
+        error.response.body.description.includes('inline keyboard expected')) {
+      // Retry with explicit empty keyboard
+      return await bot.editMessageText(text, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: options.parse_mode || 'HTML',
+        reply_markup: { inline_keyboard: [] }
+      });
+    }
+    throw error;
+  }
+}
 
 // --- Health endpoints (Defined and started immediately)
 app.get('/health', (_req, res) => res.sendStatus(200));
@@ -96,9 +155,11 @@ app.get('/healthz', async (_req, res) => {
 app.get('/liveness', async (_req, res) => {
   healthCheckCount++;
   console.log(`✅ /liveness check #${healthCheckCount}`);
-  res.status(isServiceReady ? 200 : 503).json({
-    status: isServiceReady ? 'LIVE' : 'STARTING',
-    ready: isServiceReady,
+  
+  // Consider live if server is running, even if still initializing
+  res.status(200).json({
+    status: 'LIVE',
+    initializing: !isServiceReady,
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     checks: healthCheckCount
@@ -108,13 +169,16 @@ app.get('/liveness', async (_req, res) => {
 app.get('/readiness', async (_req, res) => {
   healthCheckCount++;
   console.log(`✅ /readiness check #${healthCheckCount}`);
+  
   if (!isServiceReady) {
     return res.status(503).json({
       status: 'NOT_READY',
+      initializing: true,
       checks: healthCheckCount,
       uptime: process.uptime()
     });
   }
+  
   try {
     const healthReport = await healthService.getHealth();
     const isReady = healthReport.ok;
@@ -145,86 +209,103 @@ server = app.listen(PORT, HOST, () => {
 
 // Main async function to initialize bot and services
 async function initializeBot() {
-  console.log('🚀 Starting ParlayBot initialization...');
-
-  if (!TOKEN) throw new Error('TELEGRAM_BOT_TOKEN is required');
-  bot = new TelegramBot(TOKEN, { polling: !USE_WEBHOOK });
-
-  // Register handlers
-  registerAnalytics(bot); registerModel(bot); registerCacheHandler(bot);
-  registerCustom(bot); registerCustomCallbacks(bot);
-  registerAI(bot); registerAICallbacks(bot); registerQuant(bot);
-  registerPlayer(bot); registerPlayerCallbacks(bot);
-  registerSettings(bot); registerSettingsCallbacks(bot);
-  registerSystem(bot); registerSystemCallbacks(bot);
-  registerTools(bot); registerCommonCallbacks(bot);
-  registerChat(bot);
-  console.log('✅ All handlers registered.');
-
-  app.use(express.json());
-  sentryService.attachExpressPreRoutes?.(app);
-
-  // Webhook setup
-  if (USE_WEBHOOK) {
-    console.log('🌐 Configuring webhook mode...');
-    const webhookPath = `/webhook/${TOKEN}`;
-    const targetWebhookUrl = `${APP_URL}${webhookPath}`;
-
-    const currentWebhook = await bot.getWebHookInfo();
-    if (currentWebhook.url !== targetWebhookUrl) {
-      await bot.setWebHook(targetWebhookUrl, {
-        secret_token: WEBHOOK_SECRET || undefined,
-      });
-      console.log(`✅ Webhook set: ${targetWebhookUrl}`);
-    } else {
-      console.log('✅ Webhook is already correctly configured.');
-    }
-
-    app.post(
-      webhookPath,
-      (req, res, next) => {
-        if (WEBHOOK_SECRET) {
-          const incoming = req.headers['x-telegram-bot-api-secret-token'];
-          if (incoming !== WEBHOOK_SECRET) return res.sendStatus(403);
-        }
-        next();
-      },
-      (req, res) => {
-        bot.processUpdate(req.body);
-        res.sendStatus(200);
-      }
-    );
+  // Prevent multiple concurrent initializations
+  if (initializationPromise) {
+    return initializationPromise;
   }
+  
+  initializationPromise = (async () => {
+    try {
+      console.log('🚀 Starting ParlayBot initialization...');
+      validateEnvironment();
 
-  sentryService.attachExpressPostRoutes?.(app);
+      if (!TOKEN) throw new Error('TELEGRAM_BOT_TOKEN is required');
+      bot = new TelegramBot(TOKEN, { polling: !USE_WEBHOOK });
 
-  // Mark service as ready AFTER server is confirmed listening
-  isServiceReady = true;
-  console.log('🎯 Service marked as ready for health checks');
+      // Register handlers
+      registerAnalytics(bot); registerModel(bot); registerCacheHandler(bot);
+      registerCustom(bot); registerCustomCallbacks(bot);
+      registerAI(bot); registerAICallbacks(bot); registerQuant(bot);
+      registerPlayer(bot); registerPlayerCallbacks(bot);
+      registerSettings(bot); registerSettingsCallbacks(bot);
+      registerSystem(bot); registerSystemCallbacks(bot);
+      registerTools(bot); registerCommonCallbacks(bot);
+      registerChat(bot);
+      console.log('✅ All handlers registered.');
 
-  // Telegram commands
-  const commands = [
-    { command: 'ai', description: 'Launch the AI Parlay Builder' },
-    { command: 'chat', description: 'Ask questions (compact chatbot)' },
-    { command: 'custom', description: 'Manually build a parlay slip' },
-    { command: 'player', description: 'Find props for a specific player' },
-    { command: 'settings', description: 'Configure bot preferences' },
-    { command: 'status', description: 'Check bot operational status' },
-    { command: 'tools', description: 'Access admin tools' },
-    { command: 'help', description: 'Show the command guide' },
-  ];
-  await bot.setMyCommands(commands);
-  const me = await bot.getMe();
-  console.log(`✅ Bot @${me.username} fully initialized.`);
+      app.use(express.json());
+      sentryService.attachExpressPreRoutes?.(app);
 
-  // Liveness heartbeat
-  keepAliveInterval = setInterval(() => {
-    if (isServiceReady) {
-      console.log('🤖 Bot active - uptime:', Math.round(process.uptime()), 'seconds');
+      // Webhook setup
+      if (USE_WEBHOOK) {
+        console.log('🌐 Configuring webhook mode...');
+        const webhookPath = `/webhook/${TOKEN}`;
+        const targetWebhookUrl = `${APP_URL}${webhookPath}`;
+
+        const currentWebhook = await bot.getWebHookInfo();
+        if (currentWebhook.url !== targetWebhookUrl) {
+          await bot.setWebHook(targetWebhookUrl, {
+            secret_token: WEBHOOK_SECRET || undefined,
+          });
+          console.log(`✅ Webhook set: ${targetWebhookUrl}`);
+        } else {
+          console.log('✅ Webhook is already correctly configured.');
+        }
+
+        app.post(
+          webhookPath,
+          (req, res, next) => {
+            if (WEBHOOK_SECRET) {
+              const incoming = req.headers['x-telegram-bot-api-secret-token'];
+              if (incoming !== WEBHOOK_SECRET) return res.sendStatus(403);
+            }
+            next();
+          },
+          (req, res) => {
+            bot.processUpdate(req.body);
+            res.sendStatus(200);
+          }
+        );
+      }
+
+      sentryService.attachExpressPostRoutes?.(app);
+
+      // Mark service as ready AFTER server is confirmed listening
+      isServiceReady = true;
+      console.log('🎯 Service marked as ready for health checks');
+
+      // Telegram commands
+      const commands = [
+        { command: 'ai', description: 'Launch the AI Parlay Builder' },
+        { command: 'chat', description: 'Ask questions (compact chatbot)' },
+        { command: 'custom', description: 'Manually build a parlay slip' },
+        { command: 'player', description: 'Find props for a specific player' },
+        { command: 'settings', description: 'Configure bot preferences' },
+        { command: 'status', description: 'Check bot operational status' },
+        { command: 'tools', description: 'Access admin tools' },
+        { command: 'help', description: 'Show the command guide' },
+      ];
+      await bot.setMyCommands(commands);
+      const me = await bot.getMe();
+      console.log(`✅ Bot @${me.username} fully initialized.`);
+
+      // Liveness heartbeat
+      keepAliveInterval = setInterval(() => {
+        if (isServiceReady) {
+          console.log('🤖 Bot active - uptime:', Math.round(process.uptime()), 'seconds');
+        }
+      }, 600000);
+
+      console.log('🎉 Application startup complete!');
+      return true;
+    } catch (error) {
+      isServiceReady = false;
+      initializationPromise = null;
+      throw error;
     }
-  }, 600000);
-
-  console.log('🎉 Application startup complete!');
+  })();
+  
+  return initializationPromise;
 }
 
 // --- Graceful shutdown
@@ -270,6 +351,9 @@ const shutdown = async (signal) => {
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+
+// Export the safeEditMessage function for use in handlers
+export { safeEditMessage };
 
 // Kick off the initialization
 initializeBot().catch((error) => {
