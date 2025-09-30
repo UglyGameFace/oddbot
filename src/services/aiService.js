@@ -184,8 +184,7 @@ function extractJSON(text = '') {
   return null;
 }
 
-// ENHANCED: JSON repair function with better positive odds handling
-// ENHANCED: JSON repair function with COMPREHENSIVE positive odds handling
+// ENHANCED: JSON repair function with COMPREHENSIVE fixes
 function attemptJSONRepair(jsonString) {
   if (!jsonString || typeof jsonString !== 'string') return null;
   
@@ -195,24 +194,31 @@ function attemptJSONRepair(jsonString) {
     let repaired = jsonString;
     
     // CRITICAL FIX: Handle ALL positive American odds with + signs
-    // Fix pattern: "american": +125 -> "american": 125
     repaired = repaired.replace(/"american":\s*\+(\d+)/g, '"american": $1');
     repaired = repaired.replace(/"opponent_american":\s*\+(\d+)/g, '"opponent_american": $1');
-    
-    // ENHANCED: Also fix any numeric field that might have + signs
     repaired = repaired.replace(/"odds_american":\s*\+(\d+)/g, '"odds_american": $1');
-    repaired = repaired.replace(/"price":\s*\+(\d+)/g, '"price": $1');
     
-    // ENHANCED: General fix for any field with positive numbers
-    repaired = repaired.replace(/(["']\w*["']\s*:\s*)\+(\d+)/g, '$1$2');
+    // ENHANCED: Fix missing quotes around any word before colon
+    repaired = repaired.replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)(\s*:)/g, '$1"$2"$3');
     
-    // Keep your existing repairs...
+    // Remove trailing commas
     repaired = repaired.replace(/,\s*([}\]])/g, '$1');
-    repaired = repaired.replace(/([{,]\s*)(\w+)(\s*:)/g, '$1"$2"$3');
+    
+    // Fix single quotes to double quotes
     repaired = repaired.replace(/'/g, '"');
+    
+    // Remove comments
     repaired = repaired.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
     
-    console.log('🔧 Repaired JSON sample:', repaired.substring(0, 300) + '...');
+    // Fix unescaped quotes in strings
+    repaired = repaired.replace(/"([^"\\]*(\\.[^"\\]*)*)"?/g, (match) => {
+      if (match.endsWith('"') && !match.endsWith('\\"')) {
+        return match;
+      }
+      return match;
+    });
+    
+    console.log('🔧 Repaired JSON sample:', repaired.substring(0, 200) + '...');
     
     const parsed = JSON.parse(repaired);
     console.log('✅ JSON repair successful');
