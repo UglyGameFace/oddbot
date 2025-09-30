@@ -4,8 +4,9 @@ import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
 import { sentryService } from './services/sentryService.js';
 import healthService from './services/healthService.js';
+import redisClient from './services/redisService.js';
 
-// --- Your handler/module imports
+// --- Handler imports
 import { registerAnalytics } from './bot/handlers/analytics.js';
 import { registerModel } from './bot/handlers/model.js';
 import { registerCacheHandler } from './bot/handlers/cache.js';
@@ -16,7 +17,9 @@ import { registerPlayer, registerPlayerCallbacks } from './bot/handlers/player.j
 import { registerSettings, registerSettingsCallbacks } from './bot/handlers/settings.js';
 import { registerSystem, registerSystemCallbacks } from './bot/handlers/system.js';
 import { registerTools, registerCommonCallbacks } from './bot/handlers/tools.js';
+import { registerChat } from './bot/handlers/chat.js';
 
+// --- Global error hooks
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ UNHANDLED REJECTION AT:', promise, 'REASON:', reason);
   sentryService.captureError(new Error(`Unhandled Rejection: ${reason}`), { extra: { promise } });
@@ -28,6 +31,7 @@ process.on('uncaughtException', (error) => {
   process.exit(1);
 });
 
+// --- App and bot bootstrap
 const app = express();
 
 const TOKEN = env.TELEGRAM_BOT_TOKEN;
@@ -35,6 +39,7 @@ if (!TOKEN) {
   console.error('TELEGRAM_BOT_TOKEN is required');
   process.exit(1);
 }
+
 const APP_URL = env.APP_URL || '';
 const WEBHOOK_SECRET = (env.WEBHOOK_SECRET || env.TELEGRAM_WEBHOOK_SECRET || env.TG_WEBHOOK_SECRET || '').trim();
 const USE_WEBHOOK = (env.USE_WEBHOOK === true) || APP_URL.startsWith('https');
@@ -48,6 +53,7 @@ let isServiceReady = false;
 let healthCheckCount = 0;
 const startupTime = Date.now();
 
+// --- Health endpoints
 app.get('/health', (_req, res) => res.sendStatus(200));
 
 app.get('/', (_req, res) => {
@@ -144,6 +150,7 @@ let keepAliveInterval;
 async function main() {
   console.log('🚀 Starting ParlayBot initialization...');
 
+  // Register handlers
   registerAnalytics(bot); registerModel(bot); registerCacheHandler(bot);
   registerCustom(bot); registerCustomCallbacks(bot);
   registerAI(bot); registerAICallbacks(bot); registerQuant(bot);
@@ -151,17 +158,19 @@ async function main() {
   registerSettings(bot); registerSettingsCallbacks(bot);
   registerSystem(bot); registerSystemCallbacks(bot);
   registerTools(bot); registerCommonCallbacks(bot);
+  registerChat(bot); // chatbot
   console.log('✅ All handlers registered.');
 
   app.use(express.json());
   sentryService.attachExpressPreRoutes?.(app);
 
+  // Webhook setup
   if (USE_WEBHOOK) {
     console.log('🌐 Configuring webhook mode...');
     const webhookPath = `/webhook/${TOKEN}`;
     const targetWebhookUrl = `${APP_URL}${webhookPath}`;
 
-    // **FIX:** Check current webhook before setting a new one to prevent rate-limiting.
+    // Prevent rate-limit by only setting when changed
     const currentWebhook = await bot.getWebHookInfo();
     if (currentWebhook.url !== targetWebhookUrl) {
       await bot.setWebHook(targetWebhookUrl, {
@@ -196,8 +205,10 @@ async function main() {
     console.log('🎯 Service marked as ready for health checks');
   });
 
+  // Telegram commands
   const commands = [
     { command: 'ai', description: 'Launch the AI Parlay Builder' },
+    { command: 'chat', description: 'Ask questions (compact chatbot)' },
     { command: 'custom', description: 'Manually build a parlay slip' },
     { command: 'player', description: 'Find props for a specific player' },
     { command: 'settings', description: 'Configure bot preferences' },
@@ -209,6 +220,7 @@ async function main() {
   const me = await bot.getMe();
   console.log(`✅ Bot @${me.username} fully initialized.`);
 
+  // Liveness heartbeat
   keepAliveInterval = setInterval(() => {
     if (isServiceReady) {
       console.log('🤖 Bot active - uptime:', Math.round(process.uptime()), 'seconds');
@@ -218,8 +230,7 @@ async function main() {
   console.log('🎉 Application startup complete!');
 }
 
-// **FIX:** Graceful shutdown logic to handle Railway restarts cleanly.
-// In bot.js, replace the shutdown function:
+// Graceful shutdown
 const shutdown = async (signal) => {
   console.log(`\n🛑 Received ${signal}. Starting graceful shutdown...`);
   isServiceReady = false;
@@ -230,19 +241,22 @@ const shutdown = async (signal) => {
 
   try {
     if (USE_WEBHOOK) {
+      // Keep webhook as-is for next deployment
       console.log('✅ Webhook retained for next deployment.');
     } else if (bot.isPolling()) {
       await bot.stopPolling({ cancel: true, reason: 'Graceful shutdown' });
       console.log('✅ Bot polling stopped.');
     }
-    
-    // NEW: Close Redis connection
-    const redis = await redisClient;
-    await redis.quit();
-    console.log('✅ Redis connection closed.');
-    
+
+    try {
+      const redis = await redisClient;
+      await redis.quit();
+      console.log('✅ Redis connection closed.');
+    } catch (re) {
+      console.warn('⚠️ Redis shutdown warning:', re?.message || re);
+    }
   } catch (error) {
-    console.warn('⚠️ Error during shutdown:', error.message);
+    console.warn('⚠️ Error during bot shutdown:', error.message);
   }
 
   if (server) {
@@ -252,9 +266,21 @@ const shutdown = async (signal) => {
     });
     setTimeout(() => {
       console.warn('⚠️ Forcing shutdown after timeout...');
-      process.exit(0); // Changed from exit(1)
-    }, 5000); // Reduced from 8000
+      process.exit(0);
+    }, 5000);
   } else {
     process.exit(0);
   }
 };
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+main().catch((error) => {
+  console.error('💥 Fatal initialization error:', error.message);
+  sentryService.captureError(error);
+  // Don't exit immediately on rate limit, allow the shutdown process to handle it.
+  if (!String(error.message).includes('429')) {
+    process.exit(1);
+  }
+});
