@@ -15,7 +15,7 @@ export default function makeCache(redis) {
       const cached = await redis.get(key);
       if (cached) {
         try {
-          return JSON.parse(cached);
+          return { getOrSetJSON, deleteKey, getKeys, flushPattern, getCacheInfo, keyInfo };
         } catch (parseError) {
           console.warn(`❌ Failed to parse cached JSON for key: ${key}`, parseError);
           // If cached data is corrupt, continue to refresh it
