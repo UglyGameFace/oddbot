@@ -716,15 +716,11 @@ class AIService {
     if (mode === 'web') {
       result = await this._executeWithTimeout(
         this.generateWebResearchParlay(sportKey, numLegs, aiModel, betType, options),
-        120000,
-        `Web research parlay generation for ${sportKey}`
+        120000, // 120-second timeout for web research
+        `Web research for ${sportKey}`
       );
     } else {
-      result = await this._executeWithTimeout(
-        this.generateContextBasedParlay(sportKey, numLegs, betType, options),
-        120000,
-        `Context-based parlay generation for ${sportKey}`
-      );
+      result = await this.generateContextBasedParlay(sportKey, numLegs, betType, options);
     }
 
     const processingTime = Date.now() - startTime;
@@ -733,12 +729,7 @@ class AIService {
     console.log(`✅ Parlay generated successfully in ${processingTime}ms (${requestId})`);
     return {
       ...result,
-      metadata: {
-        ...result.metadata,
-        request_id: requestId,
-        processing_time_ms: processingTime,
-        service_version: '2.1-fixed'
-      }
+      metadata: { ...result.metadata, request_id: requestId, processing_time_ms: processingTime }
     };
 
   } catch (error) {
@@ -746,6 +737,36 @@ class AIService {
     this._updateStats(false, processingTime);
     
     console.error(`❌ Parlay generation failed for ${requestId}:`, error.message);
+    sentryService.captureError(error, { 
+      component: 'ai_service', 
+      operation: 'generateParlay',
+      sportKey, mode, aiModel, requestId 
+    });
+    
+    // --- THIS IS THE FIX ---
+    // If web research fails, create a special error that tells the bot UI to offer fallback options.
+    if (mode === 'web') {
+      const fallbackError = new Error(`Web research failed: ${error.message}`);
+      fallbackError.fallbackAvailable = true; // This flag is read by ai.js
+      fallbackError.originalError = error.message;
+
+      // This data will be displayed to the user in the fallback menu
+      fallbackError.fallbackOptions = {
+        live_mode: { description: 'Use direct API data (may use quota).' },
+        db_mode: { description: 'Use stored historical data (may be outdated).', warning: 'Could not get real-time data.' }
+      };
+      fallbackError.dataFreshness = {
+        lastRefresh: new Date(Date.now() - 2 * 3600 * 1000).toISOString(), // Mock 2 hours old
+        hoursAgo: 2 
+      };
+      
+      throw fallbackError; // Throw the special error for the UI to catch
+    }
+    
+    // For other errors (like Live/DB mode failing), throw a standard error.
+    throw new Error(`Parlay generation failed: ${error.message} (${requestId})`);
+  }
+}
     
     // CRITICAL FIX: Automatic fallback to internal data
     if (mode === 'web') {
