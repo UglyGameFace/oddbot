@@ -219,6 +219,7 @@ async function main() {
 }
 
 // **FIX:** Graceful shutdown logic to handle Railway restarts cleanly.
+// In bot.js, replace the shutdown function:
 const shutdown = async (signal) => {
   console.log(`\n🛑 Received ${signal}. Starting graceful shutdown...`);
   isServiceReady = false;
@@ -229,14 +230,19 @@ const shutdown = async (signal) => {
 
   try {
     if (USE_WEBHOOK) {
-      // It's often better to leave the webhook on Telegram's side unless you're changing URLs.
       console.log('✅ Webhook retained for next deployment.');
     } else if (bot.isPolling()) {
-      await bot.stopPolling({ cancel: true });
+      await bot.stopPolling({ cancel: true, reason: 'Graceful shutdown' });
       console.log('✅ Bot polling stopped.');
     }
+    
+    // NEW: Close Redis connection
+    const redis = await redisClient;
+    await redis.quit();
+    console.log('✅ Redis connection closed.');
+    
   } catch (error) {
-    console.warn('⚠️ Error during bot shutdown:', error.message);
+    console.warn('⚠️ Error during shutdown:', error.message);
   }
 
   if (server) {
@@ -245,22 +251,10 @@ const shutdown = async (signal) => {
       process.exit(0);
     });
     setTimeout(() => {
-      console.error('⚠️ Forcing shutdown after timeout...');
-      process.exit(1);
-    }, 8000);
+      console.warn('⚠️ Forcing shutdown after timeout...');
+      process.exit(0); // Changed from exit(1)
+    }, 5000); // Reduced from 8000
   } else {
     process.exit(0);
   }
 };
-
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
-
-main().catch((error) => {
-  console.error('💥 Fatal initialization error:', error.message);
-  sentryService.captureError(error);
-  // Don't exit immediately on rate limit, allow the shutdown process to handle it.
-  if (!String(error.message).includes('429')) {
-    process.exit(1);
-  }
-});
