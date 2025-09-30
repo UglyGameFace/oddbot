@@ -1,4 +1,4 @@
-// src/bot.js
+// src/bot.js - COMPLETELY FIXED VERSION
 import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
@@ -36,11 +36,11 @@ const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = '0.0.0.0';
 
-// --- Global Config & State (FIXED: Moved to global scope for access by all functions)
+// --- Global Config & State
 const TOKEN = env.TELEGRAM_BOT_TOKEN;
 const APP_URL = env.APP_URL || '';
 const WEBHOOK_SECRET = (env.WEBHOOK_SECRET || env.TELEGRAM_WEBHOOK_SECRET || env.TG_WEBHOOK_SECRET || '').trim();
-const USE_WEBHOOK = (env.USE_WEBHOOK === true) || APP_URL.startsWith('https');
+const USE_WEBHOOK = (env.USE_WEBHOOK === true) || (env.APP_URL || '').startsWith('https');
 
 let bot;
 let server;
@@ -62,9 +62,8 @@ function validateEnvironment() {
     throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
   }
 
-  // Log webhook configuration for debugging
   console.log('🔧 Webhook Configuration:', {
-    USE_WEBHOOK: env.USE_WEBHOOK,
+    USE_WEBHOOK: USE_WEBHOOK,
     APP_URL: env.APP_URL ? `${env.APP_URL.substring(0, 20)}...` : 'Not set',
     HAS_WEBHOOK_SECRET: !!WEBHOOK_SECRET
   });
@@ -74,16 +73,19 @@ function validateEnvironment() {
  * Safely edit Telegram messages to avoid inline keyboard errors
  */
 async function safeEditMessage(chatId, messageId, text, options = {}) {
+  if (!bot) {
+    console.warn('⚠️ Bot not initialized, cannot edit message');
+    return;
+  }
+
   try {
-    // Ensure we have some markup to avoid "inline keyboard expected" error
     const editOptions = {
-      ...options,
-      parse_mode: options.parse_mode || 'HTML'
+      parse_mode: 'HTML',
+      ...options
     };
     
-    // If the original message had a keyboard, we must include one when editing
+    // Always provide reply_markup to avoid "inline keyboard expected" error
     if (!editOptions.reply_markup) {
-      // Provide empty inline keyboard if no markup specified
       editOptions.reply_markup = { inline_keyboard: [] };
     }
     
@@ -95,6 +97,7 @@ async function safeEditMessage(chatId, messageId, text, options = {}) {
   } catch (error) {
     if (error.response?.body?.error_code === 400 && 
         error.response.body.description.includes('inline keyboard expected')) {
+      console.log('🔄 Retrying message edit with explicit empty keyboard...');
       // Retry with explicit empty keyboard
       return await bot.editMessageText(text, {
         chat_id: chatId,
@@ -103,11 +106,20 @@ async function safeEditMessage(chatId, messageId, text, options = {}) {
         reply_markup: { inline_keyboard: [] }
       });
     }
+    
+    // Log but don't throw for common Telegram errors
+    if (error.response?.body?.error_code === 400 && 
+        error.response.body.description.includes('message to edit not found')) {
+      console.warn('⚠️ Message to edit not found, likely already deleted');
+      return;
+    }
+    
+    console.error('❌ Message edit failed:', error.message);
     throw error;
   }
 }
 
-// --- Health endpoints (Defined and started immediately)
+// --- Health endpoints
 app.get('/health', (_req, res) => res.sendStatus(200));
 
 app.get('/', (_req, res) => {
@@ -156,7 +168,7 @@ app.get('/liveness', async (_req, res) => {
   healthCheckCount++;
   console.log(`✅ /liveness check #${healthCheckCount}`);
   
-  // Consider live if server is running, even if still initializing
+  // Always return 200 for liveness - container should only restart if process dies
   res.status(200).json({
     status: 'LIVE',
     initializing: !isServiceReady,
@@ -220,16 +232,37 @@ async function initializeBot() {
       validateEnvironment();
 
       if (!TOKEN) throw new Error('TELEGRAM_BOT_TOKEN is required');
-      bot = new TelegramBot(TOKEN, { polling: !USE_WEBHOOK });
+      
+      // Initialize bot with appropriate mode
+      const botOptions = {
+        polling: !USE_WEBHOOK,
+        // Add better error handling for webhook mode
+        request: {
+          timeout: 30000,
+          agent: null
+        }
+      };
+      
+      bot = new TelegramBot(TOKEN, botOptions);
 
       // Register handlers
-      registerAnalytics(bot); registerModel(bot); registerCacheHandler(bot);
-      registerCustom(bot); registerCustomCallbacks(bot);
-      registerAI(bot); registerAICallbacks(bot); registerQuant(bot);
-      registerPlayer(bot); registerPlayerCallbacks(bot);
-      registerSettings(bot); registerSettingsCallbacks(bot);
-      registerSystem(bot); registerSystemCallbacks(bot);
-      registerTools(bot); registerCommonCallbacks(bot);
+      console.log('🔧 Registering handlers...');
+      registerAnalytics(bot); 
+      registerModel(bot); 
+      registerCacheHandler(bot);
+      registerCustom(bot); 
+      registerCustomCallbacks(bot);
+      registerAI(bot); 
+      registerAICallbacks(bot); 
+      registerQuant(bot);
+      registerPlayer(bot); 
+      registerPlayerCallbacks(bot);
+      registerSettings(bot); 
+      registerSettingsCallbacks(bot);
+      registerSystem(bot); 
+      registerSystemCallbacks(bot);
+      registerTools(bot); 
+      registerCommonCallbacks(bot);
       registerChat(bot);
       console.log('✅ All handlers registered.');
 
@@ -242,35 +275,45 @@ async function initializeBot() {
         const webhookPath = `/webhook/${TOKEN}`;
         const targetWebhookUrl = `${APP_URL}${webhookPath}`;
 
-        const currentWebhook = await bot.getWebHookInfo();
-        if (currentWebhook.url !== targetWebhookUrl) {
-          await bot.setWebHook(targetWebhookUrl, {
-            secret_token: WEBHOOK_SECRET || undefined,
-          });
-          console.log(`✅ Webhook set: ${targetWebhookUrl}`);
-        } else {
-          console.log('✅ Webhook is already correctly configured.');
-        }
-
-        app.post(
-          webhookPath,
-          (req, res, next) => {
-            if (WEBHOOK_SECRET) {
-              const incoming = req.headers['x-telegram-bot-api-secret-token'];
-              if (incoming !== WEBHOOK_SECRET) return res.sendStatus(403);
-            }
-            next();
-          },
-          (req, res) => {
-            bot.processUpdate(req.body);
-            res.sendStatus(200);
+        try {
+          const currentWebhook = await bot.getWebHookInfo();
+          if (currentWebhook.url !== targetWebhookUrl) {
+            await bot.setWebHook(targetWebhookUrl, {
+              secret_token: WEBHOOK_SECRET || undefined,
+            });
+            console.log(`✅ Webhook set: ${targetWebhookUrl}`);
+          } else {
+            console.log('✅ Webhook is already correctly configured.');
           }
-        );
+
+          app.post(
+            webhookPath,
+            (req, res, next) => {
+              if (WEBHOOK_SECRET) {
+                const incoming = req.headers['x-telegram-bot-api-secret-token'];
+                if (incoming !== WEBHOOK_SECRET) {
+                  console.warn('⚠️ Webhook secret mismatch');
+                  return res.sendStatus(403);
+                }
+              }
+              next();
+            },
+            (req, res) => {
+              bot.processUpdate(req.body);
+              res.sendStatus(200);
+            }
+          );
+        } catch (webhookError) {
+          console.error('❌ Webhook configuration failed:', webhookError.message);
+          throw webhookError;
+        }
+      } else {
+        console.log('🔍 Using polling mode...');
       }
 
       sentryService.attachExpressPostRoutes?.(app);
 
-      // Mark service as ready AFTER server is confirmed listening
+      // Mark service as ready AFTER everything is initialized
       isServiceReady = true;
       console.log('🎯 Service marked as ready for health checks');
 
@@ -285,22 +328,29 @@ async function initializeBot() {
         { command: 'tools', description: 'Access admin tools' },
         { command: 'help', description: 'Show the command guide' },
       ];
-      await bot.setMyCommands(commands);
-      const me = await bot.getMe();
-      console.log(`✅ Bot @${me.username} fully initialized.`);
+      
+      try {
+        await bot.setMyCommands(commands);
+        const me = await bot.getMe();
+        console.log(`✅ Bot @${me.username} fully initialized.`);
+      } catch (botError) {
+        console.error('❌ Bot initialization failed:', botError.message);
+        throw botError;
+      }
 
-      // Liveness heartbeat
+      // Liveness heartbeat (less frequent to reduce logs)
       keepAliveInterval = setInterval(() => {
         if (isServiceReady) {
           console.log('🤖 Bot active - uptime:', Math.round(process.uptime()), 'seconds');
         }
-      }, 600000);
+      }, 600000); // 10 minutes
 
       console.log('🎉 Application startup complete!');
       return true;
     } catch (error) {
       isServiceReady = false;
       initializationPromise = null;
+      console.error('💥 Initialization failed:', error.message);
       throw error;
     }
   })();
@@ -308,22 +358,25 @@ async function initializeBot() {
   return initializationPromise;
 }
 
-// --- Graceful shutdown
+// --- Graceful shutdown (FIXED: Proper environment variable reference)
 const shutdown = async (signal) => {
   console.log(`\n🛑 Received ${signal}. Starting graceful shutdown...`);
   isServiceReady = false;
 
   if (keepAliveInterval) {
     clearInterval(keepAliveInterval);
+    console.log('✅ Keep-alive interval cleared.');
   }
 
   try {
-    // FIX: Check if webhook mode is enabled properly
+    // FIXED: Use the same logic as at the top of the file
     const useWebhook = (env.USE_WEBHOOK === true) || (env.APP_URL || '').startsWith('https');
     
     if (!useWebhook && bot && bot.isPolling()) {
       await bot.stopPolling({ cancel: true, reason: 'Graceful shutdown' });
       console.log('✅ Bot polling stopped.');
+    } else if (useWebhook) {
+      console.log('✅ Webhook mode - no polling to stop.');
     }
     
     // Close Redis connection
@@ -340,6 +393,8 @@ const shutdown = async (signal) => {
       console.log('✅ HTTP server closed.');
       process.exit(0);
     });
+    
+    // Force shutdown after timeout
     setTimeout(() => {
       console.warn('⚠️ Forcing shutdown after timeout...');
       process.exit(0);
@@ -353,13 +408,18 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
 // Export the safeEditMessage function for use in handlers
-export { safeEditMessage };
+export { safeEditMessage, bot };
 
 // Kick off the initialization
 initializeBot().catch((error) => {
   console.error('💥 Fatal initialization error:', error.message);
   sentryService.captureError(error);
-  if (!String(error.message).includes('429')) {
+  
+  // Don't exit immediately for rate limit errors
+  if (String(error.message).includes('429')) {
+    console.log('⏳ Rate limit error, waiting before exit...');
+    setTimeout(() => process.exit(1), 10000);
+  } else {
     process.exit(1);
   }
 });
