@@ -691,64 +691,63 @@ async function sendFallbackOptions(bot, chatId, messageId, error) {
   );
 }
 
-// Send parlay result (extracted from executeAiRequest for reuse)
 async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = null) {
   const { sportKey, numLegs, betType } = state;
   const legs = parlay.parlay_legs;
   const tzLabel = 'America/New_York';
 
-  let response = `🧠 *AI\\-Generated ${numLegs}\\-Leg Parlay*\n`;
-  response += `*Sport:* ${escapeMarkdownV2(sportKey)}\n`;
-  response += `*Mode:* ${escapeMarkdownV2(mode.toUpperCase())}\n`;
-  response += `*Type:* ${escapeMarkdownV2(betType === 'props' ? 'Player Props Only' : 'Mixed')}\n`;
-  response += `*Confidence:* ${Math.round((parlay.confidence_score || 0) * 100)}%\n`;
+  let response = `🧠 *AI\\\\-Generated ${numLegs}\\\\-Leg Parlay*\\n`;
+  response += `*Sport:* ${safeTelegramMessage(sportKey)}\\n`;
+  response += `*Mode:* ${safeTelegramMessage(mode.toUpperCase())}\\n`;
+  response += `*Type:* ${safeTelegramMessage(betType === 'props' ? 'Player Props Only' : 'Mixed')}\\n`;
+  response += `*Confidence:* ${Math.round((parlay.confidence_score || 0) * 100)}%\\n`;
   
   // Add data freshness warning if present
   if (parlay.data_freshness) {
-    response += `*Data Age:* ${parlay.data_freshness.hours_ago}h\n`;
-    response += `_${escapeMarkdownV2(parlay.data_freshness.message)}_\n`;
+    response += `*Data Age:* ${parlay.data_freshness.hours_ago}h\\n`;
+    response += `_${safeTelegramMessage(parlay.data_freshness.message)}_\\n`;
   }
   
-  response += `_Timezone: ${escapeMarkdownV2(tzLabel)}_\n\n`;
+  response += `_Timezone: ${safeTelegramMessage(tzLabel)}_\\n\\n`;
 
   legs.forEach((leg, index) => {
     const when = leg.game_date_local
-      ? leg.game_date_local
-      : (leg.game_date_utc ? formatLocalIfPresent(leg.game_date_utc, tzLabel) : '');
-    const safeGame = escapeMarkdownV2(leg.game);
-    const safePick = escapeMarkdownV2(leg.pick);
-    const safeMarket = escapeMarkdownV2(leg.market);
-    const safeJust = leg.justification ? escapeMarkdownV2(leg.justification.length > 250 ? `${leg.justification.slice(0, 250)}...` : leg.justification) : '';
-    const safeBook = leg.sportsbook ? escapeMarkdownV2(leg.sportsbook) : null;
+      ? safeTelegramMessage(leg.game_date_local)
+      : (leg.game_date_utc ? safeTelegramMessage(formatLocalIfPresent(leg.game_date_utc, tzLabel)) : '');
+    const safeGame = safeTelegramMessage(leg.game);
+    const safePick = safeTelegramMessage(leg.pick);
+    const safeMarket = safeTelegramMessage(leg.market);
+    const safeJust = leg.justification ? safeTelegramMessage(leg.justification.length > 250 ? `${leg.justification.slice(0, 250)}...` : leg.justification) : '';
+    const safeBook = leg.sportsbook ? safeTelegramMessage(leg.sportsbook) : null;
     const oddsDisplay = leg.odds_american ? `${leg.odds_american > 0 ? '+' : ''}${leg.odds_american}` : 'N/A';
 
     response += `*Leg ${index + 1}:* ${safeGame}`;
-    if (when) response += ` — ${escapeMarkdownV2(when)}`;
-    response += `\n*Pick:* *${safePick}* \\(${safeMarket}\\)\n`;
-    response += `*Odds:* ${oddsDisplay}\n`;
-    if (safeBook) response += `*Book:* ${safeBook}\n`;
-    if (safeJust) response += `*Justification:* ${safeJust}\n`;
+    if (when) response += ` — ${when}`;
+    response += `\\n*Pick:* *${safePick}* \\\\(${safeMarket}\\\\)\\n`;
+    response += `*Odds:* ${safeTelegramMessage(oddsDisplay)}\\n`;
+    if (safeBook) response += `*Book:* ${safeBook}\\n`;
+    if (safeJust) response += `*Justification:* ${safeJust}\\n`;
     
     // Add confidence if available
     if (leg.confidence) {
-      response += `*Confidence:* ${Math.round(leg.confidence * 100)}%\n`;
+      response += `*Confidence:* ${Math.round(leg.confidence * 100)}%\\n`;
     }
     
-    response += `\n`;
+    response += `\\n`;
   });
 
   // Add parlay odds if available
   if (parlay.parlay_odds_american) {
     const oddsSign = parlay.parlay_odds_american > 0 ? '+' : '';
-    response += `*Parlay Odds:* ${oddsSign}${parlay.parlay_odds_american}\n`;
+    response += `*Parlay Odds:* ${oddsSign}${safeTelegramMessage(parlay.parlay_odds_american)}\\n`;
   }
 
   if (parlay.parlay_odds_decimal) {
-    response += `*Decimal Odds:* ${parlay.parlay_odds_decimal.toFixed(2)}\n`;
+    response += `*Decimal Odds:* ${safeTelegramMessage(parlay.parlay_odds_decimal.toFixed(2))}\\n`;
   }
 
   if (parlay.parlay_ev !== null && parlay.parlay_ev !== undefined) {
-    response += `*Expected Value:* ${(parlay.parlay_ev * 100).toFixed(1)}%\n`;
+    response += `*Expected Value:* ${safeTelegramMessage((parlay.parlay_ev * 100).toFixed(1))}%\\n`;
   }
 
   const finalKeyboard = [
@@ -759,7 +758,9 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = nu
   
   const messageOpts = {
     parse_mode: 'MarkdownV2',
-    reply_markup: { inline_keyboard: finalKeyboard }
+    reply_markup: { 
+      inline_keyboard: finalKeyboard 
+    }
   };
 
   if (messageId) {
