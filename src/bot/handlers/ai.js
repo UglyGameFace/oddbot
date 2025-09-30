@@ -144,14 +144,23 @@ function pageOf(arr, page) {
   return arr.slice(start, start + PAGE_SIZE); 
 }
 
-function formatLocalIfPresent(utc, tzLabel) {
+// ADD THIS HELPER FUNCTION TO ai.js IF NOT ALREADY PRESENT
+function formatLocalIfPresent(utcDateString, timezone) {
+  if (!utcDateString) return null;
   try {
-    if (!utc) return '';
+    const date = new Date(utcDateString);
     return new Intl.DateTimeFormat('en-US', {
-      timeZone: tzLabel || 'America/New_York',
-      year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit'
-    }).format(new Date(utc));
-  } catch { return ''; }
+      timeZone: timezone,
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).format(date);
+  } catch (error) {
+    console.warn('Date localization failed:', error.message);
+    return null;
+  }
 }
 
 // COMPREHENSIVE sports discovery with multiple fallback layers
