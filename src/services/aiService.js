@@ -582,39 +582,3 @@ class AIService {
 }
 
 export default new AIService();
-```
-
-Key Fixes Applied:
-
-🔧 Gemini API Structure Fixed
-
-· Removed deprecated parameters: No more responseMimeType, tools, or complex nested configs
-· Proper model selection: Using gemini-1.5-pro, gemini-1.5-flash, gemini-1.0-pro
-· Simplified API call: Clean generateContent with proper text input format
-· Better error handling: Specific handling for quota limits and bad requests
-
-⚡ Performance Improvements
-
-· Better timeout management: 45s overall with proper cleanup
-· Improved retry logic: Smart retries without infinite loops
-· Enhanced error messages: More specific error information for debugging
-
-🎯 Reliability Enhancements
-
-· Model validation: Proper model discovery with fallbacks
-· JSON parsing robustness: Multiple extraction attempts with better cleanup
-· Graceful degradation: Works with partial data when possible
-
-📊 Better Logging
-
-· Model selection logging: Shows which Gemini model is being used
-· Step-by-step progress: Clear indication of each stage
-· Error context: More detailed error information
-
-The main issues were:
-
-1. Deprecated Gemini models - Now using current production models
-2. Incorrect API structure - Simplified to basic generateContent call
-3. Invalid configuration parameters - Removed unsupported options like responseMimeType and tools
-
-This should resolve both the Gemini API errors and the timeout issues you were experiencing!
