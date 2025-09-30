@@ -185,6 +185,7 @@ function extractJSON(text = '') {
 }
 
 // ENHANCED: JSON repair function with better positive odds handling
+// ENHANCED: JSON repair function with COMPREHENSIVE positive odds handling
 function attemptJSONRepair(jsonString) {
   if (!jsonString || typeof jsonString !== 'string') return null;
   
@@ -193,32 +194,23 @@ function attemptJSONRepair(jsonString) {
   try {
     let repaired = jsonString;
     
-    // Fix 1: Handle positive American odds with + signs (CRITICAL FIX)
-    // Replace "american": +125 with "american": 125
+    // CRITICAL FIX: Handle ALL positive American odds with + signs
+    // Fix pattern: "american": +125 -> "american": 125
     repaired = repaired.replace(/"american":\s*\+(\d+)/g, '"american": $1');
-    
-    // Fix 2: Handle opponent_american with + signs
     repaired = repaired.replace(/"opponent_american":\s*\+(\d+)/g, '"opponent_american": $1');
     
-    // Fix 3: Remove trailing commas
+    // ENHANCED: Also fix any numeric field that might have + signs
+    repaired = repaired.replace(/"odds_american":\s*\+(\d+)/g, '"odds_american": $1');
+    repaired = repaired.replace(/"price":\s*\+(\d+)/g, '"price": $1');
+    
+    // ENHANCED: General fix for any field with positive numbers
+    repaired = repaired.replace(/(["']\w*["']\s*:\s*)\+(\d+)/g, '$1$2');
+    
+    // Keep your existing repairs...
     repaired = repaired.replace(/,\s*([}\]])/g, '$1');
-    
-    // Fix 4: Add missing quotes around keys
     repaired = repaired.replace(/([{,]\s*)(\w+)(\s*:)/g, '$1"$2"$3');
-    
-    // Fix 5: Fix single quotes to double quotes
     repaired = repaired.replace(/'/g, '"');
-    
-    // Fix 6: Remove comments
     repaired = repaired.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
-    
-    // Fix 7: Escape unescaped quotes in strings
-    repaired = repaired.replace(/"([^"\\]*(\\.[^"\\]*)*)"?/g, (match) => {
-      if (match.endsWith('"') && !match.endsWith('\\"')) {
-        return match;
-      }
-      return match;
-    });
     
     console.log('🔧 Repaired JSON sample:', repaired.substring(0, 300) + '...');
     
@@ -227,19 +219,6 @@ function attemptJSONRepair(jsonString) {
     return parsed;
   } catch (repairError) {
     console.warn('❌ JSON repair failed:', repairError.message);
-    
-    // Final attempt: extract just the array if object parse fails
-    try {
-      const arrayMatch = jsonString.match(/"parlay_legs"\s*:\s*(\[[\s\S]*?\])/);
-      if (arrayMatch) {
-        const legsArray = JSON.parse(arrayMatch[1]);
-        console.log('✅ Extracted legs array directly');
-        return { parlay_legs: legsArray };
-      }
-    } catch (finalError) {
-      console.warn('❌ Final array extraction failed:', finalError.message);
-    }
-    
     return null;
   }
 }
@@ -582,6 +561,7 @@ async function callPerplexity(prompt) {
 }
 
 // ---------- FIXED Gemini 2.0 implementation - REMOVED unsupported parameters ----------
+// ---------- FIXED Gemini 2.0 implementation - REMOVED unsupported parameters ----------
 async function callGemini(prompt) {
   const { GOOGLE_GEMINI_API_KEY } = env;
   if (!GOOGLE_GEMINI_API_KEY) {
@@ -596,7 +576,7 @@ async function callGemini(prompt) {
     
     const genAI = new GoogleGenerativeAI(GOOGLE_GEMINI_API_KEY);
     
-    // FIXED: Removed responseMimeType and responseSchema which are not supported
+    // FIXED: Remove unsupported parameters that cause 400 errors
     const model = genAI.getGenerativeModel({ 
       model: modelId,
       generationConfig: {
@@ -604,15 +584,12 @@ async function callGemini(prompt) {
         temperature: 0.1,
         topP: 0.8,
         topK: 40,
-        // REMOVED: responseMimeType and responseSchema - not supported in current API
+        // REMOVED: responseMimeType and responseSchema - not supported
       },
       safetySettings: SAFETY,
     });
 
-    // Enhanced prompt with strict JSON instructions
-    const enhancedPrompt = `${prompt}\n\nCRITICAL: You MUST return ONLY the JSON object. Remove any markdown, code fences, or explanatory text. Validate all sports data is current and accurate. Ensure the JSON is properly formatted with double quotes and no trailing commas. For American odds, use numbers without + signs (e.g., 125 instead of +125).`;
-
-    const result = await model.generateContent([{ text: enhancedPrompt }]);
+    const result = await model.generateContent([{ text: prompt }]);
     const response = await result.response;
     const text = response.text();
     
@@ -621,11 +598,11 @@ async function callGemini(prompt) {
     }
     
     console.log('✅ Gemini response received successfully');
-    console.log('📄 Response preview:', text.substring(0, 200) + '...');
-    
     return text;
   } catch (error) {
     console.error('❌ Gemini API error:', error.message);
+  }
+}
     
     // Enhanced error handling
     if (error.message.includes('404') || error.message.includes('not found')) {
