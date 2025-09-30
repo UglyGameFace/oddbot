@@ -1,847 +1,898 @@
-// src/services/aiService.js
-// COMPLETE REWRITE: Fallback system + Better JSON parsing + Stale data warnings
+// src/bot/handlers/ai.js - COMPLETE 800+ LINE VERSION
 
-import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
-import axios from 'axios';
-import env from '../config/env.js';
+import aiService from '../../services/aiService.js';
+import gamesService from '../../services/gamesService.js';
+import databaseService from '../../services/databaseService.js';
+import { setUserState, getUserState } from '../state.js';
+import { getSportEmoji, escapeMarkdownV2 } from '../../utils/enterpriseUtilities.js';
 
-// Internal services for Live/DB modes
-import oddsService from './oddsService.js';
-import gamesService from './gamesService.js';
+// ---- Safe edit helper ----
+async function safeEditMessage(bot, text, options) {
+  try {
+    await bot.editMessageText(text, options);
+  } catch (error) {
+    if (error?.message?.includes('message is not modified')) {
+      // benign
+    } else {
+      console.error('editMessageText error:', error?.message || error);
+    }
+  }
+}
 
-// ---------- Constants ----------
-const TZ = env.TIMEZONE || 'America/New_York';
-const WEB_TIMEOUT_MS = 90000;
-const MAX_OUTPUT_TOKENS = 8192;
-const WEB_HORIZON_HOURS = 168;
+const propsToggleLabel = (on) => `${on ? '✅' : '☑️'} Include Player Props`;
 
-const SAFETY = [
-  { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-  { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-  { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-  { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-];
-
-// Updated Gemini models with 2.5 support
-const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'];
-
-// Global coverage
-const REGULATED_BOOKS = [
-  'FanDuel', 'DraftKings', 'BetMGM', 'Caesars', 'ESPN BET', 'BetRivers', 
-  'PointsBet', 'bet365'
-];
-
-// Sport sources
-const SPORT_SOURCES = {
-  americanfootball_nfl: ['https://www.nfl.com/schedules/', 'https://www.espn.com/nfl/schedule'],
-  nba: ['https://www.nba.com/schedule', 'https://www.espn.com/nba/schedule'],
-  mlb: ['https://www.mlb.com/schedule', 'https://www.espn.com/mlb/schedule'],
-  nhl: ['https://www.nhl.com/schedule', 'https://www.espn.com/nhl/schedule'],
-  soccer: ['https://www.espn.com/soccer/schedule', 'https://www.premierleague.com/fixtures'],
-  tennis: ['https://www.espn.com/tennis/schedule'],
-  ufc: ['https://www.ufc.com/schedule'],
-  ncaaf: ['https://www.espn.com/college-football/schedule'],
-  ncaab: ['https://www.espn.com/mens-college-basketball/schedule']
+// EXPANDED SPORT SUPPORT - All major sports
+const SPORT_TITLES = {
+  // American Football
+  americanfootball_nfl: 'NFL',
+  americanfootball_ncaaf: 'NCAAF',
+  americanfootball_xfl: 'XFL',
+  americanfootball_usfl: 'USFL',
+  
+  // Basketball
+  basketball_nba: 'NBA',
+  basketball_wnba: 'WNBA', 
+  basketball_ncaab: 'NCAAB',
+  basketball_euroleague: 'EuroLeague',
+  
+  // Baseball
+  baseball_mlb: 'MLB',
+  baseball_npb: 'NPB (Japan)',
+  baseball_kbo: 'KBO (Korea)',
+  
+  // Hockey
+  icehockey_nhl: 'NHL',
+  hockey_nhl: 'NHL',
+  icehockey_khl: 'KHL',
+  icehockey_sweden: 'Swedish Hockey',
+  icehockey_finland: 'Finnish Hockey',
+  
+  // Soccer
+  soccer_england_premier_league: 'Premier League',
+  soccer_spain_la_liga: 'La Liga',
+  soccer_italy_serie_a: 'Serie A',
+  soccer_germany_bundesliga: 'Bundesliga',
+  soccer_france_ligue_1: 'Ligue 1',
+  soccer_uefa_champions_league: 'Champions League',
+  soccer_uefa_europa_league: 'Europa League',
+  soccer_mls: 'MLS',
+  soccer_world_cup: 'World Cup',
+  soccer_euro: 'European Championship',
+  soccer_copa_america: 'Copa America',
+  
+  // Tennis
+  tennis_atp: 'ATP Tennis',
+  tennis_wta: 'WTA Tennis',
+  tennis_aus_open: 'Australian Open',
+  tennis_french_open: 'French Open',
+  tennis_wimbledon: 'Wimbledon',
+  tennis_us_open: 'US Open',
+  
+  // Fighting Sports
+  mma_ufc: 'UFC',
+  boxing: 'Boxing',
+  
+  // Motorsports
+  formula1: 'Formula 1',
+  motogp: 'MotoGP',
+  nascar: 'NASCAR',
+  indycar: 'IndyCar',
+  
+  // Golf
+  golf_pga: 'PGA Tour',
+  golf_european: 'European Tour',
+  golf_liv: 'LIV Golf',
+  golf_masters: 'The Masters',
+  golf_us_open: 'US Open',
+  golf_pga_championship: 'PGA Championship',
+  golf_open_championship: 'The Open',
+  
+  // International Sports
+  cricket_ipl: 'IPL Cricket',
+  cricket_big_bash: 'Big Bash',
+  cricket_psl: 'PSL Cricket',
+  rugby_union: 'Rugby Union',
+  rugby_league: 'Rugby League',
+  aussie_rules_afl: 'AFL',
+  handball: 'Handball',
+  volleyball: 'Volleyball',
+  table_tennis: 'Table Tennis',
+  badminton: 'Badminton',
+  darts: 'Darts',
+  snooker: 'Snooker'
 };
 
-const BOOK_TIER = {
-  'DraftKings': 0.96,
-  'FanDuel': 0.96,
-  'Caesars': 0.93,
-  'BetMGM': 0.93,
-  'ESPN BET': 0.91,
-  'BetRivers': 0.89,
-  'PointsBet': 0.88,
-  'bet365': 0.95
-};
+// Priority order for sports display
+const PREFERRED_FIRST = [
+  'americanfootball_nfl', 'americanfootball_ncaaf', 
+  'basketball_nba', 'baseball_mlb', 'icehockey_nhl',
+  'soccer_england_premier_league', 'soccer_uefa_champions_league'
+];
+const DEPRIORITIZE_LAST = ['hockey_nhl', 'icehockey_nhl']; // duplicates
+const PAGE_SIZE = 10;
 
-// ---------- Math helpers ----------
-function americanToDecimal(a) {
-  const x = Number(a);
-  if (!Number.isFinite(x)) return null;
-  if (x > 0) return 1 + x / 100;
-  if (x < 0) return 1 + 100 / Math.abs(x);
-  return null;
+// Last-resort static defaults with expanded coverage
+const DEFAULT_SPORTS = [
+  { sport_key: 'americanfootball_nfl', sport_title: 'NFL' },
+  { sport_key: 'americanfootball_ncaaf', sport_title: 'NCAAF' },
+  { sport_key: 'basketball_nba', sport_title: 'NBA' },
+  { sport_key: 'basketball_wnba', sport_title: 'WNBA' },
+  { sport_key: 'baseball_mlb', sport_title: 'MLB' },
+  { sport_key: 'icehockey_nhl', sport_title: 'NHL' },
+  { sport_key: 'soccer_england_premier_league', sport_title: 'Premier League' },
+  { sport_key: 'soccer_uefa_champions_league', sport_title: 'Champions League' },
+  { sport_key: 'tennis_atp', sport_title: 'ATP Tennis' },
+  { sport_key: 'mma_ufc', sport_title: 'UFC' },
+  { sport_key: 'formula1', sport_title: 'Formula 1' },
+  { sport_key: 'golf_pga', sport_title: 'PGA Tour' }
+];
+
+function sortSports(sports) {
+  const rank = (k) => {
+    if (PREFERRED_FIRST.includes(k)) return -100;
+    if (DEPRIORITIZE_LAST.includes(k)) return 100;
+    return 0;
+  };
+  return [...(sports || [])].sort(
+    (a, b) => rank(a?.sport_key || '') - rank(b?.sport_key || '')
+  );
 }
 
-function decimalToAmerican(d) {
-  const x = Number(d);
-  if (!Number.isFinite(x) || x <= 1) return null;
-  return x >= 2 ? Math.round((x - 1) * 100) : Math.round(-100 / (x - 1));
+function pageOf(arr, page) { 
+  const start = page * PAGE_SIZE; 
+  return arr.slice(start, start + PAGE_SIZE); 
 }
 
-function americanToImpliedProb(a) {
-  const x = Number(a);
-  if (!Number.isFinite(x)) return null;
-  return x > 0 ? 100 / (x + 100) : Math.abs(x) / (Math.abs(x) + 100);
-}
-
-function noVigProb(myA, oppA) {
-  const p = americanToImpliedProb(myA);
-  const q = americanToImpliedProb(oppA);
-  if (p == null || q == null) return null;
-  return p / (p + q);
-}
-
-function clamp01(v) {
-  const x = Number(v);
-  if (!Number.isFinite(x)) return null;
-  return Math.max(0, Math.min(1, x));
-}
-
-function parlayDecimal(legs) {
-  return (legs || []).reduce((acc, l) => acc * (Number(l.best_quote?.decimal) || 1), 1);
-}
-
-// ---------- IMPROVED JSON Parsing ----------
-function extractJSON(text = '') {
-  if (!text || typeof text !== 'string') {
-    console.log('❌ extractJSON: No text provided');
-    return null;
-  }
-
-  console.log(`🔍 extractJSON: Processing ${text.length} characters`);
-
-  // Clean the text first
-  let cleanText = text.trim();
-  
-  // Remove any markdown code fences
-  cleanText = cleanText.replace(/```json\s*/g, '').replace(/```\s*/g, '');
-  
-  // Remove any leading/trailing whitespace and common AI artifacts
-  cleanText = cleanText.replace(/^[\s\S]*?({[\s\S]*})[\s\S]*?$/, '$1');
-  
-  // Multiple extraction strategies
-  const strategies = [
-    // Strategy 1: Direct parse (clean)
-    () => {
-      try {
-        const result = JSON.parse(cleanText);
-        console.log('✅ Strategy 1 (Direct) succeeded');
-        return result;
-      } catch (e) {
-        console.log('❌ Strategy 1 failed:', e.message);
-        return null;
-      }
-    },
-    
-    // Strategy 2: Find first { to last }
-    () => {
-      const start = cleanText.indexOf('{');
-      const end = cleanText.lastIndexOf('}');
-      if (start !== -1 && end !== -1 && end > start) {
-        try {
-          const candidate = cleanText.substring(start, end + 1);
-          const result = JSON.parse(candidate);
-          console.log('✅ Strategy 2 (Brace match) succeeded');
-          return result;
-        } catch (e) {
-          console.log('❌ Strategy 2 failed:', e.message);
-        }
-      }
-      return null;
-    },
-    
-    // Strategy 3: Try to fix common JSON issues
-    () => {
-      try {
-        // Fix common AI JSON issues
-        let fixed = cleanText
-          .replace(/(\w+):/g, '"$1":') // Add quotes to keys
-          .replace(/'/g, '"') // Replace single quotes with double
-          .replace(/,\s*}/g, '}') // Remove trailing commas
-          .replace(/,\s*]/g, ']') // Remove trailing commas in arrays
-          .replace(/\n/g, ' ') // Remove newlines
-          .replace(/\s+/g, ' '); // Normalize whitespace
-        
-        const result = JSON.parse(fixed);
-        console.log('✅ Strategy 3 (Fixed JSON) succeeded');
-        return result;
-      } catch (e) {
-        console.log('❌ Strategy 3 failed:', e.message);
-        return null;
-      }
-    },
-    
-    // Strategy 4: Extract JSON from markdown code blocks
-    () => {
-      const codeBlockMatch = cleanText.match(/(\{[^}]*(?:\}[^}]*)*\})/);
-      if (codeBlockMatch) {
-        try {
-          const result = JSON.parse(codeBlockMatch[1]);
-          console.log('✅ Strategy 4 (Code block) succeeded');
-          return result;
-        } catch (e) {
-          console.log('❌ Strategy 4 failed:', e.message);
-        }
-      }
-      return null;
-    }
-  ];
-
-  // Try each strategy
-  for (let i = 0; i < strategies.length; i++) {
-    const result = strategies[i]();
-    if (result) {
-      console.log(`🎉 JSON extraction successful with strategy ${i + 1}`);
-      return result;
-    }
-  }
-
-  // Log what we got for debugging
-  console.log('❌ All JSON extraction strategies failed');
-  console.log('📝 First 500 chars of response:', text.substring(0, 500));
-  return null;
-}
-
-function coerceQuote(q) {
-  if (!q || typeof q !== 'object') return null;
-  
+function formatLocalIfPresent(utc, tzLabel) {
   try {
-    const book = String(q.book || q.sportsbook || '').trim();
-    const line = q.line != null ? Number(q.line) : null;
-    const american = q.american != null ? Number(q.american) :
-                     (q.odds_american != null ? Number(q.odds_american) : null);
-    const decimal = q.decimal != null ? Number(q.decimal) :
-                    (american != null ? americanToDecimal(american) : null);
-    const oppA = q.opponent_american != null ? Number(q.opponent_american) : null;
-    const url = String(q.source_url || q.url || '').trim();
-    const fetched_at = String(q.fetched_at || q.timestamp || new Date().toISOString()).trim();
-    
-    if (!book || (!american && !decimal)) return null;
-    
-    return { book, line, american, decimal, opponent_american: oppA, source_url: url, fetched_at };
-  } catch (error) {
-    console.warn('Quote coercion failed:', error.message);
-    return null;
-  }
+    if (!utc) return '';
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: tzLabel || 'America/New_York',
+      year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit'
+    }).format(new Date(utc));
+  } catch { return ''; }
 }
 
-function bestQuoteEV(quotes = [], fairProb, market = 'moneyline', oppAFallback = null) {
-  let best = null; 
-  let bestScore = -Infinity;
+// COMPREHENSIVE sports discovery with multiple fallback layers
+async function getAllAvailableSports() {
+  const sportsCollection = new Map();
   
-  for (const raw of quotes) {
-    const q = coerceQuote(raw);
-    if (!q || !q.book || !Number.isFinite(q.decimal)) continue;
-
-    const tier = BOOK_TIER[q.book] ?? 0.85;
-    const oppA = q.opponent_american != null ? q.opponent_american : oppAFallback;
-    const pNoVig = (oppA != null && q.american != null) ? noVigProb(q.american, oppA) : null;
-    const pFair = Number.isFinite(fairProb) ? fairProb : (pNoVig != null ? pNoVig : null);
-    const ev = pFair != null ? (pFair * q.decimal - 1) : (q.decimal - 1) * 0.98;
-
-    let lineBonus = 0;
-    if ((market === 'spread' || market === 'total') && q.line != null) {
-      lineBonus = 0.0005 * Math.abs(q.line);
-    }
-
-    const score = ev + lineBonus + 0.002 * tier;
-    if (score > bestScore) { 
-      bestScore = score; 
-      best = { ...q, p_novig: pNoVig, ev }; 
-    }
-  }
-  return best;
-}
-
-function normalizeLeg(raw) {
-  if (!raw || typeof raw !== 'object') return null;
+  console.log('🔄 Starting comprehensive sports discovery...');
   
+  // Layer 1: Primary - gamesService (cached/provider mixed)
   try {
-    const market = String(raw.market || 'moneyline').toLowerCase();
-    const quotes = Array.isArray(raw.quotes) ? raw.quotes.map(coerceQuote).filter(Boolean) : [];
-    const fair_prob = clamp01(raw.fair_prob);
-    const best = raw.best_quote ? coerceQuote(raw.best_quote) : bestQuoteEV(quotes, fair_prob, market, null);
-
-    // Date handling
-    let utcISO = null;
-    let local = null;
-    
-    try {
-      if (raw.game_date_utc) {
-        const date = new Date(raw.game_date_utc);
-        if (!isNaN(date.getTime())) {
-          utcISO = date.toISOString();
-          local = new Intl.DateTimeFormat('en-US', {
-            timeZone: TZ, 
-            year: 'numeric', 
-            month: 'short', 
-            day: '2-digit', 
-            hour: '2-digit', 
-            minute: '2-digit'
-          }).format(date);
+    console.log('📡 Layer 1: Querying gamesService...');
+    const gamesServiceSports = await gamesService.getAvailableSports();
+    if (gamesServiceSports && Array.isArray(gamesServiceSports)) {
+      gamesServiceSports.forEach(sport => {
+        if (sport?.sport_key) {
+          sportsCollection.set(sport.sport_key, {
+            sport_key: sport.sport_key,
+            sport_title: sport.sport_title || SPORT_TITLES[sport.sport_key] || sport.sport_key,
+            source: 'gamesService',
+            priority: 1
+          });
         }
-      }
-    } catch (dateError) {
-      console.warn('Date processing failed:', dateError.message);
+      });
+      console.log(`✅ Layer 1: Added ${gamesServiceSports.length} sports from gamesService`);
     }
-
-    const leg = {
-      game: String(raw.game || '').trim(),
-      market,
-      pick: String(raw.pick || '').trim(),
-      fair_prob,
-      quotes,
-      best_quote: best || null,
-      sportsbook: (best?.book || raw.sportsbook || 'Multiple Books'),
-      odds_american: best?.american ?? null,
-      odds_decimal: best?.decimal ?? null,
-      game_date_utc: utcISO,
-      game_date_local: local || raw.game_date_local || null,
-      justification: String(raw.justification || 'Analysis based on current odds and matchups').trim(),
-      confidence: typeof raw.confidence === 'number' ? clamp01(raw.confidence) : 0.65,
-      ev: (best && fair_prob != null && Number.isFinite(best.decimal)) ? (fair_prob * best.decimal - 1) : null,
-    };
-
-    if (!leg.game || !leg.pick || !leg.market) {
-      console.warn('Leg missing required fields');
-      return null;
-    }
-    
-    return leg;
   } catch (error) {
-    console.error('Leg normalization failed:', error.message);
-    return null;
+    console.warn('❌ Layer 1 (gamesService) failed:', error.message);
   }
+  
+  // Layer 2: Secondary - databaseService comprehensive list
+  try {
+    console.log('🗄️ Layer 2: Querying databaseService...');
+    const dbSports = await databaseService.getDistinctSports();
+    if (dbSports && Array.isArray(dbSports)) {
+      dbSports.forEach(sport => {
+        if (sport?.sport_key && !sportsCollection.has(sport.sport_key)) {
+          sportsCollection.set(sport.sport_key, {
+            sport_key: sport.sport_key,
+            sport_title: sport.sport_title || SPORT_TITLES[sport.sport_key] || sport.sport_key,
+            source: 'databaseService',
+            priority: 2
+          });
+        }
+      });
+      console.log(`✅ Layer 2: Added ${dbSports.length} sports from databaseService`);
+    }
+  } catch (error) {
+    console.warn('❌ Layer 2 (databaseService) failed:', error.message);
+  }
+  
+  // Layer 3: Tertiary - Add known sports from our comprehensive list
+  console.log('🌍 Layer 3: Adding known sports from comprehensive list...');
+  Object.entries(SPORT_TITLES).forEach(([sport_key, sport_title]) => {
+    if (!sportsCollection.has(sport_key)) {
+      sportsCollection.set(sport_key, {
+        sport_key,
+        sport_title,
+        source: 'comprehensive_list',
+        priority: 3
+      });
+    }
+  });
+  console.log(`✅ Layer 3: Added known sports from comprehensive list`);
+  
+  // Layer 4: Final fallback - static defaults
+  if (sportsCollection.size === 0) {
+    console.log('🆘 Layer 4: Using static defaults as final fallback...');
+    DEFAULT_SPORTS.forEach(sport => {
+      sportsCollection.set(sport.sport_key, {
+        ...sport,
+        source: 'static_defaults',
+        priority: 4
+      });
+    });
+  }
+  
+  // Convert to array and sort by priority (lower = better)
+  const sports = Array.from(sportsCollection.values())
+    .sort((a, b) => a.priority - b.priority);
+  
+  console.log(`🎉 Sports discovery complete: ${sports.length} total sports found`);
+  
+  return sports;
 }
 
-function filterUpcoming(legs, hours = WEB_HORIZON_HOURS) {
+// Enhanced sport selection with better error handling and caching
+let sportsCache = null;
+let sportsCacheTime = null;
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
+async function getCachedSports() {
   const now = Date.now();
-  const horizon = now + hours * 3600_000;
+  if (sportsCache && sportsCacheTime && (now - sportsCacheTime) < CACHE_DURATION) {
+    console.log('📦 Using cached sports list');
+    return sportsCache;
+  }
   
-  return (legs || []).filter(l => {
-    if (!l.game_date_utc) return true;
+  try {
+    console.log('🔄 Refreshing sports cache...');
+    sportsCache = await getAllAvailableSports();
+    sportsCacheTime = now;
+    return sportsCache;
+  } catch (error) {
+    console.error('❌ Failed to refresh sports cache:', error);
+    // Return old cache if available, otherwise defaults
+    return sportsCache || DEFAULT_SPORTS;
+  }
+}
+
+export function registerAI(bot) {
+  bot.onText(/^\/ai$/, async (msg) => {
+    const chatId = msg.chat.id;
+    await setUserState(chatId, { page: 0 });
+    sendSportSelection(bot, chatId);
+  });
+
+  // Direct fallback commands
+  bot.onText(/^\/ai_live$/, async (msg) => {
+    const chatId = msg.chat.id;
+    await handleDirectFallback(bot, chatId, 'live');
+  });
+
+  bot.onText(/^\/ai_db$/, async (msg) => {
+    const chatId = msg.chat.id;
+    await handleDirectFallback(bot, chatId, 'db');
+  });
+
+  // Quick sport commands
+  bot.onText(/^\/ai_nfl$/, async (msg) => {
+    await handleQuickSport(bot, msg.chat.id, 'americanfootball_nfl');
+  });
+
+  bot.onText(/^\/ai_nba$/, async (msg) => {
+    await handleQuickSport(bot, msg.chat.id, 'basketball_nba');
+  });
+
+  bot.onText(/^\/ai_mlb$/, async (msg) => {
+    await handleQuickSport(bot, msg.chat.id, 'baseball_mlb');
+  });
+
+  bot.onText(/^\/ai_soccer$/, async (msg) => {
+    await handleQuickSport(bot, msg.chat.id, 'soccer_england_premier_league');
+  });
+}
+
+// NEW: Handle quick sport commands
+async function handleQuickSport(bot, chatId, sportKey) {
+  try {
+    await setUserState(chatId, { 
+      sportKey, 
+      numLegs: 4, 
+      mode: 'web', 
+      betType: 'mixed',
+      aiModel: 'perplexity'
+    });
     
-    try {
-      const t = Date.parse(l.game_date_utc);
-      return Number.isFinite(t) && t >= now && t <= horizon;
-    } catch {
-      return true;
+    const sportTitle = SPORT_TITLES[sportKey] || sportKey.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+    await bot.sendMessage(
+      chatId,
+      `⚡ Quick start: Building 4-leg ${sportTitle} parlay via Web Research...`,
+      { parse_mode: 'Markdown' }
+    );
+    
+    await executeAiRequest(bot, chatId);
+    
+  } catch (error) {
+    console.error('Quick sport command failed:', error);
+    const safeError = escapeMarkdownV2(error.message || 'Unknown error');
+    await bot.sendMessage(
+      chatId,
+      `❌ Quick start failed: \`${safeError}\`\n\nPlease use /ai for the full builder.`,
+      { parse_mode: 'MarkdownV2' }
+    );
+  }
+}
+
+// Handle direct fallback commands
+async function handleDirectFallback(bot, chatId, mode) {
+  const state = await getUserState(chatId);
+  if (!state?.sportKey || !state?.numLegs) {
+    await bot.sendMessage(
+      chatId, 
+      `Please start with /ai first to select sport and legs, then use /ai_${mode} if web research fails.\n\nOr use quick commands: /ai_nfl, /ai_nba, /ai_mlb, /ai_soccer`,
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  const { sportKey, numLegs, betType = 'mixed' } = state;
+  
+  try {
+    await bot.sendMessage(
+      chatId,
+      `🔄 Switching to ${mode.toUpperCase()} mode for ${sportKey}...\n\nThis uses stored data and may not reflect current odds.`,
+      { parse_mode: 'Markdown' }
+    );
+
+    const parlay = await aiService.handleFallbackSelection(sportKey, numLegs, mode, betType);
+    await sendParlayResult(bot, chatId, parlay, state, mode);
+    
+  } catch (error) {
+    console.error('Direct fallback execution error:', error);
+    const safeError = escapeMarkdownV2(error.message || 'Unknown error');
+    await bot.sendMessage(
+      chatId,
+      `❌ Fallback mode failed: \`${safeError}\`\n\nPlease try /ai again with a different sport or mode.`,
+      { parse_mode: 'MarkdownV2' }
+    );
+  } finally {
+    await setUserState(chatId, {});
+  }
+}
+
+export function registerAICallbacks(bot) {
+  bot.on('callback_query', async (cbq) => {
+    const { data, message } = cbq || {};
+    if (!data || !message || !data.startsWith('ai_')) return;
+
+    const chatId = message.chat.id;
+    await bot.answerCallbackQuery(cbq.id);
+
+    let state = await getUserState(chatId) || {};
+    const parts = data.split('_');
+    const action = parts[1];
+
+    if (action === 'page') {
+      const page = parseInt(parts[2], 10) || 0;
+      state.page = page;
+      await setUserState(chatId, state);
+      return sendSportSelection(bot, chatId, message.message_id, page);
+    }
+
+    if (action === 'sport') {
+      state.sportKey = parts.slice(2).join('_'); // preserve exact sportKey
+      await setUserState(chatId, state);
+      sendLegSelection(bot, chatId, message.message_id);
+      return;
+    }
+
+    if (action === 'legs') {
+      state.numLegs = parseInt(parts[2], 10);
+      await setUserState(chatId, state);
+      sendModeSelection(bot, chatId, message.message_id);
+      return;
+    }
+
+    if (action === 'mode') {
+      state.mode = parts[2];
+      await setUserState(chatId, state);
+      if (state.mode === 'db') {
+        state.betType = 'mixed';
+        await setUserState(chatId, state);
+        executeAiRequest(bot, chatId, message.message_id);
+      } else {
+        sendBetTypeSelection(bot, chatId, message.message_id);
+      }
+      return;
+    }
+
+    if (action === 'bettype') {
+      state.betType = parts[2];
+      await setUserState(chatId, state);
+      if (state.mode === 'web') {
+        sendAiModelSelection(bot, chatId, message.message_id);
+      } else {
+        executeAiRequest(bot, chatId, message.message_id);
+      }
+      return;
+    }
+
+    if (action === 'model') {
+      state.aiModel = parts[2];
+      await setUserState(chatId, state);
+      executeAiRequest(bot, chatId, message.message_id);
+      return;
+    }
+
+    if (action === 'toggle') {
+      const what = parts[2];
+      if (what === 'props') {
+        state.includeProps = !state.includeProps;
+        await setUserState(chatId, state);
+        return sendBetTypeSelection(bot, chatId, message.message_id);
+      }
+    }
+
+    if (action === 'back') {
+      const to = parts[2];
+      if (to === 'sport')  return sendSportSelection(bot, chatId, message.message_id, state.page || 0);
+      if (to === 'legs')   return sendLegSelection(bot, chatId, message.message_id);
+      if (to === 'mode')   return sendModeSelection(bot, chatId, message.message_id);
+      if (to === 'bettype')return sendBetTypeSelection(bot, chatId, message.message_id);
+    }
+
+    // Fallback selection handler
+    if (action === 'fallback') {
+      const selectedMode = parts[2];
+      const sportKey = state.sportKey;
+      const numLegs = state.numLegs;
+      const betType = state.betType || 'mixed';
+      
+      if (!sportKey || !numLegs) {
+        return safeEditMessage(
+          bot, 
+          'Missing sport or leg selection. Please start over with /ai.',
+          { chat_id: chatId, message_id: message.message_id }
+        );
+      }
+
+      try {
+        await safeEditMessage(
+          bot,
+          `🔄 Switching to ${selectedMode.toUpperCase()} mode...\n\nThis uses stored data and may not reflect current odds.`,
+          { chat_id: chatId, message_id: message.message_id, parse_mode: 'Markdown' }
+        );
+
+        const parlay = await aiService.handleFallbackSelection(sportKey, numLegs, selectedMode, betType);
+        await sendParlayResult(bot, chatId, parlay, state, selectedMode, message.message_id);
+        
+      } catch (error) {
+        console.error('Fallback selection error:', error);
+        const safeError = escapeMarkdownV2(error.message || 'Unknown error');
+        await safeEditMessage(
+          bot,
+          `❌ Fallback mode failed: \`${safeError}\`\n\nPlease try /ai again.`,
+          { 
+            chat_id: chatId, 
+            message_id: message.message_id, 
+            parse_mode: 'MarkdownV2',
+            reply_markup: { inline_keyboard: [[{ text: 'Start Over', callback_data: 'ai_back_sport' }]] }
+          }
+        );
+      } finally {
+        await setUserState(chatId, {});
+      }
+      return;
+    }
+
+    // Quick action handlers
+    if (action === 'quick') {
+      const quickAction = parts[2];
+      if (quickAction === 'retry') {
+        await safeEditMessage(
+          bot,
+          '🔄 Retrying with same parameters...',
+          { chat_id: chatId, message_id: message.message_id, parse_mode: 'Markdown' }
+        );
+        return executeAiRequest(bot, chatId, message.message_id);
+      }
+      if (quickAction === 'change_sport') {
+        await setUserState(chatId, { page: 0 });
+        return sendSportSelection(bot, chatId, message.message_id, 0);
+      }
     }
   });
 }
 
-// ---------- Model discovery ----------
-async function pickSupportedModel(apiKey, candidates = GEMINI_MODELS) {
-  if (!apiKey) {
-    console.warn('No Gemini API key provided');
-    return candidates[0];
-  }
+async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
+  let sports = [];
+  let errorMessage = '';
   
   try {
-    const url = `https://generativelanguage.googleapis.com/v1/models?key=${apiKey}`;
-    const { data } = await axios.get(url, { timeout: 10000 });
-    
-    if (!data?.models) {
-      console.warn('No models found in API response');
-      return candidates[0];
-    }
-    
-    const availableModels = new Set(data.models.map(m => (m.name || '').replace(/^models\//, '')));
-    console.log('Available Gemini models:', Array.from(availableModels));
-    
-    for (const candidate of candidates) {
-      if (availableModels.has(candidate)) {
-        console.log(`✅ Selected Gemini model: ${candidate}`);
-        return candidate;
-      }
-    }
-    
-    console.warn('No preferred models available, using first candidate');
-    return candidates[0];
+    sports = await getCachedSports();
   } catch (error) {
-    console.warn('Model discovery failed:', error.message);
-    return candidates[0];
+    console.error('Failed to get sports list:', error);
+    sports = DEFAULT_SPORTS;
+    errorMessage = '\n\n⚠️ Using cached sports data due to connection issues.';
+  }
+
+  // Sort and prioritize
+  sports = sortSports(sports.filter(s => s?.sport_key));
+
+  const totalPages = Math.max(1, Math.ceil(sports.length / PAGE_SIZE));
+  page = Math.min(Math.max(0, page), totalPages - 1);
+
+  const slice = pageOf(sports, page).map(s => {
+    const title = s?.sport_title ?? SPORT_TITLES[s.sport_key] ?? s.sport_key;
+    return { text: `${getSportEmoji(s.sport_key)} ${title}`, callback_data: `ai_sport_${s.sport_key}` };
+  });
+
+  const rows = [];
+  for (let i = 0; i < slice.length; i += 2) rows.push(slice.slice(i, i + 2));
+
+  // Add quick action buttons for popular sports
+  if (page === 0) {
+    const quickActions = [
+      { text: '🏈 NFL', callback_data: 'ai_sport_americanfootball_nfl' },
+      { text: '🏀 NBA', callback_data: 'ai_sport_basketball_nba' },
+      { text: '⚾ MLB', callback_data: 'ai_sport_baseball_mlb' },
+      { text: '⚽ Soccer', callback_data: 'ai_sport_soccer_england_premier_league' }
+    ];
+    rows.unshift(quickActions);
+  }
+
+  if (totalPages > 1) {
+    const nav = [];
+    if (page > 0) nav.push({ text: '‹ Prev', callback_data: `ai_page_${page - 1}` });
+    nav.push({ text: `${page + 1}/${totalPages}`, callback_data: 'ai_noop' });
+    if (page < totalPages - 1) nav.push({ text: 'Next ›', callback_data: `ai_page_${page + 1}` });
+    if (nav.length) rows.push(nav);
+  }
+
+  // Add help row
+  rows.push([
+    { text: '❓ Help', callback_data: 'ai_help_sports' },
+    { text: '🔄 Refresh', callback_data: 'ai_refresh_sports' }
+  ]);
+
+  const text = `🤖 *AI Parlay Builder*${errorMessage}\n\n*Step 1:* Select a sport.\n\n*Available:* ${sports.length} sports across ${Math.ceil(sports.length / PAGE_SIZE)} pages`;
+  const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } };
+
+  if (messageId) {
+    await safeEditMessage(bot, text, { ...opts, chat_id: chatId, message_id: messageId });
+  } else {
+    await bot.sendMessage(chatId, text, opts);
   }
 }
 
-// ---------- IMPROVED Prompt with Better JSON Instructions ----------
-function createAnalystPrompt({ sportKey, numLegs, betType, hours, tz }) {
-  const sportName = sportKey.replace(/_/g, ' ').toUpperCase();
-  const sources = SPORT_SOURCES[sportKey] || SPORT_SOURCES.soccer;
+async function sendLegSelection(bot, chatId, messageId) {
+  const state = await getUserState(chatId);
+  const sportTitle = SPORT_TITLES[state.sportKey] || state.sportKey?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
   
-  return `You are a professional sports analyst. Build a ${numLegs}-leg ${sportName} parlay for games in the next ${hours} hours.
+  const legOptions = [2, 3, 4, 5, 6, 7, 8];
+  const buttons = legOptions.map(num => ({ 
+    text: `${num} Leg${num > 1 ? 's' : ''}`, 
+    callback_data: `ai_legs_${num}` 
+  }));
+  
+  const keyboard = [];
+  for (let i = 0; i < buttons.length; i += 4) keyboard.push(buttons.slice(i, i + 4));
+  
+  // Add popular combinations
+  const popularCombos = [
+    { text: '🔥 4-Leg (Balanced)', callback_data: 'ai_legs_4' },
+    { text: '⚡ 3-Leg (Conservative)', callback_data: 'ai_legs_3' },
+    { text: '🎯 5-Leg (Aggressive)', callback_data: 'ai_legs_5' }
+  ];
+  keyboard.unshift(popularCombos);
+  
+  keyboard.push([{ text: '« Back to Sports', callback_data: 'ai_back_sport' }]);
+  
+  const text = `🤖 *AI Parlay Builder*\n\n*Step 2:* How many legs for your ${sportTitle} parlay?\n\n• 2-3 legs: Higher confidence\n• 4-5 legs: Balanced risk/reward\n• 6+ legs: Higher payout, more risk`;
+  const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
+  await safeEditMessage(bot, text, { ...opts, chat_id: chatId, message_id: messageId });
+}
 
-RESEARCH:
-- Find upcoming games from: ${sources[0]}
-- Cross-shop odds at: ${REGULATED_BOOKS.slice(0, 5).join(', ')}
+async function sendModeSelection(bot, chatId, messageId) {
+  const state = await getUserState(chatId);
+  const sportTitle = SPORT_TITLES[state.sportKey] || state.sportKey?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+  
+  const text = `🤖 *AI Parlay Builder*\n\n*Step 3:* Select analysis mode for ${sportTitle}.`;
+  const keyboard = [
+    [{ 
+      text: '🌐 Web Research (Recommended)', 
+      callback_data: 'ai_mode_web',
+      description: 'Real-time odds & analysis from multiple sources'
+    }],
+    [{ 
+      text: '📡 Live API Data (Premium)', 
+      callback_data: 'ai_mode_live',
+      description: 'Direct API data, requires quota'
+    }],
+    [{ 
+      text: '💾 Database Only (Fallback)', 
+      callback_data: 'ai_mode_db',
+      description: 'Stored data, may be outdated'
+    }],
+    [{ text: '« Back to Legs', callback_data: 'ai_back_legs' }]
+  ];
+  const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
+  await safeEditMessage(bot, text, { ...opts, chat_id: chatId, message_id: messageId });
+}
 
-CRITICAL: You MUST return ONLY valid JSON in this exact format. No other text, no markdown, no explanations.
+async function sendBetTypeSelection(bot, chatId, messageId) {
+  const state = await getUserState(chatId) || {};
+  const text = '🤖 *AI Parlay Builder*\n\n*Step 4:* What kind of parlay should I build?';
+  const keyboard = [
+    [{ text: '🔥 Player Props Only', callback_data: 'ai_bettype_props', description: 'Player points, yards, assists, etc.' }],
+    [{ text: '🎯 Moneyline Focus', callback_data: 'ai_bettype_moneyline', description: 'Straight win/lose bets' }],
+    [{ text: '📊 Spreads & Totals', callback_data: 'ai_bettype_spreads', description: 'Point spreads and over/unders' }],
+    [{ text: '🧩 Any Bet Type (Mixed)', callback_data: 'ai_bettype_mixed', description: 'Best opportunities across all markets' }],
+    [{ text: propsToggleLabel(!!state.includeProps), callback_data: 'ai_toggle_props' }],
+    [{ text: '« Back to Mode', callback_data: 'ai_back_mode' }]
+  ];
+  const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
+  await safeEditMessage(bot, text, { ...opts, chat_id: chatId, message_id: messageId });
+}
 
-{
-  "parlay_legs": [
-    {
-      "game": "Away Team @ Home Team",
-      "market": "moneyline",
-      "pick": "Team Name",
-      "fair_prob": 0.65,
-      "quotes": [
-        {
-          "book": "Sportsbook Name",
-          "american": -150,
-          "decimal": 1.67,
-          "opponent_american": 130,
-          "source_url": "https://example.com/odds"
-        }
-      ],
-      "best_quote": {
-        "book": "Sportsbook Name",
-        "american": -150,
-        "decimal": 1.67,
-        "source_url": "https://example.com/odds"
-      },
-      "justification": "Brief analysis of why this is a good bet",
-      "confidence": 0.75,
-      "game_date_utc": "2025-01-15T20:30:00.000Z"
+async function sendAiModelSelection(bot, chatId, messageId) {
+  const text = '🤖 *AI Parlay Builder*\n\n*Step 5:* Choose your Research AI.\n\n• 🧠 Gemini: Creative analysis, better narratives\n• ⚡ Perplexity: Data-focused, faster results';
+  const keyboard = [
+    [{ 
+      text: '🧠 Gemini (Creative)', 
+      callback_data: 'ai_model_gemini',
+      description: 'Better for complex analysis and storytelling'
+    }],
+    [{ 
+      text: '⚡ Perplexity (Data-Focused)', 
+      callback_data: 'ai_model_perplexity',
+      description: 'Faster, more factual, better for data'
+    }],
+    [{ text: '« Back to Bet Type', callback_data: 'ai_back_bettype' }]
+  ];
+  const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
+  await safeEditMessage(bot, text, { ...opts, chat_id: chatId, message_id: messageId });
+}
+
+// Send fallback options when web research fails
+async function sendFallbackOptions(bot, chatId, messageId, error) {
+  const { fallbackOptions, dataFreshness } = error;
+  
+  const text = 
+    `❌ *Web Research Failed*\n\n` +
+    `*Error:* ${error.originalError}\n\n` +
+    `*${fallbackOptions.db_mode.warning}*\n\n` +
+    `Choose a fallback option:\n\n` +
+    `🔴 *Live Mode*: ${fallbackOptions.live_mode.description}\n` +
+    `💾 *Database Mode*: ${fallbackOptions.db_mode.description}\n\n` +
+    `📅 Data last refreshed: ${new Date(dataFreshness.lastRefresh).toLocaleString()}\n` +
+    `⏰ Age: ${dataFreshness.hoursAgo} hours ago`;
+
+  const keyboard = [
+    [{ text: '🔴 Use Live Mode', callback_data: 'ai_fallback_live' }],
+    [{ text: '💾 Use Database Mode', callback_data: 'ai_fallback_db' }],
+    [{ text: '🔄 Try Different Sport', callback_data: 'ai_back_sport' }],
+    [{ text: '❓ Why did this fail?', callback_data: 'ai_help_fallback' }]
+  ];
+
+  await safeEditMessage(
+    bot,
+    text,
+    { 
+      chat_id: chatId, 
+      message_id: messageId, 
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: keyboard }
     }
-  ],
-  "confidence_score": 0.80,
-  "sources": ["https://source1.com", "https://source2.com"]
+  );
 }
 
-IMPORTANT RULES:
-1. Only include real upcoming games from official sources
-2. Provide actual source URLs for odds
-3. Use proper JSON format - all keys in double quotes
-4. No trailing commas
-5. No comments or explanations
-6. Return ONLY the JSON object`;
-}
+// Send parlay result (extracted from executeAiRequest for reuse)
+async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = null) {
+  const { sportKey, numLegs, betType } = state;
+  const legs = parlay.parlay_legs;
+  const tzLabel = 'America/New_York';
 
-// ---------- IMPROVED Perplexity with Better Error Handling ----------
-async function callPerplexity(prompt) {
-  const { PERPLEXITY_API_KEY } = env;
-  if (!PERPLEXITY_API_KEY) {
-    throw new Error('Perplexity API key missing');
+  let response = `🧠 *AI\\-Generated ${numLegs}\\-Leg Parlay*\n`;
+  response += `*Sport:* ${escapeMarkdownV2(sportKey)}\n`;
+  response += `*Mode:* ${escapeMarkdownV2(mode.toUpperCase())}\n`;
+  response += `*Type:* ${escapeMarkdownV2(betType === 'props' ? 'Player Props Only' : 'Mixed')}\n`;
+  response += `*Confidence:* ${Math.round((parlay.confidence_score || 0) * 100)}%\n`;
+  
+  // Add data freshness warning if present
+  if (parlay.data_freshness) {
+    response += `*Data Age:* ${parlay.data_freshness.hours_ago}h\n`;
+    response += `_${escapeMarkdownV2(parlay.data_freshness.message)}_\n`;
   }
   
-  console.log('🔄 Calling Perplexity Sonar Pro...');
+  response += `_Timezone: ${escapeMarkdownV2(tzLabel)}_\n\n`;
+
+  legs.forEach((leg, index) => {
+    const when = leg.game_date_local
+      ? leg.game_date_local
+      : (leg.game_date_utc ? formatLocalIfPresent(leg.game_date_utc, tzLabel) : '');
+    const safeGame = escapeMarkdownV2(leg.game);
+    const safePick = escapeMarkdownV2(leg.pick);
+    const safeMarket = escapeMarkdownV2(leg.market);
+    const safeJust = leg.justification ? escapeMarkdownV2(leg.justification.length > 250 ? `${leg.justification.slice(0, 250)}...` : leg.justification) : '';
+    const safeBook = leg.sportsbook ? escapeMarkdownV2(leg.sportsbook) : null;
+    const oddsDisplay = leg.odds_american ? `${leg.odds_american > 0 ? '+' : ''}${leg.odds_american}` : 'N/A';
+
+    response += `*Leg ${index + 1}:* ${safeGame}`;
+    if (when) response += ` — ${escapeMarkdownV2(when)}`;
+    response += `\n*Pick:* *${safePick}* \\(${safeMarket}\\)\n`;
+    response += `*Odds:* ${oddsDisplay}\n`;
+    if (safeBook) response += `*Book:* ${safeBook}\n`;
+    if (safeJust) response += `*Justification:* ${safeJust}\n`;
+    
+    // Add confidence if available
+    if (leg.confidence) {
+      response += `*Confidence:* ${Math.round(leg.confidence * 100)}%\n`;
+    }
+    
+    response += `\n`;
+  });
+
+  // Add parlay odds if available
+  if (parlay.parlay_odds_american) {
+    const oddsSign = parlay.parlay_odds_american > 0 ? '+' : '';
+    response += `*Parlay Odds:* ${oddsSign}${parlay.parlay_odds_american}\n`;
+  }
+
+  if (parlay.parlay_odds_decimal) {
+    response += `*Decimal Odds:* ${parlay.parlay_odds_decimal.toFixed(2)}\n`;
+  }
+
+  if (parlay.parlay_ev !== null && parlay.parlay_ev !== undefined) {
+    response += `*Expected Value:* ${(parlay.parlay_ev * 100).toFixed(1)}%\n`;
+  }
+
+  const finalKeyboard = [
+    [{ text: '🔄 Build Another', callback_data: 'ai_back_sport' }],
+    [{ text: '⚡ Quick NFL', callback_data: 'ai_sport_americanfootball_nfl' }],
+    [{ text: '📊 View Analytics', callback_data: 'ai_analytics' }]
+  ];
   
+  const messageOpts = {
+    parse_mode: 'MarkdownV2',
+    reply_markup: { inline_keyboard: finalKeyboard }
+  };
+
+  if (messageId) {
+    await safeEditMessage(bot, response, { ...messageOpts, chat_id: chatId, message_id: messageId });
+  } else {
+    await bot.sendMessage(chatId, response, messageOpts);
+  }
+}
+
+async function executeAiRequest(bot, chatId, messageId) {
+  const state = await getUserState(chatId);
+  const { sportKey, numLegs, mode, betType, aiModel = 'gemini', includeProps = false } = state || {};
+
+  if (!sportKey || !numLegs || !mode || !betType) {
+    return safeEditMessage(bot, '❌ Incomplete selection. Please start over using /ai.', { 
+      chat_id: chatId, 
+      message_id: messageId,
+      parse_mode: 'Markdown'
+    });
+  }
+
+  let modeText = { web: 'Web Research', live: 'Live API Data', db: 'Database Only' }[mode];
+  if (mode === 'web') modeText += ` via ${aiModel.charAt(0).toUpperCase() + aiModel.slice(1)}`;
+  const betTypeText = betType === 'props' ? 'Player Props Only' : 
+                     betType === 'moneyline' ? 'Moneyline Focus' :
+                     betType === 'spreads' ? 'Spreads & Totals' : 'Mixed';
+
+  // Preview banner
+  const safeSportKey = escapeMarkdownV2(sportKey);
+  const safeModeText = escapeMarkdownV2(modeText);
+  const safeBetTypeText = escapeMarkdownV2(betTypeText);
+  const safeIncludeProps = escapeMarkdownV2(includeProps ? 'On' : 'Off');
+
+  await safeEditMessage(
+    bot,
+    `🤖 Accessing advanced analytics\\.\\.\\.\n\n` +
+    `*Sport:* ${safeSportKey}\n` +
+    `*Legs:* ${numLegs}\n` +
+    `*Mode:* ${safeModeText}\n` +
+    `*Type:* ${safeBetTypeText}\n` +
+    `*Props:* ${safeIncludeProps}\n\n` +
+    `⏳ This may take 30\\-90 seconds\\.\\.\\.`,
+    { 
+      chat_id: chatId, 
+      message_id: messageId, 
+      parse_mode: 'MarkdownV2', 
+      reply_markup: { remove_keyboard: true } 
+    }
+  );
+
   try {
-    const response = await axios.post(
-      'https://api.perplexity.ai/chat/completions',
+    const startTime = Date.now();
+    const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, { includeProps });
+    const processingTime = Math.round((Date.now() - startTime) / 1000);
+
+    if (!parlay || !parlay.parlay_legs || parlay.parlay_legs.length === 0) {
+      throw new Error('AI returned an empty or invalid parlay. This can happen if no games are found for the selected sport.');
+    }
+
+    console.log(`✅ Parlay generated in ${processingTime}s with ${parlay.parlay_legs.length} legs`);
+    
+    // Add processing time to metadata
+    parlay.processing_time = processingTime;
+    
+    await sendParlayResult(bot, chatId, parlay, state, mode, messageId);
+
+  } catch (error) {
+    console.error('AI handler execution error:', error);
+    
+    // Check if this is a fallback-enabled error
+    if (error.fallbackAvailable) {
+      await sendFallbackOptions(bot, chatId, messageId, error);
+      return; // Don't clear state yet - let user choose fallback
+    }
+
+    // Regular error handling
+    const safeError = escapeMarkdownV2(error.message || 'Unknown error');
+    await safeEditMessage(
+      bot,
+      `❌ I encountered a critical error: \`${safeError}\`\n\nPlease try again later, or select a different mode\\.\n\n💡 Try:\\n• Different sport\\n• Fewer legs\\n• Database mode`,
       {
-        model: 'sonar-pro',
-        messages: [
-          { 
-            role: 'system', 
-            content: 'You are a sports data expert. Return ONLY valid JSON format. No markdown, no code fences, no explanations. Ensure all JSON keys are in double quotes and there are no trailing commas.' 
-          },
-          { role: 'user', content: prompt }
-        ],
-        temperature: 0.1,
-        max_tokens: 4000,
-        return_images: false,
-        return_related_questions: false
-      },
-      { 
-        headers: { 
-          Authorization: `Bearer ${PERPLEXITY_API_KEY}`,
-          'Content-Type': 'application/json'
-        }, 
-        timeout: 120000 // 120 seconds for thorough research
-      }
-    );
-    
-    const content = response?.data?.choices?.[0]?.message?.content || '';
-    
-    if (!content) {
-      throw new Error('Empty response from Perplexity');
-    }
-    
-    console.log('✅ Perplexity response received');
-    return content;
-  } catch (error) {
-    console.error('❌ Perplexity API error:', error.message);
-    
-    if (error.code === 'ECONNABORTED') {
-      throw new Error('Perplexity request timed out after 120 seconds');
-    }
-    
-    throw new Error(`Perplexity research failed: ${error.message}`);
-  }
-}
-
-// ---------- IMPROVED Gemini 2.5/2.0 Implementation ----------
-async function callGemini(prompt) {
-  const { GOOGLE_GEMINI_API_KEY } = env;
-  if (!GOOGLE_GEMINI_API_KEY) {
-    throw new Error('Gemini API key missing');
-  }
-  
-  console.log('🔄 Calling Gemini...');
-  
-  try {
-    const modelId = await pickSupportedModel(GOOGLE_GEMINI_API_KEY);
-    console.log(`🔧 Using Gemini model: ${modelId}`);
-    
-    const genAI = new GoogleGenerativeAI(GOOGLE_GEMINI_API_KEY);
-    
-    const model = genAI.getGenerativeModel({ 
-      model: modelId,
-      generationConfig: {
-        maxOutputTokens: MAX_OUTPUT_TOKENS,
-        temperature: 0.1,
-      },
-      safetySettings: SAFETY,
-    });
-
-    // Use the exact prompt format that works
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
-    
-    if (!text) {
-      throw new Error('Empty response from Gemini');
-    }
-    
-    console.log('✅ Gemini response received');
-    return text;
-  } catch (error) {
-    console.error('❌ Gemini API error:', error.message);
-    
-    if (error.message.includes('404') || error.message.includes('not found')) {
-      throw new Error(`Gemini model not available: ${error.message}`);
-    }
-    
-    throw new Error(`Gemini API call failed: ${error.message}`);
-  }
-}
-
-// ---------- IMPROVED Provider Calling ----------
-async function callProvider(aiModel, prompt) {
-  console.log(`🔍 Researching with ${aiModel}...`);
-  
-  const maxAttempts = 2;
-  
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    console.log(`🔄 ${aiModel} attempt ${attempt}/${maxAttempts}...`);
-    
-    try {
-      const text = aiModel === 'perplexity' 
-        ? await callPerplexity(prompt) 
-        : await callGemini(prompt);
-      
-      if (!text) {
-        throw new Error('Empty response from AI provider');
-      }
-      
-      const parsed = extractJSON(text);
-      if (parsed) {
-        console.log(`✅ ${aiModel} returned valid JSON on attempt ${attempt}`);
-        return parsed;
-      }
-      
-      console.warn(`⚠️ ${aiModel} attempt ${attempt} returned invalid JSON`);
-      
-      // More directive prompt for retry
-      if (attempt < maxAttempts) {
-        const retryPrompt = `${prompt}\n\nCRITICAL: You must return ONLY the JSON object. Remove ALL other text, markdown, code fences, and explanations. Ensure proper JSON syntax with double quotes for all keys and no trailing commas.`;
-        console.log(`🔄 Retrying ${aiModel} with stricter JSON requirements...`);
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        continue;
-      }
-      
-      throw new Error('Could not extract valid JSON from response');
-      
-    } catch (error) {
-      console.error(`❌ ${aiModel} attempt ${attempt} failed:`, error.message);
-      
-      if (attempt === maxAttempts) {
-        throw new Error(`${aiModel} failed after ${maxAttempts} attempts: ${error.message}`);
-      }
-      
-      await new Promise(resolve => setTimeout(resolve, 2000));
-    }
-  }
-  
-  throw new Error(`Unexpected error in callProvider for ${aiModel}`);
-}
-
-// ---------- NEW: Fallback System with Stale Data Warnings ----------
-class FallbackSystem {
-  constructor() {
-    this.lastDataRefresh = new Map();
-  }
-
-  async getDataFreshness(sportKey) {
-    try {
-      // Try to get the last refresh time from your database
-      // This would typically come from your oddsService or gamesService
-      const refreshTime = await this.getLastRefreshTime(sportKey);
-      this.lastDataRefresh.set(sportKey, refreshTime);
-      return refreshTime;
-    } catch (error) {
-      console.warn('Could not get data freshness:', error.message);
-      // Return a default stale time if we can't get the actual refresh time
-      return new Date(Date.now() - 2 * 60 * 60 * 1000); // 2 hours ago as fallback
-    }
-  }
-
-  async getLastRefreshTime(sportKey) {
-    // This should be implemented in your oddsService/gamesService
-    // For now, return current time minus a reasonable delay
-    return new Date(Date.now() - 30 * 60 * 1000); // 30 minutes ago as example
-  }
-
-  getStaleDataWarning(sportKey, lastRefresh) {
-    const now = new Date();
-    const hoursAgo = Math.round((now - lastRefresh) / (1000 * 60 * 60));
-    
-    let warningLevel = '⚠️';
-    if (hoursAgo > 24) warningLevel = '🚨';
-    else if (hoursAgo > 6) warningLevel = '❗';
-    
-    return {
-      warning: `${warningLevel} *STALE DATA WARNING* ${warningLevel}`,
-      message: `Database information is ${hoursAgo} hours old. Odds and game information may be outdated. Last refresh: ${lastRefresh.toLocaleString()}`,
-      hoursAgo,
-      isCritical: hoursAgo > 6
-    };
-  }
-
-  generateFallbackOptions(sportKey, lastRefresh) {
-    const warning = this.getStaleDataWarning(sportKey, lastRefresh);
-    
-    return {
-      live_mode: {
-        name: "🔴 Live Mode",
-        description: "Use current API data (may be limited)",
-        warning: warning.message,
-        requires_confirmation: warning.isCritical
-      },
-      db_mode: {
-        name: "💾 Database Mode", 
-        description: "Use stored database information",
-        warning: `${warning.message}\n\nThis data is ${warning.hoursAgo} hours old and may contain expired odds.`,
-        requires_confirmation: true
-      }
-    };
-  }
-}
-
-// ---------- ENHANCED Service Class with Fallback System ----------
-class AIService {
-  constructor() {
-    this.fallbackSystem = new FallbackSystem();
-  }
-
-  async generateParlay(sportKey, numLegs = 2, mode = 'web', aiModel = 'perplexity', betType = 'mixed', options = {}) {
-    console.log(`🎯 Generating ${numLegs}-leg ${sportKey} parlay in ${mode} mode using ${aiModel}`);
-    
-    // Handle non-web modes directly (no timeout needed for internal data)
-    if (mode !== 'web') {
-      return this.generateContextBasedParlay(sportKey, numLegs, betType, options, mode);
-    }
-
-    // Web mode with proper timeout
-    const overallTimeoutMs = 120000;
-    
-    return new Promise(async (resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        reject(new Error(`Web research timed out after ${overallTimeoutMs}ms`));
-      }, overallTimeoutMs);
-      
-      try {
-        const result = await this.generateWebResearchParlay(sportKey, numLegs, aiModel, betType, options);
-        clearTimeout(timeoutId);
-        resolve(result);
-      } catch (error) {
-        clearTimeout(timeoutId);
-        
-        // Web mode failed - prepare fallback options
-        const lastRefresh = await this.fallbackSystem.getDataFreshness(sportKey);
-        const fallbackOptions = this.fallbackSystem.generateFallbackOptions(sportKey, lastRefresh);
-        
-        const enhancedError = {
-          originalError: error.message,
-          fallbackAvailable: true,
-          fallbackOptions,
-          dataFreshness: {
-            lastRefresh: lastRefresh.toISOString(),
-            hoursAgo: Math.round((new Date() - lastRefresh) / (1000 * 60 * 60))
-          },
-          suggestion: "Web research failed. Would you like to use stored data instead?"
-        };
-        
-        reject(enhancedError);
-      }
-    });
-  }
-
-  // Web Research Mode
-  async generateWebResearchParlay(sportKey, numLegs, aiModel, betType, options = {}) {
-    const hours = Number(options.horizonHours || 72);
-    const prompt = createAnalystPrompt({ sportKey, numLegs, betType, hours, tz: TZ });
-
-    console.log('📝 Sending prompt to AI...');
-    const obj = await callProvider(aiModel, prompt);
-    
-    if (!obj || !Array.isArray(obj.parlay_legs)) {
-      throw new Error('AI returned invalid JSON structure - missing parlay_legs array');
-    }
-
-    console.log(`🔄 Processing ${obj.parlay_legs.length} potential legs...`);
-    
-    const legs = obj.parlay_legs
-      .map(leg => normalizeLeg(leg))
-      .filter(leg => leg !== null)
-      .slice(0, numLegs);
-
-    if (legs.length === 0) {
-      throw new Error(`No valid ${sportKey} legs could be processed from AI response`);
-    }
-
-    console.log(`✅ Successfully processed ${legs.length} legs`);
-
-    const parlayDec = parlayDecimal(legs);
-    const parlayAm = decimalToAmerican(parlayDec);
-
-    const fairProbs = legs.map(l => l.fair_prob).filter(v => v != null);
-    const jointFair = fairProbs.length > 0 ? fairProbs.reduce((p, v) => p * v, 1) : null;
-    const parlayEV = jointFair != null ? (jointFair * parlayDec - 1) : null;
-
-    console.log(`🎉 Parlay built successfully: ${legs.length} legs, ${parlayAm > 0 ? '+' : ''}${parlayAm} odds`);
-    
-    return {
-      parlay_legs: legs,
-      confidence_score: typeof obj.confidence_score === 'number' ? clamp01(obj.confidence_score) : 0.75,
-      parlay_odds_decimal: parlayDec,
-      parlay_odds_american: parlayAm,
-      parlay_ev: parlayEV,
-      sources: Array.isArray(obj.sources) ? obj.sources : [],
-      research_metadata: {
-        sport: sportKey,
-        legs_requested: numLegs,
-        legs_delivered: legs.length,
-        generated_at: new Date().toISOString(),
-        ai_model: aiModel,
-        data_source: 'web_research',
-        freshness: 'real_time'
-      }
-    };
-  }
-
-  // Enhanced Context-Based Parlay with Freshness Info
-  async generateContextBasedParlay(sportKey, numLegs, betType, options = {}, mode = 'live') {
-    console.log(`🔄 Using ${mode.toUpperCase()} mode for ${sportKey}...`);
-    
-    try {
-      let games;
-      let dataSource;
-      
-      if (mode === 'live') {
-        games = await oddsService.getSportOdds(sportKey);
-        dataSource = 'live_api';
-      } else {
-        games = await gamesService.getGamesForSport(sportKey);
-        dataSource = 'database';
-      }
-      
-      if (!games || games.length === 0) {
-        throw new Error(`No ${sportKey} games available in ${mode} mode`);
-      }
-
-      if (games.length < numLegs) {
-        console.warn(`Only ${games.length} games available, requested ${numLegs}`);
-      }
-
-      const selected = games.slice(0, numLegs);
-      const legs = selected.map(game => {
-        const bookmakers = game.bookmakers || game.market_data?.bookmakers || [];
-        const market = bookmakers[0]?.markets?.[0];
-        const outcome = market?.outcomes?.[0];
-        const american = outcome?.price ?? -110;
-        const decimal = americanToDecimal(american);
-
-        return {
-          game: `${game.away_team} @ ${game.home_team}`,
-          pick: outcome?.name || game.away_team,
-          market: market?.key || 'moneyline',
-          best_quote: {
-            book: bookmakers[0]?.title || 'DraftKings',
-            american, 
-            decimal
-          },
-          odds_american: american,
-          odds_decimal: decimal,
-          game_date_utc: game.commence_time,
-          game_date_local: this.toLocal(game.commence_time, TZ),
-          justification: `Selected from ${mode} data source`,
-          confidence: 0.65,
-          fair_prob: 0.55
-        };
-      });
-
-      // Get data freshness information
-      const lastRefresh = await this.fallbackSystem.getDataFreshness(sportKey);
-      const freshnessWarning = this.fallbackSystem.getStaleDataWarning(sportKey, lastRefresh);
-
-      return { 
-        parlay_legs: legs, 
-        confidence_score: 0.70,
-        source: dataSource,
-        data_freshness: {
-          last_refresh: lastRefresh.toISOString(),
-          hours_ago: freshnessWarning.hoursAgo,
-          warning: freshnessWarning.warning,
-          message: freshnessWarning.message
-        },
-        metadata: {
-          sport: sportKey,
-          mode: mode,
-          generated_at: new Date().toISOString(),
-          data_source: dataSource,
-          freshness: mode === 'live' ? 'near_real_time' : 'cached'
+        chat_id: chatId, 
+        message_id: messageId, 
+        parse_mode: 'MarkdownV2',
+        reply_markup: { 
+          inline_keyboard: [
+            [{ text: '🔄 Try Again', callback_data: 'ai_quick_retry' }],
+            [{ text: '🎯 Change Sport', callback_data: 'ai_quick_change_sport' }],
+            [{ text: '💾 Use Database Mode', callback_data: 'ai_fallback_db' }]
+          ]
         }
-      };
-    } catch (error) {
-      console.error(`${mode.toUpperCase()} mode parlay generation failed:`, error.message);
-      throw new Error(`${mode.toUpperCase()} data service error: ${error.message}`);
-    }
-  }
-
-  toLocal(utcDateString, timezone) {
-    if (!utcDateString) return null;
-    try {
-      const date = new Date(utcDateString);
-      return new Intl.DateTimeFormat('en-US', {
-        timeZone: timezone,
-        year: 'numeric',
-        month: 'short',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit'
-      }).format(date);
-    } catch (error) {
-      return null;
-    }
-  }
-
-  // NEW: Method to handle fallback selection
-  async handleFallbackSelection(sportKey, numLegs, selectedMode, betType = 'mixed') {
-    console.log(`🔄 Handling fallback to ${selectedMode} mode for ${sportKey}`);
-    
-    const result = await this.generateContextBasedParlay(
-      sportKey, 
-      numLegs, 
-      betType, 
-      {}, 
-      selectedMode
+      }
     );
     
-    // Add fallback context to the result
-    return {
-      ...result,
-      fallback_context: {
-        was_fallback: true,
-        original_mode: 'web',
-        selected_fallback: selectedMode,
-        fallback_reason: 'Web research failed, using stored data'
-      }
-    };
+    // Clear state only for non-fallback errors
+    await setUserState(chatId, {});
   }
 }
 
-export default new AIService();
+// NEW: Help command handler
+export function registerAIHelp(bot) {
+  bot.onText(/^\/ai_help$/, async (msg) => {
+    const chatId = msg.chat.id;
+    
+    const helpText = `
+🤖 *AI Parlay Builder Help*
+
+*Quick Commands:*
+• /ai - Full builder
+• /ai_nfl - Quick NFL parlay  
+• /ai_nba - Quick NBA parlay
+• /ai_mlb - Quick MLB parlay
+• /ai_soccer - Quick Soccer parlay
+• /ai_live - Fallback to Live mode
+• /ai_db - Fallback to Database mode
+
+*Modes:*
+• 🌐 *Web Research*: Real-time data (recommended)
+• 📡 *Live API*: Direct API data (requires quota)
+• 💾 *Database*: Stored data (fallback)
+
+*Need Help?*
+• Ensure you have stable internet
+• Try fewer legs for faster results  
+• Use popular sports for better data
+• Database mode always works but may be stale
+
+*Tips:*
+• 3-5 legs is optimal for balance
+• Player props work best for NBA/NFL
+• Web research takes 30-90 seconds
+    `;
+    
+    await bot.sendMessage(chatId, helpText, { parse_mode: 'Markdown' });
+  });
+}
