@@ -265,7 +265,7 @@ async function executeAiRequest(bot, chatId, messageId) {
   if (mode === 'web') modeText += ` via ${aiModel.charAt(0).toUpperCase() + aiModel.slice(1)}`;
   const betTypeText = betType === 'props' ? 'Player Props Only' : 'Mixed';
 
-  // Use MarkdownV2 with escaped variables; also escape literal periods
+  // Preview banner - MarkdownV2 with escaped literal dots, real newlines
   const safeSportKey = escapeMarkdownV2(sportKey);
   const safeModeText = escapeMarkdownV2(modeText);
   const safeBetTypeText = escapeMarkdownV2(betTypeText);
@@ -273,12 +273,12 @@ async function executeAiRequest(bot, chatId, messageId) {
 
   await safeEditMessage(
     bot,
-    `🤖 Accessing advanced analytics\\.\\.\\.\\n\\n` +
-    `*Sport:* ${safeSportKey}\\n` +
-    `*Legs:* ${numLegs}\\n` +
-    `*Mode:* ${safeModeText}\\n` +
-    `*Type:* ${safeBetTypeText}\\n` +
-    `*Props:* ${safeIncludeProps}\\n\\n` +
+    `🤖 Accessing advanced analytics\\.\\.\\.\n\n` +
+    `*Sport:* ${safeSportKey}\n` +
+    `*Legs:* ${numLegs}\n` +
+    `*Mode:* ${safeModeText}\n` +
+    `*Type:* ${safeBetTypeText}\n` +
+    `*Props:* ${safeIncludeProps}\n\n` +
     `This may take a moment\\.`,
     { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: null }
   );
@@ -293,11 +293,11 @@ async function executeAiRequest(bot, chatId, messageId) {
     const legs = parlay.parlay_legs;
     const tzLabel = 'America/New_York';
 
-    let response = `🧠 *AI\\-Generated ${numLegs}\\-Leg Parlay*\\n`;
-    response += `*Mode:* ${safeModeText}\\n`;
-    response += `*Type:* ${safeBetTypeText}\\n`;
-    response += `*Confidence:* ${Math.round((parlay.confidence_score || 0) * 100)}%\\n`;
-    response += `_Timezone: ${escapeMarkdownV2(tzLabel)}_\\n\\n`;
+    let response = `🧠 *AI\\-Generated ${numLegs}\\-Leg Parlay*\n`;
+    response += `*Mode:* ${safeModeText}\n`;
+    response += `*Type:* ${safeBetTypeText}\n`;
+    response += `*Confidence:* ${Math.round((parlay.confidence_score || 0) * 100)}%\n`;
+    response += `_Timezone: ${escapeMarkdownV2(tzLabel)}_\n\n`;
 
     legs.forEach((leg, index) => {
       const when = leg.game_date_local
@@ -311,10 +311,10 @@ async function executeAiRequest(bot, chatId, messageId) {
 
       response += `*Leg ${index + 1}:* ${safeGame}`;
       if (when) response += ` — ${escapeMarkdownV2(when)}`;
-      response += `\\n*Pick:* *${safePick}* \\(${safeMarket}\\)\\n`;
-      if (safeBook) response += `*Book:* ${safeBook}\\n`;
-      if (safeJust) response += `*Justification:* ${safeJust}\\n`;
-      response += `\\n`;
+      response += `\n*Pick:* *${safePick}* \\(${safeMarket}\\)\n`;
+      if (safeBook) response += `*Book:* ${safeBook}\n`;
+      if (safeJust) response += `*Justification:* ${safeJust}\n`;
+      response += `\n`;
     });
 
     const finalKeyboard = [[{ text: 'Build Another AI Parlay', callback_data: 'ai_back_sport' }]];
@@ -328,7 +328,7 @@ async function executeAiRequest(bot, chatId, messageId) {
     const safeError = escapeMarkdownV2(error.message || 'Unknown error');
     await safeEditMessage(
       bot,
-      `❌ I encountered a critical error: \\`${safeError}\\`\\.\\nPlease try again later, or select the Web Research mode which does not depend on live API data\\.`,
+      `❌ I encountered a critical error: \`${safeError}\`.\nPlease try again later, or select the Web Research mode which does not depend on live API data\.`,
       {
         chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2',
         reply_markup: { inline_keyboard: [[{ text: 'Start Over', callback_data: 'ai_back_sport' }]] }
