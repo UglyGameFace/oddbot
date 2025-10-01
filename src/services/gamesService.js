@@ -5,7 +5,7 @@ import databaseService from './databaseService.js';
 import oddsService from './oddsService.js';
 import env from '../config/env.js';
 import { Redis } from 'ioredis';
-
+import { SPORT_TITLES } from './sportsService.js'; 
 // Redis client for caching
 const redis = new Redis(env.REDIS_URL);
 
