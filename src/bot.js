@@ -70,6 +70,25 @@ function validateEnvironment() {
 }
 
 /**
+ * Escape Telegram reserved characters to avoid parse errors
+ */
+function escapeTelegramText(text) {
+    if (typeof text !== 'string') return text;
+    // Escape characters that need to be escaped in Telegram
+    return text
+        .replace(/-/g, '\\-')
+        .replace(/\./g, '\\.')
+        .replace(/!/g, '\\!')
+        .replace(/#/g, '\\#')
+        .replace(/\(/g, '\\(')
+        .replace(/\)/g, '\\)')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/&/g, '&amp;');
+}
+
+
+/**
  * Safely edit Telegram messages to avoid inline keyboard errors
  */
 async function safeEditMessage(chatId, messageId, text, options = {}) {
@@ -83,35 +102,15 @@ async function safeEditMessage(chatId, messageId, text, options = {}) {
       parse_mode: 'HTML',
       ...options
     };
-
-/**
- * Escape Telegram reserved characters to avoid parse errors
- */
-function escapeTelegramText(text) {
-  if (typeof text !== 'string') return text;
-  
-  // Escape characters that need to be escaped in Telegram
-  return text
-    .replace(/-/g, '\\-')  // Escape dash
-    .replace(/\./g, '\\.') // Escape dot
-    .replace(/!/g, '\\!')  // Escape exclamation
-    .replace(/#/g, '\\#')  // Escape hash
-    .replace(/\(/g, '\\(') // Escape parentheses
-    .replace(/\)/g, '\\)')
-    .replace(/</g, '&lt;')  // Escape for HTML mode
-    .replace(/>/g, '&gt;')
-    .replace(/&/g, '&amp;');
-}
-// Use it when sending parlay messages:
-const safeMessage = escapeTelegramText(parlayMessage);
-await bot.sendMessage(chatId, safeMessage, { parse_mode: 'HTML' });
     
     // Always provide reply_markup to avoid "inline keyboard expected" error
     if (!editOptions.reply_markup) {
       editOptions.reply_markup = { inline_keyboard: [] };
     }
     
-    return await bot.editMessageText(text, {
+    const safeMessage = escapeTelegramText(text);
+
+    return await bot.editMessageText(safeMessage, {
       chat_id: chatId,
       message_id: messageId,
       ...editOptions
@@ -121,7 +120,8 @@ await bot.sendMessage(chatId, safeMessage, { parse_mode: 'HTML' });
         error.response.body.description.includes('inline keyboard expected')) {
       console.log('🔄 Retrying message edit with explicit empty keyboard...');
       // Retry with explicit empty keyboard
-      return await bot.editMessageText(text, {
+      const safeMessage = escapeTelegramText(text);
+      return await bot.editMessageText(safeMessage, {
         chat_id: chatId,
         message_id: messageId,
         parse_mode: options.parse_mode || 'HTML',
@@ -257,12 +257,7 @@ async function initializeBot() {
       
       // Initialize bot with appropriate mode
       const botOptions = {
-        polling: !USE_WEBHOOK,
-        // Add better error handling for webhook mode
-        request: {
-          timeout: 30000,
-          agent: null
-        }
+        polling: !USE_WEBHOOK
       };
       
       bot = new TelegramBot(TOKEN, botOptions);
