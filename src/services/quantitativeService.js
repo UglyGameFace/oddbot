@@ -13,7 +13,7 @@ class QuantitativeService {
   /**
    * Comprehensive parlay evaluation with calibration
    */
-  evaluateParlay(legs, parlayDecimalOdds) {
+  async evaluateParlay(legs, parlayDecimalOdds) {
     if (!legs || legs.length === 0) {
       return { error: 'No legs provided for evaluation' };
     }
@@ -29,7 +29,7 @@ class QuantitativeService {
 
     // Calculate raw joint probability
     const rawJointProbability = rawProbabilities.reduce((acc, p) => acc * p.raw, 1);
-    const bookmakerJointProbability = 1 / parlayDecimalOdds;
+    const bookmakerJointProbability = parlayDecimalOdds > 0 ? 1 / parlayDecimalOdds : 0;
 
     console.log('🔬 QUANTITATIVE ANALYSIS');
     console.log(`- Raw Joint Probability: ${(rawJointProbability * 100).toFixed(2)}%`);
@@ -104,8 +104,7 @@ class QuantitativeService {
     const vigAdjustedProb = correlatedJointProb * this.calibrationFactors.vigAdjustment;
 
     // 5. Apply line movement risk
-    const finalProbability = vigAdjustedProb * 
-      Math.pow(1 - this.calibrationFactors.lineMovementRisk, numLegs);
+    const finalProbability = vigAdjustedProb * Math.pow(1 - this.calibrationFactors.lineMovementRisk, numLegs);
 
     // Ensure we don't go too far below bookmaker probability
     const realisticProbability = Math.max(
