@@ -783,35 +783,64 @@ class AIService {
     }
   }
 
-  async generateWebResearchParlay(sportKey, numLegs, aiModel, betType, options = {}) {
+  // In aiService.js - UPDATE the generateWebResearchParlay method
+async generateWebResearchParlay(sportKey, numLegs, aiModel, betType, options = {}) {
     const hours = Number(options.horizonHours || 72);
-    const prompt = createAnalystPrompt({ sportKey, numLegs, betType, hours });
-    console.log(`📝 Sending enhanced prompt to AI with a ${hours}-hour horizon...`);
+    const includeProps = options.includeProps || false;
+    const prompt = createAnalystPrompt({ sportKey, numLegs, betType, hours, includeProps });
+    
+    console.log(`📝 Sending enhanced prompt to AI with ${hours}-hour horizon, includeProps: ${includeProps}`);
     const obj = await callProvider(aiModel, prompt);
+    
     if (!obj || !Array.isArray(obj.parlay_legs)) {
-      throw new Error('AI returned invalid JSON structure - missing parlay_legs array');
+        throw new Error('AI returned invalid JSON structure - missing parlay_legs array');
     }
+    
     console.log(`🔄 Processing ${obj.parlay_legs.length} potential legs...`);
     const legs = obj.parlay_legs.map(normalizeLeg).filter(Boolean).slice(0, numLegs);
-    if (legs.length === 0) throw new Error(`No valid ${sportKey} legs could be processed`);
+    
+    if (legs.length === 0) {
+        throw new Error(`No valid ${sportKey} legs could be processed`);
+    }
+    
+    // Validate market variety
+    const varietyAssessment = this._assessMarketVariety(legs, betType, includeProps);
+    console.log(`📊 Market variety score: ${varietyAssessment.score}, meets requirements: ${varietyAssessment.meetsRequirements}`);
+    
+    if (!varietyAssessment.meetsRequirements && betType === 'mixed' && includeProps) {
+        console.warn('⚠️ Market variety requirements not met for mixed+props parlay');
+        // We could add logic here to retry or adjust, but for now we'll just log
+    }
+    
     console.log(`✅ Successfully processed ${legs.length} legs`);
+    
     const parlayDec = parlayDecimal(legs);
     const parlayAm = decimalToAmerican(parlayDec);
     const fairProbs = legs.map(l => l.fair_prob).filter(v => v != null);
     const jointFair = fairProbs.length > 0 ? fairProbs.reduce((p, v) => p * v, 1) : null;
     const parlayEV = jointFair != null ? (jointFair * parlayDec - 1) : null;
+    
     console.log(`🎉 Parlay built successfully: ${legs.length} legs, ${parlayAm > 0 ? '+' : ''}${parlayAm} odds`);
+    
     return {
-      parlay_legs: legs,
-      confidence_score: typeof obj.confidence_score === 'number' ? clamp01(obj.confidence_score) : 0.75,
-      parlay_odds_decimal: parlayDec,
-      parlay_odds_american: parlayAm,
-      parlay_ev: parlayEV,
-      sources: Array.isArray(obj.sources) ? obj.sources : [],
-      data_quality: this._assessParlayDataQuality(legs),
-      research_metadata: { sport: sportKey, legs_requested: numLegs, legs_delivered: legs.length, ai_model: aiModel }
+        parlay_legs: legs,
+        confidence_score: typeof obj.confidence_score === 'number' ? clamp01(obj.confidence_score) : 0.75,
+        parlay_odds_decimal: parlayDec,
+        parlay_odds_american: parlayAm,
+        parlay_ev: parlayEV,
+        sources: Array.isArray(obj.sources) ? obj.sources : [],
+        data_quality: this._assessParlayDataQuality(legs),
+        market_variety: varietyAssessment,
+        research_metadata: { 
+            sport: sportKey, 
+            legs_requested: numLegs, 
+            legs_delivered: legs.length, 
+            ai_model: aiModel,
+            include_props: includeProps,
+            bet_type: betType
+        }
     };
-  }
+}
 
   // Enhanced Live/DB modes with better data integration
   async generateContextBasedParlay(sportKey, numLegs, betType, options = {}) {
