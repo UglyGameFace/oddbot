@@ -682,10 +682,9 @@ async function sendFallbackOptions(bot, chatId, messageId, error) {
   );
 }
 
-// --- REWRITTEN PARLAY RESULT DISPLAY ---
 async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
     const { sportKey, numLegs } = state;
-    const { parlay_legs: legs, parlay_odds_american, quantitative_analysis: quant } = parlay;
+    const { parlay_legs: legs, parlay_odds_american, quantitative_analysis: quant, sources, market_variety } = parlay;
     const tzLabel = 'America/New_York';
 
     await setUserState(chatId, { ...state, lastSportKey: sportKey });
@@ -723,6 +722,18 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
             response += `<b>Suggested Stake (Half Kelly):</b> ${escapeHTML((quant.staking.kellyFractionHalf * 100).toFixed(1))}% of bankroll\n`;
         }
     }
+    
+    if (market_variety) {
+        response += `<b>Market Variety Score:</b> ${escapeHTML(Math.round(market_variety.score * 100))}%\n`;
+    }
+
+    if (sources && sources.length > 0) {
+        response += `\n<b>Primary Sources Used:</b>\n`;
+        sources.slice(0, 2).forEach(source => {
+            const displayUrl = source.replace(/https?:\/\/(www\.)?/, '').split('/')[0];
+            response += `• <a href="${escapeHTML(source)}">${escapeHTML(displayUrl)}</a>\n`;
+        });
+    }
 
     const finalKeyboard = [
         [{ text: '🔄 Build Another', callback_data: 'ai_back_sport' }],
@@ -738,7 +749,8 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
         await bot.sendMessage(chatId, response, messageOpts);
     }
 }
-// ... (rest of the file is unchanged) ...
+
+// --- UPDATED AI REQUEST EXECUTION ---
 async function executeAiRequest(bot, chatId, messageId) {
     const state = await getUserState(chatId);
     const aiConfig = await getAIConfig(chatId);
@@ -750,18 +762,18 @@ async function executeAiRequest(bot, chatId, messageId) {
 
     let modeText = { web: 'Web Research', live: 'Live API Data', db: 'Database Only' }[mode];
     if (mode === 'web' && aiModel) modeText += ` via ${aiModel.charAt(0).toUpperCase() + aiModel.slice(1)}`;
-    const betTypeText = betType === 'props' ? 'Player Props Only' :
-                       betType === 'moneyline' ? 'Moneyline Focus' :
-                       betType === 'spreads' ? 'Spreads & Totals' : 'Mixed';
 
-    const text = `🤖 Accessing advanced analytics...\n\n` +
+    const text = `🤖 <b>Initiating Deep Web Analysis...</b>\n\n` +
+                 `<b>Strategy:</b> ${escapeHTML(numLegs)}-Leg Parlay\n` +
                  `<b>Sport:</b> ${escapeHTML(sportKey)}\n` +
-                 `<b>Legs:</b> ${numLegs}\n` +
-                 `<b>Mode:</b> ${escapeHTML(modeText)}\n` +
-                 `<b>Type:</b> ${escapeHTML(betTypeText)}\n` +
-                 `<b>Pro Mode:</b> ${escapeHTML(aiConfig.proQuantMode ? 'On' : 'Off')}\n` +
-                 `<b>Time Horizon:</b> ${escapeHTML(aiConfig.horizonHours)} hours\n\n` +
-                 `<i>⏳ This may take 30-90 seconds...</i>`;
+                 `<b>Mode:</b> ${escapeHTML(modeText)}\n\n` +
+                 `<b>Process:</b>\n` +
+                 `  1.  Scanning schedules & injury reports...\n` +
+                 `  2.  Analyzing matchups & statistical trends...\n` +
+                 `  3.  Constructing optimal parlay...\n` +
+                 `  4.  Running quantitative validation...\n\n` +
+                 `<i>This thorough process may take up to 90 seconds. Please wait...</i>`;
+
 
     await safeEditMessage(
       chatId,
