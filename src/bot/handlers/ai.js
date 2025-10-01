@@ -950,8 +950,18 @@ async function executeAiRequest(bot, chatId, messageId) {
       if (mode === 'web') {
           // --- ADDED: DYNAMIC MODEL SELECTION ---
           // Map the UI choice ('gemini' or 'perplexity') to a specific Google model.
-          const modelChoice = state.model_choice || "gemini-2.0-flash";
-          const modelName = getGeminiModel(modelChoice);
+          const GEMINI_MODELS = {
+  pro_2_5: "gemini-2.5-pro",
+  flash_2_5: "gemini-2.5-flash",
+  flash_lite_2_5: "gemini-2.5-flash-lite",
+  flash_2_5_preview: "gemini-2.5-flash-lite-preview-09-2025",
+  flash_2_0: "gemini-2.0-flash",
+  flash_2_0_alt: "gemini-2.0-flash-001",
+};
+
+function getGeminiModel(choice) {
+  return GEMINI_MODELS[choice] || GEMINI_MODELS.pro_2_5; // fallback
+}
           
           const model = genAI.getGenerativeModel({ model: modelName });
           console.log(`Using dynamically selected model: ${modelName} for user choice: ${aiModel}`);
