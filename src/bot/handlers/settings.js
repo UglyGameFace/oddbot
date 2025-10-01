@@ -31,7 +31,7 @@ export function registerSettingsCallbacks(bot) {
     if (action === 'aimode') return sendAiModeMenu(bot, chatId, messageId);
     if (action === 'aimodel') return sendAiModelMenu(bot, chatId, messageId);
     if (action === 'aibettype') return sendAiBetTypeMenu(bot, chatId, messageId);
-    if (action === 'aihorizon') return sendAiTimeHorizonMenu(bot, chatId, messageId); // <-- NEW ACTION
+    if (action === 'aihorizon') return sendAiTimeHorizonMenu(bot, chatId, messageId);
 
     // Builder Settings
     if (action === 'bldodds') return sendBuilderOddsMenu(bot, chatId, messageId);
@@ -56,7 +56,14 @@ export function registerSettingsCallbacks(bot) {
         setConfigFunc = setBuilderConfig;
       }
       
-      config[key] = isNaN(value) ? value : Number(value);
+      const numericValue = isNaN(value) ? value : Number(value);
+
+      // *** FIX: Only update and redraw if the value has changed ***
+      if (config[key] === numericValue) {
+        return; // Do nothing if the value is already the same
+      }
+
+      config[key] = numericValue;
       await setConfigFunc(chatId, config);
 
       // Return to the correct menu after setting a value
@@ -88,10 +95,10 @@ async function sendAiSettingsMenu(bot, chatId, messageId) {
   const config = await getAIConfig(chatId);
   const text = `*🤖 AI Analyst Settings*\n\nSet your default preferences for the \`/ai\` command.`;
   const keyboard = [
-    [{ text: `Default Mode: ${config.mode || 'Live API'}`, callback_data: 'set_aimode' }],
-    [{ text: `Default Web AI: ${config.model || 'Gemini'}`, callback_data: 'set_aimodel' }],
+    [{ text: `Default Mode: ${config.mode || 'Web Research'}`, callback_data: 'set_aimode' }],
+    [{ text: `Default Web AI: ${config.model || 'Perplexity'}`, callback_data: 'set_aimodel' }],
     [{ text: `Default Bet Type: ${config.betType || 'Mixed'}`, callback_data: 'set_aibettype' }],
-    [{ text: `Time Horizon: ${config.horizonHours || 72} hours`, callback_data: 'set_aihorizon' }], // <-- NEW BUTTON
+    [{ text: `Time Horizon: ${config.horizonHours || 72} hours`, callback_data: 'set_aihorizon' }],
     [{ text: '« Back to Main Menu', callback_data: 'set_main' }]
   ];
   const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
@@ -114,34 +121,37 @@ async function sendAiTimeHorizonMenu(bot, chatId, messageId) {
 }
 
 async function sendAiModeMenu(bot, chatId, messageId) {
+    const config = await getAIConfig(chatId);
     const text = 'Select your preferred default analysis mode for the AI:';
     const keyboard = [
-        [{ text: '📡 Live API (Best)', callback_data: 'set_set_ai_mode_live' }],
-        [{ text: '🌐 Web Research', callback_data: 'set_set_ai_mode_web' }],
-        [{ text: '💾 Database Fallback', callback_data: 'set_set_ai_mode_db' }],
+        [{ text: `📡 Live API (Best) ${config.mode === 'live' ? '✅' : ''}`, callback_data: 'set_set_ai_mode_live' }],
+        [{ text: `🌐 Web Research ${config.mode === 'web' ? '✅' : ''}`, callback_data: 'set_set_ai_mode_web' }],
+        [{ text: `💾 Database Fallback ${config.mode === 'db' ? '✅' : ''}`, callback_data: 'set_set_ai_mode_db' }],
         [{ text: '« Back to AI Settings', callback_data: 'set_ai' }]
     ];
-    await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: keyboard } });
+    await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
 }
 
 async function sendAiModelMenu(bot, chatId, messageId) {
+    const config = await getAIConfig(chatId);
     const text = 'Select your default AI for the "Web Research" mode:';
     const keyboard = [
-        [{ text: '🧠 Gemini (Creative)', callback_data: 'set_set_ai_model_gemini' }],
-        [{ text: '⚡ Perplexity (Data-Focused)', callback_data: 'set_set_ai_model_perplexity' }],
+        [{ text: `🧠 Gemini (Creative) ${config.model === 'gemini' ? '✅' : ''}`, callback_data: 'set_set_ai_model_gemini' }],
+        [{ text: `⚡️ Perplexity (Data-Focused) ${config.model === 'perplexity' ? '✅' : ''}`, callback_data: 'set_set_ai_model_perplexity' }],
         [{ text: '« Back to AI Settings', callback_data: 'set_ai' }]
     ];
-    await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: keyboard } });
+    await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
 }
 
 async function sendAiBetTypeMenu(bot, chatId, messageId) {
+    const config = await getAIConfig(chatId);
     const text = 'Select the default type of parlay the AI should build:';
     const keyboard = [
-        [{ text: '🔥 Player Props Only', callback_data: 'set_set_ai_betType_props' }],
-        [{ text: '🧩 Any Bet Type (Mixed)', callback_data: 'set_set_ai_betType_mixed' }],
+        [{ text: `🔥 Player Props Only ${config.betType === 'props' ? '✅' : ''}`, callback_data: 'set_set_ai_betType_props' }],
+        [{ text: `🧩 Any Bet Type (Mixed) ${config.betType === 'mixed' ? '✅' : ''}`, callback_data: 'set_set_ai_betType_mixed' }],
         [{ text: '« Back to AI Settings', callback_data: 'set_ai' }]
     ];
-    await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: keyboard } });
+    await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
 }
 
 // --- Custom Builder Settings Menus ---
@@ -173,12 +183,13 @@ async function sendBuilderOddsMenu(bot, chatId, messageId) {
 }
 
 async function sendBuilderCutoffMenu(bot, chatId, messageId) {
+    const config = await getBuilderConfig(chatId);
     const text = 'Select the maximum time horizon for games to appear in the custom builder:';
     const keyboard = [
-        [{ text: 'Next 6 Hours', callback_data: 'set_set_builder_cutoffHours_6' }],
-        [{ text: 'Next 12 Hours', callback_data: 'set_set_builder_cutoffHours_12' }],
-        [{ text: 'Next 24 Hours', callback_data: 'set_set_builder_cutoffHours_24' }],
-        [{ text: 'Next 48 Hours', callback_data: 'set_set_builder_cutoffHours_48' }],
+        [{ text: `Next 6 Hours ${config.cutoffHours === 6 ? '✅' : ''}`, callback_data: 'set_set_builder_cutoffHours_6' }],
+        [{ text: `Next 12 Hours ${config.cutoffHours === 12 ? '✅' : ''}`, callback_data: 'set_set_builder_cutoffHours_12' }],
+        [{ text: `Next 24 Hours ${config.cutoffHours === 24 ? '✅' : ''}`, callback_data: 'set_set_builder_cutoffHours_24' }],
+        [{ text: `Next 48 Hours ${config.cutoffHours === 48 ? '✅' : ''}`, callback_data: 'set_set_builder_cutoffHours_48' }],
         [{ text: '« Back to Builder Settings', callback_data: 'set_builder' }]
     ];
     const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
