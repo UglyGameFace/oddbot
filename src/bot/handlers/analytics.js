@@ -4,11 +4,11 @@ import oddsService from '../../services/oddsService.js';
 import gamesService from '../../services/gamesService.js';
 import databaseService from '../../services/databaseService.js';
 import healthService from '../../services/healthService.js';
-import { 
-  analyzeQuantitative, 
+import {
+  analyzeQuantitative,
   psychometric,
   advancedOddsModel,
-  escapeMarkdownV2 
+  escapeMarkdownV2
 } from '../../utils/enterpriseUtilities.js';
 
 // Analytics configuration
@@ -42,9 +42,11 @@ class AnalyticsService {
     console.log(`📊 Generating analytics for ${sportKey}...`);
     
     try {
-      const [oddsData, gamesData, dbStats, healthStatus] = await Promise.all([
-        this._fetchOddsData(sportKey, options),
-        this._fetchGamesData(sportKey, options),
+      // CRITICAL FIX: Always fetch fresh, detailed odds data for analytics
+      const oddsData = await oddsService.getSportOdds(sportKey, { useCache: false, includeLive: true, hoursAhead: 72 });
+      const gamesData = oddsData; // Use the same rich data for game analysis
+
+      const [dbStats, healthStatus] = await Promise.all([
         databaseService.getSportGameCounts(),
         healthService.getHealth(true)
       ]);
@@ -175,33 +177,6 @@ class AnalyticsService {
   }
 
   // ========== PRIVATE METHODS ==========
-
-  async _fetchOddsData(sportKey, options) {
-    try {
-      return await oddsService.getSportOdds(sportKey, {
-        useCache: true,
-        includeLive: true,
-        hoursAhead: options.hoursAhead || 72,
-        ...options
-      });
-    } catch (error) {
-      console.error(`❌ Failed to fetch odds data for ${sportKey}:`, error);
-      return [];
-    }
-  }
-
-  async _fetchGamesData(sportKey, options) {
-    try {
-      return await gamesService.getGamesForSport(sportKey, {
-        useCache: true,
-        hoursAhead: options.hoursAhead || 72,
-        ...options
-      });
-    } catch (error) {
-      console.error(`❌ Failed to fetch games data for ${sportKey}:`, error);
-      return [];
-    }
-  }
 
   _assessAnalyticsDataQuality(oddsData, gamesData) {
     const oddsQuality = oddsData.length > 0 ? 'high' : 'low';
