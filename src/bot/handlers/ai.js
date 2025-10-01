@@ -416,7 +416,7 @@ export function registerAICallbacks(bot) {
         );
 
         // This assumes analytics.js exports an analyticsService object
-        const { analyticsService } = await import('./analytics.js');
+        const analyticsService = (await import('./analytics.js')).default;
         const analytics = await analyticsService.generateSportAnalytics(sportKey);
 
         let analyticsText = `📊 <b>Analytics for ${escapeHTML(sportKey)}</b>\n\n`;
