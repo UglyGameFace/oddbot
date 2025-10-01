@@ -142,13 +142,33 @@ function pageOf(arr, page) {
   return arr.slice(start, start + PAGE_SIZE); 
 }
 
+function formatLocalIfPresent(utcDateString, timezone) {
+    if (!utcDateString) return null;
+    try {
+      const date = new Date(utcDateString);
+      return new Intl.DateTimeFormat('en-US', {
+        timeZone: timezone,
+        year: 'numeric',
+        month: 'short',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+      }).format(date);
+    } catch (error) {
+      console.warn('Date localization failed:', error.message);
+      return null;
+    }
+}
+
 // COMPREHENSIVE sports discovery with multiple fallback layers
 async function getAllAvailableSports() {
   const sportsCollection = new Map();
   
   console.log('🔄 Starting comprehensive sports discovery...');
   
+  // Layer 1: Primary - gamesService (cached/provider mixed)
   try {
+    console.log('📡 Layer 1: Querying gamesService...');
     const gamesServiceSports = await gamesService.getAvailableSports();
     if (gamesServiceSports && Array.isArray(gamesServiceSports)) {
       gamesServiceSports.forEach(sport => {
@@ -161,12 +181,15 @@ async function getAllAvailableSports() {
           });
         }
       });
+      console.log(`✅ Layer 1: Added ${gamesServiceSports.length} sports from gamesService`);
     }
   } catch (error) {
     console.warn('❌ Layer 1 (gamesService) failed:', error.message);
   }
   
+  // Layer 2: Secondary - databaseService comprehensive list
   try {
+    console.log('🗄️ Layer 2: Querying databaseService...');
     const dbSports = await databaseService.getDistinctSports();
     if (dbSports && Array.isArray(dbSports)) {
       dbSports.forEach(sport => {
@@ -179,25 +202,43 @@ async function getAllAvailableSports() {
           });
         }
       });
+      console.log(`✅ Layer 2: Added ${dbSports.length} sports from databaseService`);
     }
   } catch (error) {
     console.warn('❌ Layer 2 (databaseService) failed:', error.message);
   }
   
+  // Layer 3: Tertiary - Add known sports from our comprehensive list
+  console.log('🌍 Layer 3: Adding known sports from comprehensive list...');
   Object.entries(SPORT_TITLES).forEach(([sport_key, sport_title]) => {
     if (!sportsCollection.has(sport_key)) {
-      sportsCollection.set(sport_key, { sport_key, sport_title, source: 'comprehensive_list', priority: 3 });
+      sportsCollection.set(sport_key, {
+        sport_key,
+        sport_title,
+        source: 'comprehensive_list',
+        priority: 3
+      });
     }
   });
+  console.log(`✅ Layer 3: Added known sports from comprehensive list`);
   
+  // Layer 4: Final fallback - static defaults
   if (sportsCollection.size === 0) {
+    console.log('🆘 Layer 4: Using static defaults as final fallback...');
     DEFAULT_SPORTS.forEach(sport => {
-      sportsCollection.set(sport.sport_key, { ...sport, source: 'static_defaults', priority: 4 });
+      sportsCollection.set(sport.sport_key, {
+        ...sport,
+        source: 'static_defaults',
+        priority: 4
+      });
     });
   }
   
-  const sports = Array.from(sportsCollection.values()).sort((a, b) => a.priority - b.priority);
+  const sports = Array.from(sportsCollection.values())
+    .sort((a, b) => a.priority - b.priority);
+  
   console.log(`🎉 Sports discovery complete: ${sports.length} total sports found`);
+  
   return sports;
 }
 
@@ -573,80 +614,140 @@ async function sendAiModelSelection(bot, chatId, messageId) {
   await safeEditMessage(chatId, messageId, text, opts);
 }
 
-async function executeAiRequest(bot, chatId, messageId) {
-  const state = await getUserState(chatId);
-  const { sportKey, numLegs, mode, betType, aiModel = 'gemini', includeProps = false } = state || {};
-
-  if (!sportKey || !numLegs || !mode || !betType) {
-    return safeEditMessage(chatId, messageId, '❌ Incomplete selection. Please start over using /ai.');
-  }
-
-  let modeText = { web: 'Web Research', live: 'Live API Data', db: 'Database Only' }[mode];
-  if (mode === 'web') modeText += ` via ${aiModel.charAt(0).toUpperCase() + aiModel.slice(1)}`;
-  const betTypeText = betType === 'props' ? 'Player Props Only' : 
-                     betType === 'moneyline' ? 'Moneyline Focus' :
-                     betType === 'spreads' ? 'Spreads & Totals' : 'Mixed';
+async function sendFallbackOptions(bot, chatId, messageId, error) {
+  const { fallbackOptions, dataFreshness } = error;
   
-  const text = `🤖 Accessing advanced analytics...\n\n` +
-               `<b>Sport:</b> ${escapeHTML(sportKey)}\n` +
-               `<b>Legs:</b> ${numLegs}\n` +
-               `<b>Mode:</b> ${escapeHTML(modeText)}\n` +
-               `<b>Type:</b> ${escapeHTML(betTypeText)}\n` +
-               `<b>Props:</b> ${escapeHTML(includeProps ? 'On' : 'Off')}\n\n` +
-               `<i>⏳ This may take 30-90 seconds...</i>`;
-               
+  const text = 
+    `❌ <b>Web Research Failed</b>\n\n` +
+    `<b>Error:</b> ${escapeHTML(error.originalError)}\n\n` +
+    `<b>${escapeHTML(fallbackOptions.db_mode.warning)}</b>\n\n` +
+    `Choose a fallback option:\n\n` +
+    `🔴 <b>Live Mode</b>: ${escapeHTML(fallbackOptions.live_mode.description)}\n` +
+    `💾 <b>Database Mode</b>: ${escapeHTML(fallbackOptions.db_mode.description)}\n\n` +
+    `📅 Data last refreshed: ${escapeHTML(new Date(dataFreshness.lastRefresh).toLocaleString())}\n` +
+    `⏰ Age: ${escapeHTML(dataFreshness.hoursAgo)} hours ago`;
+
+  const keyboard = [
+    [{ text: '🔴 Use Live Mode', callback_data: 'ai_fallback_live' }],
+    [{ text: '💾 Use Database Mode', callback_data: 'ai_fallback_db' }],
+    [{ text: '🔄 Try Different Sport', callback_data: 'ai_back_sport' }],
+    [{ text: '❓ Why did this fail?', callback_data: 'ai_help_fallback' }]
+  ];
+
   await safeEditMessage(
     chatId,
     messageId,
     text,
     { 
-      parse_mode: 'HTML', 
-      reply_markup: { remove_keyboard: true } 
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: keyboard }
     }
   );
+}
+  
+async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = null) {
+  const { sportKey, numLegs, betType } = state;
+  const legs = parlay.parlay_legs;
+  const tzLabel = 'America/New_York';
 
-  try {
-    const startTime = Date.now();
-    const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, { includeProps });
-    const processingTime = Math.round((Date.now() - startTime) / 1000);
+  let response = `🧠 <b>AI-Generated ${escapeHTML(numLegs)}-Leg Parlay</b>\n`;
+  response += `<b>Sport:</b> ${escapeHTML(SPORT_TITLES[sportKey] || sportKey)}\n`;
+  response += `<b>Mode:</b> ${escapeHTML(mode.toUpperCase())}\n\n`;
 
-    if (!parlay || !parlay.parlay_legs || parlay.parlay_legs.length === 0) {
-      throw new Error('AI returned an empty or invalid parlay. This can happen if no games are found for the selected sport.');
+  legs.forEach((leg, index) => {
+    const when = formatLocalIfPresent(leg.game_date_utc, tzLabel) || 'Time TBD';
+    response += `<b>Leg ${index + 1}:</b> ${escapeHTML(leg.game)} - <i>${escapeHTML(when)}</i>\n`;
+    response += `<b>Pick:</b> ${escapeHTML(leg.pick)} (${escapeHTML(leg.market)})\n`;
+    response += `<b>Odds:</b> ${leg.odds_american > 0 ? '+' : ''}${leg.odds_american}\n`;
+    response += `<i>${escapeHTML(leg.justification)}</i>\n\n`;
+  });
+
+  const oddsSign = parlay.parlay_odds_american > 0 ? '+' : '';
+  response += `<b>Total Odds:</b> ${oddsSign}${parlay.parlay_odds_american}\n`;
+  response += `<b>Confidence:</b> ${Math.round((parlay.confidence_score || 0) * 100)}%\n`;
+
+  const finalKeyboard = [[{ text: '🔄 Build Another', callback_data: 'ai_back_sport' }]];
+
+  await safeEditMessage(chatId, messageId, response, {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: finalKeyboard }
+  });
+}
+  
+async function executeAiRequest(bot, chatId, messageId) {
+    const state = await getUserState(chatId);
+    const { sportKey, numLegs, mode, betType, aiModel = 'gemini', includeProps = false } = state || {};
+  
+    if (!sportKey || !numLegs || !mode) {
+      return safeEditMessage(chatId, messageId, '❌ Incomplete selection. Please start over using /ai.');
     }
-
-    console.log(`✅ Parlay generated in ${processingTime}s with ${parlay.parlay_legs.length} legs`);
-    parlay.processing_time = processingTime;
-    
-    await sendParlayResult(bot, chatId, parlay, state, mode, messageId);
-
-  } catch (error) {
-    console.error('AI handler execution error:', error);
-    
-    if (error.fallbackAvailable) {
-      await sendFallbackOptions(bot, chatId, messageId, error);
-      return;
-    }
-
-    const errorMessage = `❌ I encountered a critical error: <code>${escapeHTML(error.message || 'Unknown error')}</code>\n\nPlease try again later, or select a different mode.\n\n💡 Try:\n• Different sport\n• Fewer legs\n• Database mode`;
-    
+  
+    let modeText = { web: 'Web Research', live: 'Live API Data', db: 'Database Only' }[mode];
+    if (mode === 'web') modeText += ` via ${aiModel.charAt(0).toUpperCase() + aiModel.slice(1)}`;
+    const betTypeText = betType === 'props' ? 'Player Props Only' : 
+                       betType === 'moneyline' ? 'Moneyline Focus' :
+                       betType === 'spreads' ? 'Spreads & Totals' : 'Mixed';
+  
+    const text = `🤖 Accessing advanced analytics...\n\n` +
+                 `<b>Sport:</b> ${escapeHTML(sportKey)}\n` +
+                 `<b>Legs:</b> ${numLegs}\n` +
+                 `<b>Mode:</b> ${escapeHTML(modeText)}\n` +
+                 `<b>Type:</b> ${escapeHTML(betTypeText)}\n` +
+                 `<b>Props:</b> ${escapeHTML(includeProps ? 'On' : 'Off')}\n\n` +
+                 `<i>⏳ This may take 30-90 seconds...</i>`;
+                 
     await safeEditMessage(
       chatId,
       messageId,
-      errorMessage,
-      {
-        parse_mode: 'HTML',
-        reply_markup: { 
-          inline_keyboard: [
-            [{ text: '🔄 Try Again', callback_data: 'ai_quick_retry' }],
-            [{ text: '🎯 Change Sport', callback_data: 'ai_quick_change_sport' }],
-            [{ text: '💾 Use Database Mode', callback_data: 'ai_fallback_db' }]
-          ]
-        }
+      text,
+      { 
+        parse_mode: 'HTML', 
+        reply_markup: { remove_keyboard: true } 
       }
     );
-    
-    await setUserState(chatId, {});
-  }
+  
+    try {
+      const startTime = Date.now();
+      const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, { includeProps });
+      const processingTime = Math.round((Date.now() - startTime) / 1000);
+  
+      if (!parlay || !parlay.parlay_legs || parlay.parlay_legs.length === 0) {
+        throw new Error('AI returned an empty or invalid parlay. This can happen if no games are found for the selected sport.');
+      }
+  
+      console.log(`✅ Parlay generated in ${processingTime}s with ${parlay.parlay_legs.length} legs`);
+      parlay.processing_time = processingTime;
+      
+      await sendParlayResult(bot, chatId, parlay, state, mode, messageId);
+  
+    } catch (error) {
+      console.error('AI handler execution error:', error);
+      
+      if (error.fallbackAvailable) {
+        await sendFallbackOptions(bot, chatId, messageId, error);
+        return;
+      }
+  
+      const errorMessage = `❌ I encountered a critical error: <code>${escapeHTML(error.message || 'Unknown error')}</code>\n\nPlease try again later, or select a different mode.\n\n💡 Try:\n• Different sport\n• Fewer legs\n• Database mode`;
+      
+      await safeEditMessage(
+        chatId,
+        messageId,
+        errorMessage,
+        {
+          parse_mode: 'HTML',
+          reply_markup: { 
+            inline_keyboard: [
+              [{ text: '🔄 Try Again', callback_data: 'ai_quick_retry' }],
+              [{ text: '🎯 Change Sport', callback_data: 'ai_quick_change_sport' }],
+              [{ text: '💾 Use Database Mode', callback_data: 'ai_fallback_db' }]
+            ]
+          }
+        }
+      );
+      
+      await setUserState(chatId, {});
+    }
 }
 
 export function registerAIHelp(bot) {
