@@ -7,7 +7,6 @@ import { setUserState, getUserState, getAIConfig } from '../state.js';
 import { getSportEmoji, sortSports } from '../../services/sportsService.js';
 import { safeEditMessage } from '../../bot.js';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-
 // --- CORRECTED: AI Client Initialization ---
 // The client is initialized here, but the specific model is now chosen dynamically later.
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -754,7 +753,7 @@ async function sendBetTypeSelection(bot, chatId, messageId) {
     [{ text: '🎯 Moneyline Focus', callback_data: 'ai_bettype_moneyline'}],
     [{ text: '📊 Spreads & Totals', callback_data: 'ai_bettype_spreads'}],
     [{ text: '🧩 Any Bet Type (Mixed)', callback_data: 'ai_bettype_mixed'}],
-    [{ text: `✅ Include Player Props: ${state.includeProps ? 'ON' : 'OFF'}`, callback_data: 'ai_toggle_props' }],
+    [{ text: `🥇 Include Player Props: ${state.includeProps ? 'ON' : 'OFF'}`, callback_data: 'ai_toggle_props' }],
     [{ text: '« Back to Mode', callback_data: 'ai_back_mode' }]
   ];
 
