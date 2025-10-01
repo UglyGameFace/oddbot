@@ -740,134 +740,132 @@ class AIService {
     this.generationStats = { totalRequests: 0, successfulRequests: 0, failedRequests: 0, averageProcessingTime: 0, lastRequest: null };
   }
 
-  // THIS IS THE CORRECTED generateParlay METHOD
-  async function generateParlay(sportKey, numLegs = 2, mode = 'web', aiModel = 'perplexity', betType = 'mixed', options = {}) {
-    const requestId = `parlay_${sportKey}_${Date.now()}`;
-    console.log(`🎯 Generating ${numLegs}-leg ${sportKey} parlay in ${mode} mode using ${aiModel} (${requestId})`);
-    
-    this.generationStats.totalRequests++;
-    this.generationStats.lastRequest = new Date().toISOString();
-    
-    const startTime = Date.now();
-    
-    try {
-      let result;
-      // Pass the proQuantMode option to the generation methods
-      const proQuantMode = options.proQuantMode || false;
-
-      if (mode === 'web') {
-        result = await this._executeWithTimeout(
-          this.generateWebResearchParlay(sportKey, numLegs, aiModel, betType, {...options, proQuantMode }),
-          120000,
-          `Web research for ${sportKey}`
-        );
-      } else {
-        result = await this.generateContextBasedParlay(sportKey, numLegs, betType, {...options, proQuantMode });
-      }
+  async generateParlay(sportKey, numLegs = 2, mode = 'web', aiModel = 'perplexity', betType = 'mixed', options = {}) {
+      const requestId = `parlay_${sportKey}_${Date.now()}`;
+      console.log(`🎯 Generating ${numLegs}-leg ${sportKey} parlay in ${mode} mode using ${aiModel} (${requestId})`);
+      
+      this.generationStats.totalRequests++;
+      this.generationStats.lastRequest = new Date().toISOString();
+      
+      const startTime = Date.now();
+      
+      try {
+        let result;
+        // Pass the proQuantMode option to the generation methods
+        const proQuantMode = options.proQuantMode || false;
   
-      const processingTime = Date.now() - startTime;
-      this._updateStats(true, processingTime);
-      
-      console.log(`✅ Parlay generated successfully in ${processingTime}ms (${requestId})`);
-      return {
-        ...result,
-        metadata: { ...result.metadata, request_id: requestId, processing_time_ms: processingTime }
-      };
-  
-    } catch (error) {
-      const processingTime = Date.now() - startTime;
-      this._updateStats(false, processingTime);
-      
-      console.error(`❌ Parlay generation failed for ${requestId}:`, error.message);
-      sentryService.captureError(error, { 
-        component: 'ai_service', 
-        operation: 'generateParlay',
-        sportKey, mode, aiModel, requestId 
-      });
-      
-      if (mode === 'web') {
-        const fallbackError = new Error(`Web research failed: ${error.message}`);
-        fallbackError.fallbackAvailable = true;
-        fallbackError.originalError = error.message;
-        fallbackError.fallbackOptions = {
-          live_mode: { description: 'Use direct API data (may use quota).' },
-          db_mode: { description: 'Use stored historical data (may be outdated).', warning: 'Could not get real-time data.' }
+        if (mode === 'web') {
+          result = await this._executeWithTimeout(
+            this.generateWebResearchParlay(sportKey, numLegs, aiModel, betType, {...options, proQuantMode }),
+            120000,
+            `Web research for ${sportKey}`
+          );
+        } else {
+          result = await this.generateContextBasedParlay(sportKey, numLegs, betType, {...options, proQuantMode });
+        }
+    
+        const processingTime = Date.now() - startTime;
+        this._updateStats(true, processingTime);
+        
+        console.log(`✅ Parlay generated successfully in ${processingTime}ms (${requestId})`);
+        return {
+          ...result,
+          metadata: { ...result.metadata, request_id: requestId, processing_time_ms: processingTime }
         };
-        fallbackError.dataFreshness = {
-          lastRefresh: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
-          hoursAgo: 2 
-        };
-        throw fallbackError;
+    
+      } catch (error) {
+        const processingTime = Date.now() - startTime;
+        this._updateStats(false, processingTime);
+        
+        console.error(`❌ Parlay generation failed for ${requestId}:`, error.message);
+        sentryService.captureError(error, { 
+          component: 'ai_service', 
+          operation: 'generateParlay',
+          sportKey, mode, aiModel, requestId 
+        });
+        
+        if (mode === 'web') {
+          const fallbackError = new Error(`Web research failed: ${error.message}`);
+          fallbackError.fallbackAvailable = true;
+          fallbackError.originalError = error.message;
+          fallbackError.fallbackOptions = {
+            live_mode: { description: 'Use direct API data (may use quota).' },
+            db_mode: { description: 'Use stored historical data (may be outdated).', warning: 'Could not get real-time data.' }
+          };
+          fallbackError.dataFreshness = {
+            lastRefresh: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
+            hoursAgo: 2 
+          };
+          throw fallbackError;
+        }
+        
+        throw new Error(`Parlay generation failed: ${error.message} (${requestId})`);
       }
-      
-      throw new Error(`Parlay generation failed: ${error.message} (${requestId})`);
-    }
   }
 
-// In aiService.js - ADD quantitative integration
-async generateWebResearchParlay(sportKey, numLegs, aiModel, betType, options = {}) {
-  const hours = Number(options.horizonHours || 72);
-  const includeProps = options.includeProps || false;
-  const quantitativeMode = options.quantitativeMode || 'conservative'; // 'aggressive' | 'conservative'
-  
-  const prompt = createAnalystPrompt({ 
-    sportKey, 
-    numLegs, 
-    betType, 
-    hours, 
-    includeProps,
-    quantitativeMode 
-  });
-  
-  console.log(`📝 Sending enhanced quantitative prompt (${quantitativeMode} mode)...`);
-  const obj = await callProvider(aiModel, prompt);
-  
-  if (!obj || !Array.isArray(obj.parlay_legs)) {
-    throw new Error('AI returned invalid JSON structure - missing parlay_legs array');
-  }
-  
-  console.log(`🔄 Processing ${obj.parlay_legs.length} potential legs...`);
-  const legs = obj.parlay_legs.map(normalizeLeg).filter(Boolean).slice(0, numLegs);
-  
-  if (legs.length === 0) {
-    throw new Error(`No valid ${sportKey} legs could be processed`);
-  }
-  
-  // Calculate parlay odds
-  const parlayDec = parlayDecimal(legs);
-  const parlayAm = decimalToAmerican(parlayDec);
-  
-  // Run quantitative analysis
-  const quantitativeAnalysis = await quantitativeService.evaluateParlay(legs, parlayDec);
-  
-  console.log(`📊 Quantitative Analysis Complete:`);
-  console.log(`- Raw EV: ${quantitativeAnalysis.raw.evPercentage.toFixed(2)}%`);
-  console.log(`- Calibrated EV: ${quantitativeAnalysis.calibrated.evPercentage.toFixed(2)}%`);
-  console.log(`- Risk Assessment: ${quantitativeAnalysis.riskAssessment.overallRisk}`);
-  
-  return {
-    parlay_legs: legs,
-    confidence_score: quantitativeMode === 'conservative' ? 
-      quantitativeAnalysis.calibrated.jointProbability : 
-      (typeof obj.confidence_score === 'number' ? clamp01(obj.confidence_score) : 0.75),
-    parlay_odds_decimal: parlayDec,
-    parlay_odds_american: parlayAm,
-    parlay_ev: quantitativeAnalysis.calibrated.evPercentage,
-    quantitative_analysis: quantitativeAnalysis,
-    sources: Array.isArray(obj.sources) ? obj.sources : [],
-    data_quality: this._assessParlayDataQuality(legs),
-    market_variety: this._assessMarketVariety(legs, betType, includeProps),
-    research_metadata: { 
-      sport: sportKey, 
-      legs_requested: numLegs, 
-      legs_delivered: legs.length, 
-      ai_model: aiModel,
-      include_props: includeProps,
-      bet_type: betType,
-      quantitative_mode: quantitativeMode
+  async generateWebResearchParlay(sportKey, numLegs, aiModel, betType, options = {}) {
+    const hours = Number(options.horizonHours || 72);
+    const includeProps = options.includeProps || false;
+    const quantitativeMode = options.proQuantMode ? 'conservative' : (options.quantitativeMode || 'aggressive');
+    
+    const prompt = createAnalystPrompt({ 
+      sportKey, 
+      numLegs, 
+      betType, 
+      hours, 
+      includeProps,
+      quantitativeMode 
+    });
+    
+    console.log(`📝 Sending enhanced quantitative prompt (${quantitativeMode} mode)...`);
+    const obj = await callProvider(aiModel, prompt);
+    
+    if (!obj || !Array.isArray(obj.parlay_legs)) {
+      throw new Error('AI returned invalid JSON structure - missing parlay_legs array');
     }
-  };
-}
+    
+    console.log(`🔄 Processing ${obj.parlay_legs.length} potential legs...`);
+    const legs = obj.parlay_legs.map(normalizeLeg).filter(Boolean).slice(0, numLegs);
+    
+    if (legs.length === 0) {
+      throw new Error(`No valid ${sportKey} legs could be processed`);
+    }
+    
+    // Calculate parlay odds
+    const parlayDec = parlayDecimal(legs);
+    const parlayAm = decimalToAmerican(parlayDec);
+    
+    // Run quantitative analysis
+    const quantitativeAnalysis = await quantitativeService.evaluateParlay(legs, parlayDec);
+    
+    console.log(`📊 Quantitative Analysis Complete:`);
+    console.log(`- Raw EV: ${quantitativeAnalysis.raw.evPercentage.toFixed(2)}%`);
+    console.log(`- Calibrated EV: ${quantitativeAnalysis.calibrated.evPercentage.toFixed(2)}%`);
+    console.log(`- Risk Assessment: ${quantitativeAnalysis.riskAssessment.overallRisk}`);
+    
+    return {
+      parlay_legs: legs,
+      confidence_score: quantitativeMode === 'conservative' ? 
+        quantitativeAnalysis.calibrated.jointProbability : 
+        (typeof obj.confidence_score === 'number' ? clamp01(obj.confidence_score) : 0.75),
+      parlay_odds_decimal: parlayDec,
+      parlay_odds_american: parlayAm,
+      parlay_ev: quantitativeAnalysis.calibrated.evPercentage,
+      quantitative_analysis: quantitativeAnalysis,
+      sources: Array.isArray(obj.sources) ? obj.sources : [],
+      data_quality: this._assessParlayDataQuality(legs),
+      market_variety: this._assessMarketVariety(legs, betType, includeProps),
+      research_metadata: { 
+        sport: sportKey, 
+        legs_requested: numLegs, 
+        legs_delivered: legs.length, 
+        ai_model: aiModel,
+        include_props: includeProps,
+        bet_type: betType,
+        quantitative_mode: quantitativeMode
+      }
+    };
+  }
 
   // Enhanced Live/DB modes with better data integration
   async generateContextBasedParlay(sportKey, numLegs, betType, options = {}) {
