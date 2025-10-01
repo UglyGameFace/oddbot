@@ -5,6 +5,7 @@ import gamesService from '../../services/gamesService.js';
 import databaseService from '../../services/databaseService.js';
 import { setUserState, getUserState } from '../state.js';
 import { getSportEmoji, escapeMarkdownV2 } from '../../utils/enterpriseUtilities.js';
+import { safeEditMessage } from '../../bot.js';
 
 const propsToggleLabel = (on) => `${on ? '✅' : '☑️'} Include Player Props`;
 
@@ -440,17 +441,18 @@ export function registerAICallbacks(bot) {
       
       if (!sportKey || !numLegs) {
         return safeEditMessage(
-          bot, 
-          'Missing sport or leg selection. Please start over with /ai.',
-          { chat_id: chatId, message_id: message.message_id }
+          chatId, 
+          message.message_id,
+          'Missing sport or leg selection. Please start over with /ai.'
         );
       }
 
       try {
         await safeEditMessage(
-          bot,
+          chatId,
+          message.message_id,
           `🔄 Switching to ${selectedMode.toUpperCase()} mode...\n\nThis uses stored data and may not reflect current odds.`,
-          { chat_id: chatId, message_id: message.message_id, parse_mode: 'Markdown' }
+          { parse_mode: 'Markdown' }
         );
 
         const parlay = await aiService.handleFallbackSelection(sportKey, numLegs, selectedMode, betType);
@@ -460,11 +462,10 @@ export function registerAICallbacks(bot) {
         console.error('Fallback selection error:', error);
         const safeError = escapeMarkdownV2(error.message || 'Unknown error');
         await safeEditMessage(
-          bot,
+          chatId,
+          message.message_id,
           `❌ Fallback mode failed: \`${safeError}\`\n\nPlease try /ai again.`,
           { 
-            chat_id: chatId, 
-            message_id: message.message_id, 
             parse_mode: 'HTML',
             reply_markup: { inline_keyboard: [[{ text: 'Start Over', callback_data: 'ai_back_sport' }]] }
           }
@@ -479,9 +480,10 @@ export function registerAICallbacks(bot) {
       const quickAction = parts[2];
       if (quickAction === 'retry') {
         await safeEditMessage(
-          bot,
+          chatId,
+          message.message_id,
           '🔄 Retrying with same parameters...',
-          { chat_id: chatId, message_id: message.message_id, parse_mode: 'Markdown' }
+          { parse_mode: 'Markdown' }
         );
         return executeAiRequest(bot, chatId, message.message_id);
       }
@@ -492,7 +494,6 @@ export function registerAICallbacks(bot) {
     }
   });
 }
-
 async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
   let sports = [];
   let errorMessage = '';
@@ -545,7 +546,7 @@ async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
   const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } };
 
   if (messageId) {
-    await safeEditMessage(bot, text, { ...opts, chat_id: chatId, message_id: messageId });
+    await safeEditMessage(chatId, messageId, text, opts);
   } else {
     await bot.sendMessage(chatId, text, opts);
   }
@@ -575,7 +576,7 @@ async function sendLegSelection(bot, chatId, messageId) {
   
   const text = `🤖 *AI Parlay Builder*\n\n*Step 2:* How many legs for your ${sportTitle} parlay?\n\n• 2-3 legs: Higher confidence\n• 4-5 legs: Balanced risk/reward\n• 6+ legs: Higher payout, more risk`;
   const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
-  await safeEditMessage(bot, text, { ...opts, chat_id: chatId, message_id: messageId });
+  await safeEditMessage(chatId, messageId, text, opts);
 }
 
 async function sendModeSelection(bot, chatId, messageId) {
@@ -602,7 +603,7 @@ async function sendModeSelection(bot, chatId, messageId) {
     [{ text: '« Back to Legs', callback_data: 'ai_back_legs' }]
   ];
   const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
-  await safeEditMessage(bot, text, { ...opts, chat_id: chatId, message_id: messageId });
+  await safeEditMessage(chatId, messageId, text, opts);
 }
 
 async function sendBetTypeSelection(bot, chatId, messageId) {
@@ -617,7 +618,7 @@ async function sendBetTypeSelection(bot, chatId, messageId) {
     [{ text: '« Back to Mode', callback_data: 'ai_back_mode' }]
   ];
   const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
-  await safeEditMessage(bot, text, { ...opts, chat_id: chatId, message_id: messageId });
+  await safeEditMessage(chatId, messageId, text, opts);
 }
 
 async function sendAiModelSelection(bot, chatId, messageId) {
@@ -636,7 +637,7 @@ async function sendAiModelSelection(bot, chatId, messageId) {
     [{ text: '« Back to Bet Type', callback_data: 'ai_back_bettype' }]
   ];
   const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
-  await safeEditMessage(bot, text, { ...opts, chat_id: chatId, message_id: messageId });
+  await safeEditMessage(chatId, messageId, text, opts);
 }
 
 async function sendFallbackOptions(bot, chatId, messageId, error) {
@@ -660,11 +661,10 @@ async function sendFallbackOptions(bot, chatId, messageId, error) {
   ];
 
   await safeEditMessage(
-    bot,
+    chatId,
+    messageId,
     text,
     { 
-      chat_id: chatId, 
-      message_id: messageId, 
       parse_mode: 'Markdown',
       reply_markup: { inline_keyboard: keyboard }
     }
@@ -676,31 +676,41 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = nu
   const legs = parlay.parlay_legs;
   const tzLabel = 'America/New_York';
 
-  // No need for Markdown escaping with HTML - just use the raw values
-  let response = `<b>AI-Generated ${numLegs}-Leg Parlay</b>\n`;
-  response += `<b>Sport:</b> ${sportKey}\n`;
-  response += `<b>Mode:</b> ${mode.toUpperCase()}\n`;
-  response += `<b>Type:</b> ${betType === 'props' ? 'Player Props Only' : 'Mixed'}\n`;
-  response += `<b>Confidence:</b> ${Math.round((parlay.confidence_score || 0) * 100)}%\n`;
+  // HTML escape function for Telegram
+  const escapeHTML = (text) => {
+    if (typeof text !== 'string') return text;
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  };
+
+  let response = `<b>AI-Generated ${escapeHTML(numLegs)}-Leg Parlay</b>\n`;
+  response += `<b>Sport:</b> ${escapeHTML(sportKey)}\n`;
+  response += `<b>Mode:</b> ${escapeHTML(mode.toUpperCase())}\n`;
+  response += `<b>Type:</b> ${escapeHTML(betType === 'props' ? 'Player Props Only' : 'Mixed')}\n`;
+  response += `<b>Confidence:</b> ${escapeHTML(Math.round((parlay.confidence_score || 0) * 100))}%\n`;
   
   if (parlay.data_freshness) {
-    response += `<b>Data Age:</b> ${parlay.data_freshness.hours_ago}h\n`;
-    response += `<i>${parlay.data_freshness.message}</i>\n`;
+    response += `<b>Data Age:</b> ${escapeHTML(parlay.data_freshness.hours_ago)}h\n`;
+    response += `<i>${escapeHTML(parlay.data_freshness.message)}</i>\n`;
   }
   
-  response += `<i>Timezone: ${tzLabel}</i>\n\n`;
+  response += `<i>Timezone: ${escapeHTML(tzLabel)}</i>\n\n`;
 
   legs.forEach((leg, index) => {
     const when = leg.game_date_local
-      ? leg.game_date_local
-      : (leg.game_date_utc ? formatLocalIfPresent(leg.game_date_utc, tzLabel) : '');
+      ? escapeHTML(leg.game_date_local)
+      : (leg.game_date_utc ? escapeHTML(formatLocalIfPresent(leg.game_date_utc, tzLabel)) : '');
       
-    const game = leg.game || '';
-    const pick = leg.pick || '';
-    const market = leg.market || '';
-    const justification = leg.justification ? (leg.justification.length > 250 ? `${leg.justification.slice(0, 250)}...` : leg.justification) : '';
-    const book = leg.sportsbook || 'N/A';
-    const oddsDisplay = leg.odds_american ? `${leg.odds_american > 0 ? '+' : ''}${leg.odds_american}` : 'N/A';
+    const game = escapeHTML(leg.game || '');
+    const pick = escapeHTML(leg.pick || '');
+    const market = escapeHTML(leg.market || '');
+    const justification = leg.justification ? escapeHTML(leg.justification.length > 250 ? `${leg.justification.slice(0, 250)}...` : leg.justification) : '';
+    const book = escapeHTML(leg.sportsbook || 'N/A');
+    const oddsDisplay = escapeHTML(leg.odds_american ? `${leg.odds_american > 0 ? '+' : ''}${leg.odds_american}` : 'N/A');
 
     response += `<b>Leg ${index + 1}:</b> ${game}`;
     if (when) response += ` — ${when}`;
@@ -710,7 +720,7 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = nu
     if (justification) response += `<b>Justification:</b> ${justification}\n`;
     
     if (leg.confidence) {
-      response += `<b>Confidence:</b> ${Math.round(leg.confidence * 100)}%\n`;
+      response += `<b>Confidence:</b> ${escapeHTML(Math.round(leg.confidence * 100))}%\n`;
     }
     
     response += `\n`;
@@ -718,15 +728,15 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = nu
 
   if (parlay.parlay_odds_american) {
     const oddsSign = parlay.parlay_odds_american > 0 ? '+' : '';
-    response += `<b>Parlay Odds:</b> ${oddsSign}${parlay.parlay_odds_american}\n`;
+    response += `<b>Parlay Odds:</b> ${oddsSign}${escapeHTML(parlay.parlay_odds_american)}\n`;
   }
 
   if (parlay.parlay_odds_decimal) {
-    response += `<b>Decimal Odds:</b> ${parlay.parlay_odds_decimal.toFixed(2)}\n`;
+    response += `<b>Decimal Odds:</b> ${escapeHTML(parlay.parlay_odds_decimal.toFixed(2))}\n`;
   }
 
   if (parlay.parlay_ev !== null && parlay.parlay_ev !== undefined) {
-    response += `<b>Expected Value:</b> ${(parlay.parlay_ev * 100).toFixed(1)}%\n`;
+    response += `<b>Expected Value:</b> ${escapeHTML((parlay.parlay_ev * 100).toFixed(1))}%\n`;
   }
 
   const finalKeyboard = [
@@ -736,14 +746,14 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = nu
   ];
   
   const messageOpts = {
-    parse_mode: 'HTML', // Changed to HTML
+    parse_mode: 'HTML',
     reply_markup: { 
       inline_keyboard: finalKeyboard 
     }
   };
 
   if (messageId) {
-    await safeEditMessage(bot, response, { ...messageOpts, chat_id: chatId, message_id: messageId });
+    await safeEditMessage(chatId, messageId, response, messageOpts);
   } else {
     await bot.sendMessage(chatId, response, messageOpts);
   }
@@ -754,9 +764,7 @@ async function executeAiRequest(bot, chatId, messageId) {
   const { sportKey, numLegs, mode, betType, aiModel = 'gemini', includeProps = false } = state || {};
 
   if (!sportKey || !numLegs || !mode || !betType) {
-    return safeEditMessage(bot, '❌ Incomplete selection. Please start over using /ai.', { 
-      chat_id: chatId, 
-      message_id: messageId,
+    return safeEditMessage(chatId, messageId, '❌ Incomplete selection. Please start over using /ai.', { 
       parse_mode: 'Markdown'
     });
   }
@@ -773,7 +781,8 @@ async function executeAiRequest(bot, chatId, messageId) {
   const safeIncludeProps = escapeMarkdownV2(includeProps ? 'On' : 'Off');
 
   await safeEditMessage(
-    bot,
+    chatId,
+    messageId,
     `🤖 Accessing advanced analytics\\.\\.\\.\n\n` +
     `*Sport:* ${safeSportKey}\n` +
     `*Legs:* ${numLegs}\n` +
@@ -782,8 +791,6 @@ async function executeAiRequest(bot, chatId, messageId) {
     `*Props:* ${safeIncludeProps}\n\n` +
     `⏳ This may take 30\\-90 seconds\\.\\.\\.`,
     { 
-      chat_id: chatId, 
-      message_id: messageId, 
       parse_mode: 'MarkdownV2', 
       reply_markup: { remove_keyboard: true } 
     }
@@ -814,11 +821,10 @@ async function executeAiRequest(bot, chatId, messageId) {
 
     const safeError = escapeMarkdownV2(error.message || 'Unknown error');
     await safeEditMessage(
-      bot,
+      chatId,
+      messageId,
       `❌ I encountered a critical error: \`${safeError}\`\n\nPlease try again later, or select a different mode\\.\n\n💡 Try:\\n• Different sport\\n• Fewer legs\\n• Database mode`,
       {
-        chat_id: chatId, 
-        message_id: messageId, 
         parse_mode: 'MarkdownV2',
         reply_markup: { 
           inline_keyboard: [
