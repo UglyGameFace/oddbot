@@ -1,4 +1,4 @@
-// src/bot.js - COMPLETELY FIXED VERSION
+// src/bot.js - CORRECTED VERSION
 import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
@@ -70,25 +70,6 @@ function validateEnvironment() {
 }
 
 /**
- * Escape Telegram reserved characters to avoid parse errors
- */
-function escapeTelegramText(text) {
-    if (typeof text !== 'string') return text;
-    // Escape characters that need to be escaped in Telegram
-    return text
-        .replace(/-/g, '\\-')
-        .replace(/\./g, '\\.')
-        .replace(/!/g, '\\!')
-        .replace(/#/g, '\\#')
-        .replace(/\(/g, '\\(')
-        .replace(/\)/g, '\\)')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/&/g, '&amp;');
-}
-
-
-/**
  * Safely edit Telegram messages to avoid inline keyboard errors
  */
 async function safeEditMessage(chatId, messageId, text, options = {}) {
@@ -108,9 +89,7 @@ async function safeEditMessage(chatId, messageId, text, options = {}) {
       editOptions.reply_markup = { inline_keyboard: [] };
     }
     
-    const safeMessage = escapeTelegramText(text);
-
-    return await bot.editMessageText(safeMessage, {
+    return await bot.editMessageText(text, {
       chat_id: chatId,
       message_id: messageId,
       ...editOptions
@@ -120,8 +99,7 @@ async function safeEditMessage(chatId, messageId, text, options = {}) {
         error.response.body.description.includes('inline keyboard expected')) {
       console.log('🔄 Retrying message edit with explicit empty keyboard...');
       // Retry with explicit empty keyboard
-      const safeMessage = escapeTelegramText(text);
-      return await bot.editMessageText(safeMessage, {
+      return await bot.editMessageText(text, {
         chat_id: chatId,
         message_id: messageId,
         parse_mode: options.parse_mode || 'HTML',
@@ -257,7 +235,7 @@ async function initializeBot() {
       
       // Initialize bot with appropriate mode
       const botOptions = {
-        polling: !USE_WEBHOOK
+        polling: !USE_WEBHOOK,
       };
       
       bot = new TelegramBot(TOKEN, botOptions);
@@ -375,7 +353,7 @@ async function initializeBot() {
   return initializationPromise;
 }
 
-// --- Graceful shutdown (FIXED: Proper environment variable reference)
+// --- Graceful shutdown
 const shutdown = async (signal) => {
   console.log(`\n🛑 Received ${signal}. Starting graceful shutdown...`);
   isServiceReady = false;
@@ -386,7 +364,6 @@ const shutdown = async (signal) => {
   }
 
   try {
-    // FIXED: Use the same logic as at the top of the file
     const useWebhook = (env.USE_WEBHOOK === true) || (env.APP_URL || '').startsWith('https');
     
     if (!useWebhook && bot && bot.isPolling()) {
@@ -432,7 +409,6 @@ initializeBot().catch((error) => {
   console.error('💥 Fatal initialization error:', error.message);
   sentryService.captureError(error);
   
-  // Don't exit immediately for rate limit errors
   if (String(error.message).includes('429')) {
     console.log('⏳ Rate limit error, waiting before exit...');
     setTimeout(() => process.exit(1), 10000);
