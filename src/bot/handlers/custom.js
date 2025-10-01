@@ -32,14 +32,6 @@ const SPORT_TITLES = {
 const PREFERRED_FIRST = ['football_ncaaf', 'americanfootball_ncaaf'];
 const DEPRIORITIZE_LAST = ['hockey_nhl', 'icehockey_nhl'];
 
-const getSportEmoji = (key = '') =>
-  key.includes('americanfootball') ? '🏈'
-  : key.includes('basketball') ? '🏀'
-  : key.includes('baseball') ? '⚾'
-  : key.includes('icehockey') || key.includes('hockey') ? '🏒'
-  : key.includes('soccer') ? '⚽'
-  : '🏆';
-
 function sortSports(sports) {
   const rank = (k) => {
     if (PREFERRED_FIRST.includes(k)) return -100;
