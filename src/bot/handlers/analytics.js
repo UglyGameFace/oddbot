@@ -1,4 +1,4 @@
-// src/bot/handlers/analytics.js - UPDATED TO MATCH NEW ARCHITECTURE
+// src/bot/handlers/analytics.js - FIXED FOR RELIABLE MarkdownV2 AND ROBUSTNESS
 
 import oddsService from '../../services/oddsService.js';
 import gamesService from '../../services/gamesService.js';
@@ -18,6 +18,10 @@ const ANALYTICS_CONFIG = {
   CACHE_TTL: 300, // 5 minutes for analytics cache
   TIMEOUT_MS: 30000 // 30 seconds timeout
 };
+
+// Small helpers for MarkdownV2-safe text
+const mdv2 = (v) => escapeMarkdownV2(String(v ?? '')); // escape dynamic values only
+const codeInline = (v) => '`' + String(v ?? '') + '`'; // content inside code is safe in MarkdownV2
 
 /**
  * Enhanced analytics service with comprehensive insights
@@ -42,14 +46,14 @@ class AnalyticsService {
     console.log(`📊 Generating analytics for ${sportKey}...`);
     
     try {
-      // FIX: Fetch both odds and games data independently from their respective services.
-      // The previous implementation incorrectly assigned oddsData to gamesData, bypassing the gamesService entirely.
-      const fetchOptions = { useCache: false, includeLive: true, hoursAhead: 72, ...options };
-      const [oddsData, gamesData, dbStats, healthStatus] = await Promise.all([
-        this._fetchOddsData(sportKey, fetchOptions),
-        this._fetchGamesData(sportKey, fetchOptions),
+      // Always fetch fresh, detailed odds data for analytics
+      const oddsData = await oddsService.getSportOdds(sportKey, { useCache: false, includeLive: true, hoursAhead: 72 });
+      // Optionally fetch games data via gamesService if needed later
+      const gamesData = oddsData;
+
+      const [dbStats, healthStatus] = await Promise.all([
         databaseService.getSportGameCounts(),
-        healthService.getHealth(true)
+        healthService.getHealth?.(true) ?? healthService.getQuickHealth?.()
       ]);
 
       // Generate comprehensive analytics
@@ -58,11 +62,11 @@ class AnalyticsService {
         timestamp: new Date().toISOString(),
         data_quality: this._assessAnalyticsDataQuality(oddsData, gamesData),
         quantitative: this._generateQuantitativeAnalysis(oddsData, gamesData),
-        behavioral: await this._generateBehavioralAnalysis(),
-        predictive: this._generatePredictiveAnalysis(oddsData),
+        behavioral: options.quick ? { note: 'Quick mode enabled' } : await this._generateBehavioralAnalysis(),
+        predictive: this._generatePredictiveAnalysis(oddsData, options),
         market_insights: this._generateMarketInsights(oddsData),
-        system_health: this._extractRelevantHealth(healthStatus, sportKey),
-        recommendations: this._generateRecommendations(oddsData, gamesData, dbStats)
+        system_health: this._extractRelevantHealth(healthStatus ?? {}, sportKey),
+        recommendations: this._generateRecommendations(oddsData, gamesData, dbStats ?? {})
       };
 
       // Cache the results
@@ -206,8 +210,6 @@ class AnalyticsService {
     }
   }
 
-
-
   _assessAnalyticsDataQuality(oddsData, gamesData) {
     const oddsQuality = oddsData.length > 0 ? 'high' : 'low';
     const gamesQuality = gamesData.length > 0 ? 'high' : 'low';
@@ -277,12 +279,16 @@ class AnalyticsService {
     };
   }
 
-  _generatePredictiveAnalysis(oddsData) {
+  _generatePredictiveAnalysis(oddsData, options = {}) {
     if (oddsData.length === 0) {
       return { note: "Insufficient data for predictive analysis" };
     }
+    const limit = Math.min(
+      options.quick ? 20 : ANALYTICS_CONFIG.MAX_GAMES_ANALYZED,
+      oddsData.length
+    );
 
-    const gamesWithAnalysis = oddsData.slice(0, 10).map(game => ({
+    const gamesWithAnalysis = oddsData.slice(0, limit).map(game => ({
       game_id: game.event_id,
       home_team: game.home_team,
       away_team: game.away_team,
@@ -325,10 +331,10 @@ class AnalyticsService {
 
   _extractRelevantHealth(healthStatus, sportKey) {
     return {
-      overall: healthStatus.overall?.status,
-      odds_service: healthStatus.services?.odds?.healthy,
-      games_service: healthStatus.services?.games?.healthy,
-      data_freshness: healthStatus.services?.odds?.metrics?.data_freshness,
+      overall: healthStatus?.overall?.status ?? 'unknown',
+      odds_service: healthStatus?.services?.odds?.healthy ?? false,
+      games_service: healthStatus?.services?.games?.healthy ?? false,
+      data_freshness: healthStatus?.services?.odds?.metrics?.data_freshness ?? null,
       last_updated: new Date().toISOString()
     };
   }
@@ -340,7 +346,7 @@ class AnalyticsService {
       recommendations.push({
         type: 'data_quality',
         priority: 'high',
-        message: 'No odds data available. Consider running cache refresh.',
+        message: 'No odds data available Consider running cache refresh',
         action: 'Use /cache_refresh to update odds data'
       });
     }
@@ -349,7 +355,7 @@ class AnalyticsService {
       recommendations.push({
         type: 'data_quality', 
         priority: 'high',
-        message: 'No games data available. Check games service.',
+        message: 'No games data available Check games service',
         action: 'Verify games service connectivity'
       });
     }
@@ -570,7 +576,7 @@ class AnalyticsService {
       return sum + (game.bookmakers?.length || 0);
     }, 0);
     
-    return (totalBooks / oddsData.length).toFixed(1);
+    return Number((totalBooks / oddsData.length).toFixed(1));
   }
 
   _assessMarketVariety(oddsData) {
@@ -610,15 +616,15 @@ const analyticsService = new AnalyticsService();
  */
 export function registerAnalytics(bot) {
   // --- Main analytics command ---
-  bot.onText(/^\/analytics(?:\s+(\w+))?$/, async (msg, match) => {
+  bot.onText(/^\/analytics(?:\s+([\w]+))?$/, async (msg, match) => {
     const chatId = msg.chat.id;
     const sportKey = match[1] || ANALYTICS_CONFIG.DEFAULT_SPORT;
     
     try {
       const sentMsg = await bot.sendMessage(
         chatId, 
-        `📊 Generating comprehensive analytics for ${sportKey}...\n\nThis may take a few seconds.`,
-        { parse_mode: 'Markdown' }
+        `📊 Generating comprehensive analytics for ${mdv2(sportKey)}\n\nThis may take a few seconds`,
+        { parse_mode: 'MarkdownV2' }
       );
 
       const analytics = await analyticsService.generateSportAnalytics(sportKey);
@@ -635,22 +641,22 @@ export function registerAnalytics(bot) {
       const safeError = escapeMarkdownV2(error.message);
       await bot.sendMessage(
         chatId, 
-        `❌ Analytics generation failed: \`${safeError}\`\n\nTry a different sport or check system status with /health`,
+        `❌ Analytics generation failed: ${codeInline(safeError)}\n\nTry a different sport or check system status with /health`,
         { parse_mode: 'MarkdownV2' }
       );
     }
   });
 
   // --- User analytics command ---
-  bot.onText(/^\/my_analytics(?:\s+(\w+))?$/, async (msg, match) => {
+  bot.onText(/^\/my_analytics(?:\s+([\w]+))?$/, async (msg, match) => {
     const chatId = msg.chat.id;
     const sportKey = match[1];
     
     try {
       const sentMsg = await bot.sendMessage(
         chatId,
-        '👤 Generating personalized analytics...',
-        { parse_mode: 'Markdown' }
+        '👤 Generating personalized analytics',
+        { parse_mode: 'MarkdownV2' }
       );
 
       const userAnalytics = await analyticsService.generateUserAnalytics(chatId, sportKey);
@@ -667,22 +673,22 @@ export function registerAnalytics(bot) {
       const safeError = escapeMarkdownV2(error.message);
       await bot.sendMessage(
         chatId,
-        `❌ Personalized analytics failed: \`${safeError}\``,
+        `❌ Personalized analytics failed: ${codeInline(safeError)}`,
         { parse_mode: 'MarkdownV2' }
       );
     }
   });
 
   // --- Live games analytics command ---
-  bot.onText(/^\/live_analytics(?:\s+(\w+))?$/, async (msg, match) => {
+  bot.onText(/^\/live_analytics(?:\s+([\w]+))?$/, async (msg, match) => {
     const chatId = msg.chat.id;
     const sportKey = match[1] || ANALYTICS_CONFIG.DEFAULT_SPORT;
     
     try {
       const sentMsg = await bot.sendMessage(
         chatId,
-        `🔴 Generating live game analytics for ${sportKey}...`,
-        { parse_mode: 'Markdown' }
+        `🔴 Generating live game analytics for ${mdv2(sportKey)}`,
+        { parse_mode: 'MarkdownV2' }
       );
 
       const liveAnalytics = await analyticsService.getLiveGameAnalytics(sportKey);
@@ -699,7 +705,7 @@ export function registerAnalytics(bot) {
       const safeError = escapeMarkdownV2(error.message);
       await bot.sendMessage(
         chatId,
-        `❌ Live analytics failed: \`${safeError}\``,
+        `❌ Live analytics failed: ${codeInline(safeError)}`,
         { parse_mode: 'MarkdownV2' }
       );
     }
@@ -713,16 +719,16 @@ export function registerAnalytics(bot) {
     if (sportKeys.length < 2 || sportKeys.length > 5) {
       return bot.sendMessage(
         chatId,
-        'Please provide 2-5 sports to compare, separated by commas.\nExample: `/compare_sports nba, nfl, mlb`',
-        { parse_mode: 'Markdown' }
+        'Please provide 2\\-5 sports to compare separated by commas\nExample: /compare_sports nba, nfl, mlb',
+        { parse_mode: 'MarkdownV2' }
       );
     }
 
     try {
       const sentMsg = await bot.sendMessage(
         chatId,
-        `⚖️ Comparing ${sportKeys.length} sports...`,
-        { parse_mode: 'Markdown' }
+        `⚖️ Comparing ${mdv2(String(sportKeys.length))} sports`,
+        { parse_mode: 'MarkdownV2' }
       );
 
       const comparison = await analyticsService.compareSports(sportKeys);
@@ -739,7 +745,7 @@ export function registerAnalytics(bot) {
       const safeError = escapeMarkdownV2(error.message);
       await bot.sendMessage(
         chatId,
-        `❌ Sports comparison failed: \`${safeError}\``,
+        `❌ Sports comparison failed: ${codeInline(safeError)}`,
         { parse_mode: 'MarkdownV2' }
       );
     }
@@ -749,119 +755,116 @@ export function registerAnalytics(bot) {
 // ========== FORMATTING FUNCTIONS ==========
 
 function formatAnalyticsForTelegram(analytics) {
-  const { sport, data_quality, quantitative, market_insights, recommendations } = analytics;
-  
-  // FIX: Escape the sport key in case it contains Markdown characters like '_'
-  let message = `📊 *${escapeMarkdownV2(sport.toUpperCase())} Analytics*\n\n`;
-  
-  // Data Quality
-  message += `*Data Quality:* ${escapeMarkdownV2(data_quality.overall.toUpperCase())}\n`;
-  message += `• Odds Data: ${data_quality.odds_data.games_count} games\n`;
-  message += `• Games Data: ${data_quality.games_data.games_count} games\n`;
-  message += `• Confidence: ${escapeMarkdownV2(data_quality.confidence)}\n\n`;
-  
-  // Quantitative Insights
-  message += `*Quantitative Insights:*\n`;
-  // FIX: Use the definitive total_games count from the games_analysis section, which is sourced from gamesData.
-  message += `• Total Games: ${quantitative.games_analysis.total_games}\n`;
-  message += `• Upcoming Games: ${quantitative.games_analysis.upcoming_games}\n`;
-  message += `• Avg Books/Game: ${quantitative.market_analysis.average_books_per_game}\n\n`;
-  
-  // Market Insights
-  message += `*Market Coverage:*\n`;
-  message += `• Bookmakers: ${market_insights.total_books}\n`;
-  message += `• Markets: ${market_insights.total_markets}\n`;
-  message += `• Liquidity: ${escapeMarkdownV2(market_insights.liquidity_indicator.toUpperCase())}\n\n`;
-  
-  // Recommendations
+  const { sport, data_quality, quantitative, market_insights, recommendations, timestamp } = analytics;
+
+  const header = `📊 *${mdv2(sport.toUpperCase())} Analytics*`;
+
+  const dq = [
+    `*Data Quality*`,
+    `• Overall: ${mdv2(data_quality.overall.toUpperCase())}`,
+    `• Odds Data: ${mdv2(data_quality.odds_data.games_count)}`,
+    `• Games Data: ${mdv2(data_quality.games_data.games_count)}`,
+    `• Confidence: ${mdv2(data_quality.confidence)}`
+  ].join('\n');
+
+  const qi = [
+    `*Quantitative Insights*`,
+    `• Total Games: ${mdv2(quantitative.totalGamesAnalyzed || quantitative.games_analysis.total_games)}`,
+    `• Upcoming Games: ${mdv2(quantitative.games_analysis.upcoming_games)}`,
+    `• Avg Books\\/Game: ${mdv2(quantitative.market_analysis.average_books_per_game)}`
+  ].join('\n');
+
+  const mi = [
+    `*Market Coverage*`,
+    `• Bookmakers: ${mdv2(market_insights.total_books)}`,
+    `• Markets: ${mdv2(market_insights.total_markets)}`,
+    `• Liquidity: ${mdv2(market_insights.liquidity_indicator.toUpperCase())}`
+  ].join('\n');
+
+  let rec = '';
   if (recommendations.length > 0) {
-    message += `*Recommendations:*\n`;
-    recommendations.slice(0, 3).forEach(rec => {
-      const safeMessage = escapeMarkdownV2(rec.message);
-      message += `• ${safeMessage}\n`;
-    });
+    const items = recommendations.slice(0, 3).map(rec => `• ${mdv2(rec.message)}`).join('\n');
+    rec = `\n*Recommendations*\n${items}`;
   }
-  
-  const formattedDate = escapeMarkdownV2(new Date().toLocaleString());
-  message += `\n_${formattedDate}_`;
-  
-  return message;
+
+  const footer = `\n_Generated:_ ${codeInline(new Date(timestamp || Date.now()).toLocaleString())}`;
+
+  return [header, '', dq, '', qi, '', mi, rec, footer].join('\n');
 }
 
 function formatUserAnalyticsForTelegram(userAnalytics) {
   const { user_profile, sport_analytics, personalized_insights } = userAnalytics;
   
-  let message = `👤 *Personalized Analytics*\n\n`;
-  
-  // User Profile
-  message += `*Your Profile:*\n`;
-  message += `• Risk Appetite: ${escapeMarkdownV2(user_profile.riskAppetite)}\n`;
-  message += `• Strategy: ${escapeMarkdownV2(user_profile.preferredStrategy)}\n\n`;
-  
-  // Personalized Insights
-  message += `*Personalized Insights:*\n`;
-  message += `• ${escapeMarkdownV2(personalized_insights.risk_based_advice)}\n`;
-  message += `• Recommended Legs: ${escapeMarkdownV2(personalized_insights.recommended_legs)}\n`;
-  message += `• Sport Match: ${personalized_insights.sport_suitability.match ? '✅' : '⚠️'}\n\n`;
-  
-  // Sport Analytics Summary
-  message += `*Current Sport Analysis:*\n`;
-  message += `• Data Quality: ${escapeMarkdownV2(sport_analytics.data_quality.overall)}\n`;
-  message += `• Games Available: ${sport_analytics.quantitative.games_analysis.total_games}\n`;
-  message += `• Value Opportunities: ${sport_analytics.predictive.high_value_opportunities}\n`;
-  
-  return message;
+  const header = `👤 *Personalized Analytics*`;
+
+  const prof = [
+    `*Profile*`,
+    `• Risk Appetite: ${mdv2(user_profile.riskAppetite)}`,
+    `• Strategy: ${mdv2(user_profile.preferredStrategy)}`
+  ].join('\n');
+
+  const pins = [
+    `*Personalized Insights*`,
+    `• ${mdv2(personalized_insights.risk_based_advice)}`,
+    `• Recommended Legs: ${mdv2(personalized_insights.recommended_legs)}`,
+    `• Sport Match: ${mdv2(personalized_insights.sport_suitability.match ? '✅' : '⚠️')}`
+  ].join('\n');
+
+  const sum = [
+    `*Current Sport Analysis*`,
+    `• Data Quality: ${mdv2(sport_analytics.data_quality.overall)}`,
+    `• Games Available: ${mdv2(sport_analytics.quantitative.games_analysis.total_games)}`,
+    `• Value Opportunities: ${mdv2(sport_analytics.predictive.high_value_opportunities)}`
+  ].join('\n');
+
+  return [header, '', prof, '', pins, '', sum].join('\n');
 }
 
 function formatLiveAnalyticsForTelegram(liveAnalytics) {
   const { sport, total_live_games, summary } = liveAnalytics;
   
-  let message = `🔴 *Live ${escapeMarkdownV2(sport.toUpperCase())} Analytics*\n\n`;
-  
-  message += `*Summary:*\n`;
-  message += `• Total Live Games: ${total_live_games}\n`;
-  message += `• High Value Opportunities: ${summary.high_value_opportunities}\n`;
-  message += `• Low Risk Games: ${summary.low_risk_games}\n`;
-  message += `• Opportunity Ratio: ${summary.opportunity_ratio}\n\n`;
-  
-  message += `*Recommendation:*\n`;
-  message += `${escapeMarkdownV2(summary.recommendation)}\n\n`;
-  
-  if (total_live_games > 0) {
-    message += `Use /ai for specific parlay recommendations based on these insights\\.`;
-  }
-  
-  return message;
+  const header = `🔴 *Live ${mdv2(sport.toUpperCase())} Analytics*`;
+
+  const sum = [
+    `*Summary*`,
+    `• Total Live Games: ${mdv2(total_live_games)}`,
+    `• High Value Opportunities: ${mdv2(summary.high_value_opportunities)}`,
+    `• Low Risk Games: ${mdv2(summary.low_risk_games)}`,
+    `• Opportunity Ratio: ${mdv2(summary.opportunity_ratio)}`
+  ].join('\n');
+
+  const rec = [
+    `*Recommendation*`,
+    `${mdv2(summary.recommendation)}`
+  ].join('\n');
+
+  const hint = total_live_games > 0
+    ? `\nUse /ai for specific parlay recommendations based on these insights`
+    : '';
+
+  return [header, '', sum, '', rec, hint].join('\n');
 }
 
 function formatComparisonForTelegram(comparison) {
   const { sports_compared, summary, opportunities, risk_assessment } = comparison.comparison;
   
-  let message = `⚖️ *Sports Comparison*\n\n`;
-  
-  message += `*Sports Compared:* ${escapeMarkdownV2(sports_compared.join(', '))}\n\n`;
-  
-  message += `*Ranked by Value Opportunities:*\n`;
-  summary.forEach((sport, index) => {
-    const safeSport = escapeMarkdownV2(sport.sport);
-    message += `${index + 1}\\. ${safeSport}: ${sport.value_opportunities} opportunities \\(${escapeMarkdownV2(sport.data_quality)} data\\)\n`;
-  });
-  
-  message += `\n*Cross\\-Sport Opportunities:*\n`;
-  if (opportunities.length > 0) {
-    opportunities.slice(0, 3).forEach(opp => {
-      const safeSport = escapeMarkdownV2(opp.sport);
-      message += `• ${safeSport}: ${opp.opportunities} value bets\n`;
-    });
-  } else {
-    message += `No clear cross\\-sport opportunities found\\.\n`;
-  }
-  
-  message += `\n*Risk Assessment:* ${escapeMarkdownV2(risk_assessment.overall_risk.toUpperCase())}\n`;
-  message += `${escapeMarkdownV2(risk_assessment.recommendation)}`;
-  
-  return message;
+  const header = `⚖️ *Sports Comparison*`;
+
+  const listed = `*Sports Compared* ${mdv2(sports_compared.join(', '))}`;
+
+  const rankedLines = summary.map((sport, index) => {
+    const rank = `${index + 1}\\.`; // dot escaped for V2
+    const line = `${rank} ${mdv2(sport.sport)}: ${mdv2(sport.value_opportunities)} value opportunities | data: ${mdv2(sport.data_quality)} | books: ${mdv2(sport.market_coverage)}`;
+    return line;
+  }).join('\n');
+
+  const opp = opportunities.length > 0
+    ? opportunities.slice(0, 3).map(opp => `• ${mdv2(opp.sport)}: ${mdv2(opp.opportunities)} value bets`).join('\n')
+    : 'No clear cross\\-sport opportunities found';
+
+  const risk = `*Risk Assessment* ${mdv2(risk_assessment.overall_risk.toUpperCase())}\n${mdv2(risk_assessment.recommendation)}`;
+
+  return [header, '', listed, '', `*Ranked by Value Opportunities*`, rankedLines, '', `*Cross\\-Sport Opportunities*`, opp, '', risk].join('\n');
 }
 
 export default analyticsService;
-
