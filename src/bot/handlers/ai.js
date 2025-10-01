@@ -494,6 +494,7 @@ export function registerAICallbacks(bot) {
     }
   });
 }
+
 async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
   let sports = [];
   let errorMessage = '';
