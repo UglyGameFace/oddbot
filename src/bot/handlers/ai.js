@@ -1,13 +1,24 @@
-// src/bot/handlers/ai.js - COMPLETE AND VERIFIED VERSION
+// src/bot/handlers/ai.js - COMPLETE AND VERIFIED VERSION (using HTML)
 import { safeTelegramMessage } from '../../utils/enterpriseUtilities.js';
 import aiService from '../../services/aiService.js';
 import gamesService from '../../services/gamesService.js';
 import databaseService from '../../services/databaseService.js';
 import { setUserState, getUserState } from '../state.js';
-import { getSportEmoji, escapeMarkdownV2 } from '../../utils/enterpriseUtilities.js';
+import { getSportEmoji, formatGameTimeTZ } from '../../utils/enterpriseUtilities.js';
 import { safeEditMessage } from '../../bot.js';
 
 const propsToggleLabel = (on) => `${on ? '✅' : '☑️'} Include Player Props`;
+
+// This helper function will be used to escape text for HTML
+const escapeHTML = (text) => {
+  if (typeof text !== 'string' && typeof text !== 'number') return '';
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+};
 
 // EXPANDED SPORT SUPPORT - All major sports
 const SPORT_TITLES = {
@@ -131,33 +142,13 @@ function pageOf(arr, page) {
   return arr.slice(start, start + PAGE_SIZE); 
 }
 
-function formatLocalIfPresent(utcDateString, timezone) {
-  if (!utcDateString) return null;
-  try {
-    const date = new Date(utcDateString);
-    return new Intl.DateTimeFormat('en-US', {
-      timeZone: timezone,
-      year: 'numeric',
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit'
-    }).format(date);
-  } catch (error) {
-    console.warn('Date localization failed:', error.message);
-    return null;
-  }
-}
-
 // COMPREHENSIVE sports discovery with multiple fallback layers
 async function getAllAvailableSports() {
   const sportsCollection = new Map();
   
   console.log('🔄 Starting comprehensive sports discovery...');
   
-  // Layer 1: Primary - gamesService (cached/provider mixed)
   try {
-    console.log('📡 Layer 1: Querying gamesService...');
     const gamesServiceSports = await gamesService.getAvailableSports();
     if (gamesServiceSports && Array.isArray(gamesServiceSports)) {
       gamesServiceSports.forEach(sport => {
@@ -170,15 +161,12 @@ async function getAllAvailableSports() {
           });
         }
       });
-      console.log(`✅ Layer 1: Added ${gamesServiceSports.length} sports from gamesService`);
     }
   } catch (error) {
     console.warn('❌ Layer 1 (gamesService) failed:', error.message);
   }
   
-  // Layer 2: Secondary - databaseService comprehensive list
   try {
-    console.log('🗄️ Layer 2: Querying databaseService...');
     const dbSports = await databaseService.getDistinctSports();
     if (dbSports && Array.isArray(dbSports)) {
       dbSports.forEach(sport => {
@@ -191,43 +179,25 @@ async function getAllAvailableSports() {
           });
         }
       });
-      console.log(`✅ Layer 2: Added ${dbSports.length} sports from databaseService`);
     }
   } catch (error) {
     console.warn('❌ Layer 2 (databaseService) failed:', error.message);
   }
   
-  // Layer 3: Tertiary - Add known sports from our comprehensive list
-  console.log('🌍 Layer 3: Adding known sports from comprehensive list...');
   Object.entries(SPORT_TITLES).forEach(([sport_key, sport_title]) => {
     if (!sportsCollection.has(sport_key)) {
-      sportsCollection.set(sport_key, {
-        sport_key,
-        sport_title,
-        source: 'comprehensive_list',
-        priority: 3
-      });
+      sportsCollection.set(sport_key, { sport_key, sport_title, source: 'comprehensive_list', priority: 3 });
     }
   });
-  console.log(`✅ Layer 3: Added known sports from comprehensive list`);
   
-  // Layer 4: Final fallback - static defaults
   if (sportsCollection.size === 0) {
-    console.log('🆘 Layer 4: Using static defaults as final fallback...');
     DEFAULT_SPORTS.forEach(sport => {
-      sportsCollection.set(sport.sport_key, {
-        ...sport,
-        source: 'static_defaults',
-        priority: 4
-      });
+      sportsCollection.set(sport.sport_key, { ...sport, source: 'static_defaults', priority: 4 });
     });
   }
   
-  const sports = Array.from(sportsCollection.values())
-    .sort((a, b) => a.priority - b.priority);
-  
+  const sports = Array.from(sportsCollection.values()).sort((a, b) => a.priority - b.priority);
   console.log(`🎉 Sports discovery complete: ${sports.length} total sports found`);
-  
   return sports;
 }
 
@@ -262,13 +232,11 @@ export function registerAI(bot) {
   });
 
   bot.onText(/^\/ai_live$/, async (msg) => {
-    const chatId = msg.chat.id;
-    await handleDirectFallback(bot, chatId, 'live');
+    await handleDirectFallback(bot, msg.chat.id, 'live');
   });
 
   bot.onText(/^\/ai_db$/, async (msg) => {
-    const chatId = msg.chat.id;
-    await handleDirectFallback(bot, chatId, 'db');
+    await handleDirectFallback(bot, msg.chat.id, 'db');
   });
 
   bot.onText(/^\/ai_nfl$/, async (msg) => {
@@ -301,19 +269,18 @@ async function handleQuickSport(bot, chatId, sportKey) {
     const sportTitle = SPORT_TITLES[sportKey] || sportKey.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
     await bot.sendMessage(
       chatId,
-      `⚡ Quick start: Building 4-leg ${sportTitle} parlay via Web Research...`,
-      { parse_mode: 'Markdown' }
+      `⚡️ Quick start: Building 4-leg ${escapeHTML(sportTitle)} parlay via Web Research...`,
+      { parse_mode: 'HTML' }
     );
     
     await executeAiRequest(bot, chatId);
     
   } catch (error) {
     console.error('Quick sport command failed:', error);
-    const safeError = escapeMarkdownV2(error.message || 'Unknown error');
     await bot.sendMessage(
       chatId,
-      `❌ Quick start failed: \`${safeError}\`\n\nPlease use /ai for the full builder.`,
-      { parse_mode: 'MarkdownV2' }
+      `❌ Quick start failed: <code>${escapeHTML(error.message || 'Unknown error')}</code>\n\nPlease use /ai for the full builder.`,
+      { parse_mode: 'HTML' }
     );
   }
 }
@@ -324,7 +291,7 @@ async function handleDirectFallback(bot, chatId, mode) {
     await bot.sendMessage(
       chatId, 
       `Please start with /ai first to select sport and legs, then use /ai_${mode} if web research fails.\n\nOr use quick commands: /ai_nfl, /ai_nba, /ai_mlb, /ai_soccer`,
-      { parse_mode: 'Markdown' }
+      { parse_mode: 'HTML' }
     );
     return;
   }
@@ -334,8 +301,8 @@ async function handleDirectFallback(bot, chatId, mode) {
   try {
     await bot.sendMessage(
       chatId,
-      `🔄 Switching to ${mode.toUpperCase()} mode for ${sportKey}...\n\nThis uses stored data and may not reflect current odds.`,
-      { parse_mode: 'Markdown' }
+      `🔄 Switching to <b>${escapeHTML(mode.toUpperCase())}</b> mode for ${escapeHTML(sportKey)}...\n\nThis uses stored data and may not reflect current odds.`,
+      { parse_mode: 'HTML' }
     );
 
     const parlay = await aiService.handleFallbackSelection(sportKey, numLegs, mode, betType);
@@ -343,11 +310,10 @@ async function handleDirectFallback(bot, chatId, mode) {
     
   } catch (error) {
     console.error('Direct fallback execution error:', error);
-    const safeError = escapeMarkdownV2(error.message || 'Unknown error');
     await bot.sendMessage(
       chatId,
-      `❌ Fallback mode failed: \`${safeError}\`\n\nPlease try /ai again with a different sport or mode.`,
-      { parse_mode: 'MarkdownV2' }
+      `❌ Fallback mode failed: <code>${escapeHTML(error.message || 'Unknown error')}</code>\n\nPlease try /ai again with a different sport or mode.`,
+      { parse_mode: 'HTML' }
     );
   } finally {
     await setUserState(chatId, {});
@@ -360,7 +326,13 @@ export function registerAICallbacks(bot) {
     if (!data || !message || !data.startsWith('ai_')) return;
 
     const chatId = message.chat.id;
-    await bot.answerCallbackQuery(cbq.id);
+    try {
+        await bot.answerCallbackQuery(cbq.id);
+    } catch (error) {
+        if (!error.message.includes("query is too old")) {
+            console.error("Error answering callback query:", error);
+        }
+    }
 
     let state = await getUserState(chatId) || {};
     const parts = data.split('_');
@@ -440,36 +412,21 @@ export function registerAICallbacks(bot) {
       const { sportKey, numLegs, betType = 'mixed' } = state;
       
       if (!sportKey || !numLegs) {
-        return safeEditMessage(
-          chatId, 
-          message.message_id,
-          'Missing sport or leg selection. Please start over with /ai.'
-        );
+        return safeEditMessage(chatId, message.message_id, 'Missing sport or leg selection. Please start over with /ai.');
       }
 
       try {
-        await safeEditMessage(
-          chatId,
-          message.message_id,
-          `🔄 Switching to ${selectedMode.toUpperCase()} mode...\n\nThis uses stored data and may not reflect current odds.`,
-          { parse_mode: 'Markdown' }
-        );
+        await safeEditMessage(chatId, message.message_id, `🔄 Switching to <b>${escapeHTML(selectedMode.toUpperCase())}</b> mode...\n\nThis uses stored data and may not reflect current odds.`, { parse_mode: 'HTML' });
 
         const parlay = await aiService.handleFallbackSelection(sportKey, numLegs, selectedMode, betType);
         await sendParlayResult(bot, chatId, parlay, state, selectedMode, message.message_id);
         
       } catch (error) {
         console.error('Fallback selection error:', error);
-        const safeError = escapeMarkdownV2(error.message || 'Unknown error');
-        await safeEditMessage(
-          chatId,
-          message.message_id,
-          `❌ Fallback mode failed: \`${safeError}\`\n\nPlease try /ai again.`,
-          { 
-            parse_mode: 'HTML',
-            reply_markup: { inline_keyboard: [[{ text: 'Start Over', callback_data: 'ai_back_sport' }]] }
-          }
-        );
+        await safeEditMessage(chatId, message.message_id, `❌ Fallback mode failed: <code>${escapeHTML(error.message || 'Unknown error')}</code>\n\nPlease try /ai again.`, { 
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[{ text: 'Start Over', callback_data: 'ai_back_sport' }]] }
+        });
       } finally {
         await setUserState(chatId, {});
       }
@@ -479,12 +436,7 @@ export function registerAICallbacks(bot) {
     if (action === 'quick') {
       const quickAction = parts[2];
       if (quickAction === 'retry') {
-        await safeEditMessage(
-          chatId,
-          message.message_id,
-          '🔄 Retrying with same parameters...',
-          { parse_mode: 'Markdown' }
-        );
+        await safeEditMessage(chatId, message.message_id, '🔄 Retrying with same parameters...', { parse_mode: 'HTML' });
         return executeAiRequest(bot, chatId, message.message_id);
       }
       if (quickAction === 'change_sport') {
@@ -509,12 +461,12 @@ async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
 
   sports = sortSports(sports.filter(s => s?.sport_key));
 
-  const totalPages = Math.max(1, Math.ceil(sports.length / PAGE_SIZE));
+  const totalPages = Math.ceil(sports.length / PAGE_SIZE) || 1;
   page = Math.min(Math.max(0, page), totalPages - 1);
 
   const slice = pageOf(sports, page).map(s => {
     const title = s?.sport_title ?? SPORT_TITLES[s.sport_key] ?? s.sport_key;
-    return { text: `${getSportEmoji(s.sport_key)} ${title}`, callback_data: `ai_sport_${s.sport_key}` };
+    return { text: `${getSportEmoji(s.sport_key)} ${escapeHTML(title)}`, callback_data: `ai_sport_${s.sport_key}` };
   });
 
   const rows = [];
@@ -524,8 +476,8 @@ async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
     const quickActions = [
       { text: '🏈 NFL', callback_data: 'ai_sport_americanfootball_nfl' },
       { text: '🏀 NBA', callback_data: 'ai_sport_basketball_nba' },
-      { text: '⚾ MLB', callback_data: 'ai_sport_baseball_mlb' },
-      { text: '⚽ Soccer', callback_data: 'ai_sport_soccer_england_premier_league' }
+      { text: '⚾️ MLB', callback_data: 'ai_sport_baseball_mlb' },
+      { text: '⚽️ Soccer', callback_data: 'ai_sport_soccer_england_premier_league' }
     ];
     rows.unshift(quickActions);
   }
@@ -543,8 +495,8 @@ async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
     { text: '🔄 Refresh', callback_data: 'ai_refresh_sports' }
   ]);
 
-  const text = `🤖 *AI Parlay Builder*${errorMessage}\n\n*Step 1:* Select a sport.\n\n*Available:* ${sports.length} sports across ${Math.ceil(sports.length / PAGE_SIZE)} pages`;
-  const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } };
+  const text = `🤖 <b>AI Parlay Builder</b>${escapeHTML(errorMessage)}\n\n<b>Step 1:</b> Select a sport.\n\n<b>Available:</b> ${sports.length} sports across ${totalPages} pages`;
+  const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: rows } };
 
   if (messageId) {
     await safeEditMessage(chatId, messageId, text, opts);
@@ -568,15 +520,15 @@ async function sendLegSelection(bot, chatId, messageId) {
   
   const popularCombos = [
     { text: '🔥 4-Leg (Balanced)', callback_data: 'ai_legs_4' },
-    { text: '⚡ 3-Leg (Conservative)', callback_data: 'ai_legs_3' },
+    { text: '⚡️ 3-Leg (Conservative)', callback_data: 'ai_legs_3' },
     { text: '🎯 5-Leg (Aggressive)', callback_data: 'ai_legs_5' }
   ];
   keyboard.unshift(popularCombos);
   
   keyboard.push([{ text: '« Back to Sports', callback_data: 'ai_back_sport' }]);
   
-  const text = `🤖 *AI Parlay Builder*\n\n*Step 2:* How many legs for your ${sportTitle} parlay?\n\n• 2-3 legs: Higher confidence\n• 4-5 legs: Balanced risk/reward\n• 6+ legs: Higher payout, more risk`;
-  const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
+  const text = `🤖 <b>AI Parlay Builder</b>\n\n<b>Step 2:</b> How many legs for your ${escapeHTML(sportTitle)} parlay?\n\n• 2-3 legs: Higher confidence\n• 4-5 legs: Balanced risk/reward\n• 6+ legs: Higher payout, more risk`;
+  const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
   await safeEditMessage(chatId, messageId, text, opts);
 }
 
@@ -584,180 +536,41 @@ async function sendModeSelection(bot, chatId, messageId) {
   const state = await getUserState(chatId);
   const sportTitle = SPORT_TITLES[state.sportKey] || state.sportKey?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
   
-  const text = `🤖 *AI Parlay Builder*\n\n*Step 3:* Select analysis mode for ${sportTitle}.`;
+  const text = `🤖 <b>AI Parlay Builder</b>\n\n<b>Step 3:</b> Select analysis mode for ${escapeHTML(sportTitle)}.`;
   const keyboard = [
-    [{ 
-      text: '🌐 Web Research (Recommended)', 
-      callback_data: 'ai_mode_web',
-      description: 'Real-time odds & analysis from multiple sources'
-    }],
-    [{ 
-      text: '📡 Live API Data (Premium)', 
-      callback_data: 'ai_mode_live',
-      description: 'Direct API data, requires quota'
-    }],
-    [{ 
-      text: '💾 Database Only (Fallback)', 
-      callback_data: 'ai_mode_db',
-      description: 'Stored data, may be outdated'
-    }],
+    [{ text: '🌐 Web Research (Recommended)', callback_data: 'ai_mode_web'}],
+    [{ text: '📡 Live API Data (Premium)', callback_data: 'ai_mode_live'}],
+    [{ text: '💾 Database Only (Fallback)', callback_data: 'ai_mode_db'}],
     [{ text: '« Back to Legs', callback_data: 'ai_back_legs' }]
   ];
-  const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
+  const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
   await safeEditMessage(chatId, messageId, text, opts);
 }
 
 async function sendBetTypeSelection(bot, chatId, messageId) {
   const state = await getUserState(chatId) || {};
-  const text = '🤖 *AI Parlay Builder*\n\n*Step 4:* What kind of parlay should I build?';
+  const text = '🤖 <b>AI Parlay Builder</b>\n\n<b>Step 4:</b> What kind of parlay should I build?';
   const keyboard = [
-    [{ text: '🔥 Player Props Only', callback_data: 'ai_bettype_props', description: 'Player points, yards, assists, etc.' }],
-    [{ text: '🎯 Moneyline Focus', callback_data: 'ai_bettype_moneyline', description: 'Straight win/lose bets' }],
-    [{ text: '📊 Spreads & Totals', callback_data: 'ai_bettype_spreads', description: 'Point spreads and over/unders' }],
-    [{ text: '🧩 Any Bet Type (Mixed)', callback_data: 'ai_bettype_mixed', description: 'Best opportunities across all markets' }],
+    [{ text: '🔥 Player Props Only', callback_data: 'ai_bettype_props'}],
+    [{ text: '🎯 Moneyline Focus', callback_data: 'ai_bettype_moneyline'}],
+    [{ text: '📊 Spreads & Totals', callback_data: 'ai_bettype_spreads'}],
+    [{ text: '🧩 Any Bet Type (Mixed)', callback_data: 'ai_bettype_mixed'}],
     [{ text: propsToggleLabel(!!state.includeProps), callback_data: 'ai_toggle_props' }],
     [{ text: '« Back to Mode', callback_data: 'ai_back_mode' }]
   ];
-  const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
+  const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
   await safeEditMessage(chatId, messageId, text, opts);
 }
 
 async function sendAiModelSelection(bot, chatId, messageId) {
-  const text = '🤖 *AI Parlay Builder*\n\n*Step 5:* Choose your Research AI.\n\n• 🧠 Gemini: Creative analysis, better narratives\n• ⚡ Perplexity: Data-focused, faster results';
+  const text = '🤖 <b>AI Parlay Builder</b>\n\n<b>Step 5:</b> Choose your Research AI.\n\n• 🧠 Gemini: Creative analysis, better narratives\n• ⚡️ Perplexity: Data-focused, faster results';
   const keyboard = [
-    [{ 
-      text: '🧠 Gemini (Creative)', 
-      callback_data: 'ai_model_gemini',
-      description: 'Better for complex analysis and storytelling'
-    }],
-    [{ 
-      text: '⚡ Perplexity (Data-Focused)', 
-      callback_data: 'ai_model_perplexity',
-      description: 'Faster, more factual, better for data'
-    }],
+    [{ text: '🧠 Gemini (Creative)', callback_data: 'ai_model_gemini'}],
+    [{ text: '⚡️ Perplexity (Data-Focused)', callback_data: 'ai_model_perplexity'}],
     [{ text: '« Back to Bet Type', callback_data: 'ai_back_bettype' }]
   ];
-  const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
+  const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
   await safeEditMessage(chatId, messageId, text, opts);
-}
-
-async function sendFallbackOptions(bot, chatId, messageId, error) {
-  const { fallbackOptions, dataFreshness } = error;
-  
-  const text = 
-    `❌ *Web Research Failed*\n\n` +
-    `*Error:* ${error.originalError}\n\n` +
-    `*${fallbackOptions.db_mode.warning}*\n\n` +
-    `Choose a fallback option:\n\n` +
-    `🔴 *Live Mode*: ${fallbackOptions.live_mode.description}\n` +
-    `💾 *Database Mode*: ${fallbackOptions.db_mode.description}\n\n` +
-    `📅 Data last refreshed: ${new Date(dataFreshness.lastRefresh).toLocaleString()}\n` +
-    `⏰ Age: ${dataFreshness.hoursAgo} hours ago`;
-
-  const keyboard = [
-    [{ text: '🔴 Use Live Mode', callback_data: 'ai_fallback_live' }],
-    [{ text: '💾 Use Database Mode', callback_data: 'ai_fallback_db' }],
-    [{ text: '🔄 Try Different Sport', callback_data: 'ai_back_sport' }],
-    [{ text: '❓ Why did this fail?', callback_data: 'ai_help_fallback' }]
-  ];
-
-  await safeEditMessage(
-    chatId,
-    messageId,
-    text,
-    { 
-      parse_mode: 'Markdown',
-      reply_markup: { inline_keyboard: keyboard }
-    }
-  );
-}
-
-async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = null) {
-  const { sportKey, numLegs, betType } = state;
-  const legs = parlay.parlay_legs;
-  const tzLabel = 'America/New_York';
-
-  // HTML escape function for Telegram
-  const escapeHTML = (text) => {
-    if (typeof text !== 'string') return text;
-    return text
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  };
-
-  let response = `<b>AI-Generated ${escapeHTML(numLegs)}-Leg Parlay</b>\n`;
-  response += `<b>Sport:</b> ${escapeHTML(sportKey)}\n`;
-  response += `<b>Mode:</b> ${escapeHTML(mode.toUpperCase())}\n`;
-  response += `<b>Type:</b> ${escapeHTML(betType === 'props' ? 'Player Props Only' : 'Mixed')}\n`;
-  response += `<b>Confidence:</b> ${escapeHTML(Math.round((parlay.confidence_score || 0) * 100))}%\n`;
-  
-  if (parlay.data_freshness) {
-    response += `<b>Data Age:</b> ${escapeHTML(parlay.data_freshness.hours_ago)}h\n`;
-    response += `<i>${escapeHTML(parlay.data_freshness.message)}</i>\n`;
-  }
-  
-  response += `<i>Timezone: ${escapeHTML(tzLabel)}</i>\n\n`;
-
-  legs.forEach((leg, index) => {
-    const when = leg.game_date_local
-      ? escapeHTML(leg.game_date_local)
-      : (leg.game_date_utc ? escapeHTML(formatLocalIfPresent(leg.game_date_utc, tzLabel)) : '');
-      
-    const game = escapeHTML(leg.game || '');
-    const pick = escapeHTML(leg.pick || '');
-    const market = escapeHTML(leg.market || '');
-    const justification = leg.justification ? escapeHTML(leg.justification.length > 250 ? `${leg.justification.slice(0, 250)}...` : leg.justification) : '';
-    const book = escapeHTML(leg.sportsbook || 'N/A');
-    const oddsDisplay = escapeHTML(leg.odds_american ? `${leg.odds_american > 0 ? '+' : ''}${leg.odds_american}` : 'N/A');
-
-    response += `<b>Leg ${index + 1}:</b> ${game}`;
-    if (when) response += ` — ${when}`;
-    response += `\n<b>Pick:</b> <b>${pick}</b> (${market})\n`;
-    response += `<b>Odds:</b> ${oddsDisplay}\n`;
-    response += `<b>Book:</b> ${book}\n`;
-    if (justification) response += `<b>Justification:</b> ${justification}\n`;
-    
-    if (leg.confidence) {
-      response += `<b>Confidence:</b> ${escapeHTML(Math.round(leg.confidence * 100))}%\n`;
-    }
-    
-    response += `\n`;
-  });
-
-  if (parlay.parlay_odds_american) {
-    const oddsSign = parlay.parlay_odds_american > 0 ? '+' : '';
-    response += `<b>Parlay Odds:</b> ${oddsSign}${escapeHTML(parlay.parlay_odds_american)}\n`;
-  }
-
-  if (parlay.parlay_odds_decimal) {
-    response += `<b>Decimal Odds:</b> ${escapeHTML(parlay.parlay_odds_decimal.toFixed(2))}\n`;
-  }
-
-  if (parlay.parlay_ev !== null && parlay.parlay_ev !== undefined) {
-    response += `<b>Expected Value:</b> ${escapeHTML((parlay.parlay_ev * 100).toFixed(1))}%\n`;
-  }
-
-  const finalKeyboard = [
-    [{ text: '🔄 Build Another', callback_data: 'ai_back_sport' }],
-    [{ text: '⚡ Quick NFL', callback_data: 'ai_sport_americanfootball_nfl' }],
-    [{ text: '📊 View Analytics', callback_data: 'ai_analytics' }]
-  ];
-  
-  const messageOpts = {
-    parse_mode: 'HTML',
-    reply_markup: { 
-      inline_keyboard: finalKeyboard 
-    }
-  };
-
-  if (messageId) {
-    await safeEditMessage(chatId, messageId, response, messageOpts);
-  } else {
-    await bot.sendMessage(chatId, response, messageOpts);
-  }
 }
 
 async function executeAiRequest(bot, chatId, messageId) {
@@ -765,9 +578,7 @@ async function executeAiRequest(bot, chatId, messageId) {
   const { sportKey, numLegs, mode, betType, aiModel = 'gemini', includeProps = false } = state || {};
 
   if (!sportKey || !numLegs || !mode || !betType) {
-    return safeEditMessage(chatId, messageId, '❌ Incomplete selection. Please start over using /ai.', { 
-      parse_mode: 'Markdown'
-    });
+    return safeEditMessage(chatId, messageId, '❌ Incomplete selection. Please start over using /ai.');
   }
 
   let modeText = { web: 'Web Research', live: 'Live API Data', db: 'Database Only' }[mode];
@@ -775,24 +586,21 @@ async function executeAiRequest(bot, chatId, messageId) {
   const betTypeText = betType === 'props' ? 'Player Props Only' : 
                      betType === 'moneyline' ? 'Moneyline Focus' :
                      betType === 'spreads' ? 'Spreads & Totals' : 'Mixed';
-
-  const safeSportKey = escapeMarkdownV2(sportKey);
-  const safeModeText = escapeMarkdownV2(modeText);
-  const safeBetTypeText = escapeMarkdownV2(betTypeText);
-  const safeIncludeProps = escapeMarkdownV2(includeProps ? 'On' : 'Off');
-
+  
+  const text = `🤖 Accessing advanced analytics...\n\n` +
+               `<b>Sport:</b> ${escapeHTML(sportKey)}\n` +
+               `<b>Legs:</b> ${numLegs}\n` +
+               `<b>Mode:</b> ${escapeHTML(modeText)}\n` +
+               `<b>Type:</b> ${escapeHTML(betTypeText)}\n` +
+               `<b>Props:</b> ${escapeHTML(includeProps ? 'On' : 'Off')}\n\n` +
+               `<i>⏳ This may take 30-90 seconds...</i>`;
+               
   await safeEditMessage(
     chatId,
     messageId,
-    `🤖 Accessing advanced analytics\\.\\.\\.\n\n` +
-    `*Sport:* ${safeSportKey}\n` +
-    `*Legs:* ${numLegs}\n` +
-    `*Mode:* ${safeModeText}\n` +
-    `*Type:* ${safeBetTypeText}\n` +
-    `*Props:* ${safeIncludeProps}\n\n` +
-    `⏳ This may take 30\\-90 seconds\\.\\.\\.`,
+    text,
     { 
-      parse_mode: 'MarkdownV2', 
+      parse_mode: 'HTML', 
       reply_markup: { remove_keyboard: true } 
     }
   );
@@ -807,7 +615,6 @@ async function executeAiRequest(bot, chatId, messageId) {
     }
 
     console.log(`✅ Parlay generated in ${processingTime}s with ${parlay.parlay_legs.length} legs`);
-    
     parlay.processing_time = processingTime;
     
     await sendParlayResult(bot, chatId, parlay, state, mode, messageId);
@@ -820,13 +627,14 @@ async function executeAiRequest(bot, chatId, messageId) {
       return;
     }
 
-    const safeError = escapeMarkdownV2(error.message || 'Unknown error');
+    const errorMessage = `❌ I encountered a critical error: <code>${escapeHTML(error.message || 'Unknown error')}</code>\n\nPlease try again later, or select a different mode.\n\n💡 Try:\n• Different sport\n• Fewer legs\n• Database mode`;
+    
     await safeEditMessage(
       chatId,
       messageId,
-      `❌ I encountered a critical error: \`${safeError}\`\n\nPlease try again later, or select a different mode\\.\n\n💡 Try:\\n• Different sport\\n• Fewer legs\\n• Database mode`,
+      errorMessage,
       {
-        parse_mode: 'MarkdownV2',
+        parse_mode: 'HTML',
         reply_markup: { 
           inline_keyboard: [
             [{ text: '🔄 Try Again', callback_data: 'ai_quick_retry' }],
@@ -842,38 +650,38 @@ async function executeAiRequest(bot, chatId, messageId) {
 }
 
 export function registerAIHelp(bot) {
-  bot.onText(/^\/ai_help$/, async (msg) => {
-    const chatId = msg.chat.id;
-    
-    const helpText = `
-🤖 *AI Parlay Builder Help*
-
-*Quick Commands:*
-• /ai - Full builder
-• /ai_nfl - Quick NFL parlay  
-• /ai_nba - Quick NBA parlay
-• /ai_mlb - Quick MLB parlay
-• /ai_soccer - Quick Soccer parlay
-• /ai_live - Fallback to Live mode
-• /ai_db - Fallback to Database mode
-
-*Modes:*
-• 🌐 *Web Research*: Real-time data (recommended)
-• 📡 *Live API*: Direct API data (requires quota)
-• 💾 *Database*: Stored data (fallback)
-
-*Need Help?*
-• Ensure you have stable internet
-• Try fewer legs for faster results  
-• Use popular sports for better data
-• Database mode always works but may be stale
-
-*Tips:*
-• 3-5 legs is optimal for balance
-• Player props work best for NBA/NFL
-• Web research takes 30-90 seconds
-    `;
-    
-    await bot.sendMessage(chatId, helpText, { parse_mode: 'Markdown' });
-  });
+    bot.onText(/^\/ai_help$/, async (msg) => {
+      const chatId = msg.chat.id;
+      
+      const helpText = `
+  🤖 <b>AI Parlay Builder Help</b>
+  
+  <b>Quick Commands:</b>
+  • /ai - Full builder
+  • /ai_nfl - Quick NFL parlay  
+  • /ai_nba - Quick NBA parlay
+  • /ai_mlb - Quick MLB parlay
+  • /ai_soccer - Quick Soccer parlay
+  • /ai_live - Fallback to Live mode
+  • /ai_db - Fallback to Database mode
+  
+  <b>Modes:</b>
+  • 🌐 <b>Web Research</b>: Real-time data (recommended)
+  • 📡 <b>Live API</b>: Direct API data (requires quota)
+  • 💾 <b>Database</b>: Stored data (fallback)
+  
+  <b>Need Help?</b>
+  • Ensure you have stable internet
+  • Try fewer legs for faster results  
+  • Use popular sports for better data
+  • Database mode always works but may be stale
+  
+  <b>Tips:</b>
+  • 3-5 legs is optimal for balance
+  • Player props work best for NBA/NFL
+  • Web research takes 30-90 seconds
+      `;
+      
+      await bot.sendMessage(chatId, helpText, { parse_mode: 'HTML' });
+    });
 }
