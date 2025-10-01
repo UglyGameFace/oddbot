@@ -478,6 +478,56 @@ if (action === 'analytics') {
   });
 }
 
+// In ai.js - ADD quantitative mode selection
+async function sendQuantitativeModeSelection(bot, chatId, messageId) {
+  const state = await getUserState(chatId);
+  const text = '🤖 <b>AI Parlay Builder</b>\n\n<b>Step 6:</b> Select Quantitative Analysis Mode\n\n• 🔬 <b>Conservative</b>: Applies realistic calibration for overconfidence and correlation (Recommended)\n• 🚀 <b>Aggressive</b>: Uses raw AI probabilities (Higher risk, higher potential reward)';
+  
+  const keyboard = [
+    [{ text: '🔬 Conservative (Recommended)', callback_data: 'ai_quantitative_conservative' }],
+    [{ text: '🚀 Aggressive (High Risk)', callback_data: 'ai_quantitative_aggressive' }],
+    [{ text: '📊 Explain Modes', callback_data: 'ai_quantitative_help' }],
+    [{ text: '« Back to AI Model', callback_data: 'ai_back_model' }]
+  ];
+  
+  const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
+  await safeEditMessage(chatId, messageId, text, opts);
+}
+
+// Update the callback handler
+if (action === 'quantitative') {
+  state.quantitativeMode = parts[2];
+  await setUserState(chatId, state);
+  return executeAiRequest(bot, chatId, messageId);
+}
+
+if (action === 'quantitative_help') {
+  const helpText = `📊 <b>Quantitative Analysis Modes</b>\n\n
+🔬 <b>Conservative Mode</b>:
+• Applies 15% probability shrinkage toward 50%
+• Adds correlation penalty (5% per leg)
+• Accounts for bookmaker vig and line movement
+• <i>Result: Realistic, sustainable EV estimates</i>\n\n
+🚀 <b>Aggressive Mode</b>:
+• Uses raw AI probability estimates
+• No calibration for overconfidence
+• Assumes perfect independence
+• <i>Result: Higher apparent EV but likely overstated</i>\n\n
+<b>Recommendation</b>: Use Conservative mode for long-term profitability.`;
+  
+  await safeEditMessage(chatId, messageId, helpText, { 
+    parse_mode: 'HTML',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '🔬 Use Conservative', callback_data: 'ai_quantitative_conservative' }],
+        [{ text: '🚀 Use Aggressive', callback_data: 'ai_quantitative_aggressive' }],
+        [{ text: '« Back', callback_data: 'ai_back_model' }]
+      ]
+    }
+  });
+  return;
+}
+
 async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
   let sports = [];
   let errorMessage = '';
