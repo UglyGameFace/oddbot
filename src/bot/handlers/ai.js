@@ -4,7 +4,7 @@ import aiService from '../../services/aiService.js';
 import gamesService from '../../services/gamesService.js';
 import databaseService from '../../services/databaseService.js';
 import { setUserState, getUserState, getAIConfig } from '../state.js';
-import { getSportEmoji, formatGameTimeTZ, escapeMarkdownV2 } from '../../utils/enterpriseUtilities.js';
+import { getSportEmoji, getSportTitle, sortSports } from '../../services/sportsService.js';
 import { safeEditMessage } from '../../bot.js';
 
 const propsToggleLabel = (on) => `${on ? '✅' : '☑️'} Include Player Props`;
