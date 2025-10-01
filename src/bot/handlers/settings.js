@@ -26,6 +26,8 @@ export function registerSettingsCallbacks(bot) {
     if (action === 'main') return sendMainMenu(bot, chatId, messageId);
     if (action === 'ai') return sendAiSettingsMenu(bot, chatId, messageId);
     if (action === 'builder') return sendBuilderSettingsMenu(bot, chatId, messageId);
+    if (action === 'quant_help') return sendQuantHelpMenu(bot, chatId, messageId);
+
 
     // AI Settings
     if (action === 'aimode') return sendAiModeMenu(bot, chatId, messageId);
@@ -45,33 +47,37 @@ export function registerSettingsCallbacks(bot) {
     
     // Set Value Actions
     if (action === 'set') {
-      const [,, category, key, value] = parts;
-      let config, setConfigFunc;
-
-      if (category === 'ai') {
-        config = await getAIConfig(chatId);
-        setConfigFunc = setAIConfig;
-      } else { // builder
-        config = await getBuilderConfig(chatId);
-        setConfigFunc = setBuilderConfig;
+        const [,, category, key, value] = parts;
+        let config, setConfigFunc;
+  
+        if (category === 'ai') {
+          config = await getAIConfig(chatId);
+          setConfigFunc = setAIConfig;
+        } else { // builder
+          config = await getBuilderConfig(chatId);
+          setConfigFunc = setBuilderConfig;
+        }
+        
+        const numericValue = isNaN(value) ? value : Number(value);
+  
+        if (value === 'toggle') {
+          config[key] = !config[key];
+        } else {
+          // *** FIX: Only update and redraw if the value has changed ***
+          if (config[key] === numericValue) {
+              return; // Do nothing if the value is already the same
+          }
+    
+          config[key] = numericValue;
+        }
+        await setConfigFunc(chatId, config);
+  
+        // Return to the correct menu after setting a value
+        if (category === 'ai' && key === 'horizonHours') return sendAiTimeHorizonMenu(bot, chatId, messageId);
+        if (category === 'ai') return sendAiSettingsMenu(bot, chatId, messageId);
+        if (category === 'builder' && key.includes('Odds')) return sendBuilderOddsMenu(bot, chatId, messageId);
+        if (category === 'builder' && key.includes('cutoff')) return sendBuilderCutoffMenu(bot, chatId, messageId);
       }
-      
-      const numericValue = isNaN(value) ? value : Number(value);
-
-      // *** FIX: Only update and redraw if the value has changed ***
-      if (config[key] === numericValue) {
-        return; // Do nothing if the value is already the same
-      }
-
-      config[key] = numericValue;
-      await setConfigFunc(chatId, config);
-
-      // Return to the correct menu after setting a value
-      if (category === 'ai' && key === 'horizonHours') return sendAiTimeHorizonMenu(bot, chatId, messageId);
-      if (category === 'ai') return sendAiSettingsMenu(bot, chatId, messageId);
-      if (category === 'builder' && key.includes('Odds')) return sendBuilderOddsMenu(bot, chatId, messageId);
-      if (category === 'builder' && key.includes('cutoff')) return sendBuilderCutoffMenu(bot, chatId, messageId);
-    }
   });
 }
 
@@ -92,18 +98,20 @@ async function sendMainMenu(bot, chatId, messageId = null) {
 // --- AI Analyst Settings Menus ---
 
 async function sendAiSettingsMenu(bot, chatId, messageId) {
-  const config = await getAIConfig(chatId);
-  const text = `*🤖 AI Analyst Settings*\n\nSet your default preferences for the \`/ai\` command.`;
-  const keyboard = [
-    [{ text: `Default Mode: ${config.mode || 'Web Research'}`, callback_data: 'set_aimode' }],
-    [{ text: `Default Web AI: ${config.model || 'Perplexity'}`, callback_data: 'set_aimodel' }],
-    [{ text: `Default Bet Type: ${config.betType || 'Mixed'}`, callback_data: 'set_aibettype' }],
-    [{ text: `Time Horizon: ${config.horizonHours || 72} hours`, callback_data: 'set_aihorizon' }],
-    [{ text: '« Back to Main Menu', callback_data: 'set_main' }]
-  ];
-  const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
-  await bot.editMessageText(text, { ...opts, chat_id: chatId, message_id: messageId });
-}
+    const config = await getAIConfig(chatId);
+    const text = `*🤖 AI Analyst Settings*\n\nSet your default preferences for the \`/ai\` command.`;
+    const keyboard = [
+      [{ text: `Default Mode: ${config.mode || 'Web Research'}`, callback_data: 'set_aimode' }],
+      [{ text: `Default Web AI: ${config.model || 'Perplexity'}`, callback_data: 'set_aimodel' }],
+      [{ text: `Default Bet Type: ${config.betType || 'Mixed'}`, callback_data: 'set_aibettype' }],
+      [{ text: `Time Horizon: ${config.horizonHours || 72} hours`, callback_data: 'set_aihorizon' }],
+      [{ text: `Pro Quant Mode: ${config.proQuantMode ? '✅ On' : '❌ Off'}`, callback_data: 'set_set_ai_proQuantMode_toggle' }],
+      [{ text: '❔ What is Pro Quant Mode?', callback_data: 'set_quant_help' }],
+      [{ text: '« Back to Main Menu', callback_data: 'set_main' }]
+    ];
+    const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
+    await bot.editMessageText(text, { ...opts, chat_id: chatId, message_id: messageId });
+  }
 
 // NEW MENU for Time Horizon
 async function sendAiTimeHorizonMenu(bot, chatId, messageId) {
@@ -191,6 +199,22 @@ async function sendBuilderCutoffMenu(bot, chatId, messageId) {
         [{ text: `Next 24 Hours ${config.cutoffHours === 24 ? '✅' : ''}`, callback_data: 'set_set_builder_cutoffHours_24' }],
         [{ text: `Next 48 Hours ${config.cutoffHours === 48 ? '✅' : ''}`, callback_data: 'set_set_builder_cutoffHours_48' }],
         [{ text: '« Back to Builder Settings', callback_data: 'set_builder' }]
+    ];
+    const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
+    await bot.editMessageText(text, { ...opts, chat_id: chatId, message_id: messageId });
+}
+
+async function sendQuantHelpMenu(bot, chatId, messageId) {
+    const text = `*❔ Pro Quant Mode Explained*\n\nThis mode enables advanced quantitative analysis features for more sophisticated betting strategies:\n\n` +
+      `*No-Vig Per-Leg Edges:*\nCalculates the "true" odds by removing the bookmaker's commission (vig), revealing the real probability and edge for each leg of the parlay.\n\n` +
+      `*CLV Gating:*\nStands for Closing Line Value. This feature ensures that the odds you get are better than the final odds before the game starts, which is a strong indicator of a profitable bet.\n\n` +
+      `*Correlation Caps:*\nReduces the risk of having too many bets in the same game or that are closely related, which can increase the overall risk of the parlay.\n\n` +
+      `*Parlay Safety Margin:*\nA conservative adjustment to the parlay's total probability to account for unpredictable factors, making the expected value more realistic.\n\n` +
+      `*Calibrated Probability Checks:*\nAdjusts the AI's confidence to be more realistic, preventing over-optimistic predictions.\n\n` +
+      `*Ranking by Calibrated EV & Kelly Criterion:*\nParlays are ranked by their calibrated Expected Value (EV). In case of a tie, the Kelly Criterion is used to recommend the optimal bet size, favoring the parlay with better risk-adjusted returns.`;
+
+    const keyboard = [
+        [{ text: '« Back to AI Settings', callback_data: 'set_ai' }]
     ];
     const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
     await bot.editMessageText(text, { ...opts, chat_id: chatId, message_id: messageId });
