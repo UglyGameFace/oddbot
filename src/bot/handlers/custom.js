@@ -8,6 +8,7 @@ import {
 } from '../state.js';
 import gamesService from '../../services/gamesService.js';
 import redis from '../../services/redisService.js';
+import { getSportEmoji, getSportTitle, sortSports } from '../../services/sportsService.js';
 import {
   formatGameTimeTZ,
   toDecimalFromAmerican,
