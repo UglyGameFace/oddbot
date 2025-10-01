@@ -430,8 +430,6 @@ async function pickSupportedModel(apiKey, candidates = GEMINI_MODELS) {
   }
 }
 
-// In aiService.js - UPDATE the createAnalystPrompt function
-// In aiService.js - REPLACE the existing createAnalystPrompt function
 function createAnalystPrompt({ sportKey, numLegs, betType, hours, includeProps = false, quantitativeMode = 'conservative' }) {
     const sportName = sportKey.replace(/_/g, ' ').toUpperCase();
     const sources = SPORT_SOURCES[sportKey] ? `Use these URLs for current schedules: ${SPORT_SOURCES[sportKey].join(', ')}` : '';
@@ -453,68 +451,53 @@ function createAnalystPrompt({ sportKey, numLegs, betType, hours, includeProps =
 
     let calibrationInstruction = '';
     if (quantitativeMode === 'conservative') {
-        calibrationInstruction = `QUANTITATIVE CALIBRATION: Apply realistic probability estimates accounting for:
-- Historical overconfidence in AI predictions (shrink probabilities toward 50% by ~15%)
-- Correlation between game events (reduce joint probabilities)
-- Bookmaker vig and market efficiency
-- Line movement risk
-
-Provide CALIBRATED probabilities that reflect these real-world factors. For example, if your raw analysis suggests 70% confidence, output ~62-65% to account for overconfidence.`;
+        calibrationInstruction = `QUANTITATIVE CALIBRATION: Apply realistic probability estimates accounting for overconfidence, correlation, and market factors.`;
     } else {
-        calibrationInstruction = `QUANTITATIVE MODE: Use your raw probability estimates without calibration. Still ensure probabilities are realistic and justified.`;
+        calibrationInstruction = `QUANTITATIVE MODE: Use your raw probability estimates without calibration.`;
     }
 
-    return `As a professional ${sportName} analyst, create a ${numLegs}-leg parlay.
-    
-    *Time Constraint:* Use today's date, ${new Date().toDateString()}, as a reference. Find games scheduled to start in the next ${hours} hours.
-    ${sources}
+    return `You are a world-class sports betting analyst. Your task is to conduct **thorough, deep research** to construct a high-value ${numLegs}-leg parlay for ${sportName}. Prioritize accuracy and verifiable data over speed.
 
-    *Bet Type Strategy:* ${betTypeInstruction}
+**Your Process:**
+1.  **Data Gathering:** Scour the web for the most up-to-date information regarding games in the next ${hours} hours. Use official league sites, reputable sports news outlets (like ESPN, The Athletic), and advanced statistical sources.
+2.  **Deep Analysis:** For each potential leg, analyze matchups, recent performance trends (last 5-10 games), player injuries, historical head-to-head data, and any relevant news.
+3.  **Quantitative Justification:** In the 'justification' field for each leg, you MUST include specific stats, data points, or trends that support your pick. Do not use vague statements. For example, instead of "Team A is better," write "Team A averages 28.5 PPG and has the #3 ranked defense, while Team B has lost 3 straight games, giving up an average of 32 PPG."
+4.  **Source Citation:** You MUST populate the main 'sources' array with the top 2-3 URLs you used for your analysis.
 
-    *Quantitative Analysis:* ${calibrationInstruction}
+**Parlay Requirements:**
+* **Time Constraint:** Games must start in the next ${hours} hours from now (${new Date().toUTCString()}). ${sources}
+* **Bet Type Strategy:** ${betTypeInstruction}
+* **Quantitative Analysis:** ${calibrationInstruction}
 
-    *Market Variety Requirements:*
-    - For "mixed" type: Include different markets (moneyline, spreads, totals, player props)
-    - Ensure diversity across games and bet types
-    - Balance risk across different market types
+**Output Format:** Return ONLY valid JSON in this exact structure:
 
-    *Output Format:* Return ONLY valid JSON in this exact structure:
-
-    {
+{
     "parlay_legs": [
         {
         "game": "Team A @ Team B",
-        "market": "h2h", 
-        "pick": "Team A to win", 
+        "market": "h2h",
+        "pick": "Team A",
         "fair_prob": 0.65,
-        "quotes": [
-            {
-            "book": "DraftKings",
-            "american": -150,
-            "decimal": 1.67,
-            "opponent_american": 130
-            }
-        ],
-        "justification": "Detailed analysis on why this is a good pick.",
+        "justification": "**Data-Driven Analysis:** Team A has a 5-1 record in their last 6 games and ranks 2nd in offensive efficiency. Team B's star player is questionable with an injury, and their defense is ranked 28th in the league.",
         "confidence": 0.75,
-        "game_date_utc": "${new Date(Date.now() + 3 * 3600 * 1000).toISOString()}"
+        "game_date_utc": "${new Date(Date.now() + 3 * 3600 * 1000).toISOString()}",
+        "quotes": [
+            { "book": "DraftKings", "american": -150, "decimal": 1.67, "opponent_american": 130 }
+        ]
         }
     ],
     "confidence_score": 0.80,
-    "sources": ["https://www.espn.com/nfl/matchup?gameId=..."],
+    "sources": ["https://www.espn.com/nfl/matchup?gameId=...", "https://www.theathletic.com/team/team-a/"],
     "market_variety_score": 0.85
-    }
-
-    *STRICT REQUIREMENTS:*
-    1. Use REAL teams and accurate, current odds from regulated US sportsbooks like ${REGULATED_BOOKS.join(', ')}.
-    2. For American odds, use numbers only (e.g., -150 or 125). DO NOT include "+" signs.
-    3. The final response MUST be PURE JSON only. No markdown, no explanations, no text before or after the JSON.
-    4. For MIXED bet types with props enabled: Include 1-2 player props mixed with other bet types
-    5. ${quantitativeMode === 'conservative' ? 'Apply probability calibration as described above.' : 'Use realistic but uncalibrated probabilities.'}
-    6. Validate your JSON syntax: all keys and strings in double quotes, no trailing commas, all brackets and braces properly closed.
-    7. The 'game_date_utc' must be a valid ISO 8601 string for a future game within the ${hours}-hour window.`;
 }
 
+**STRICT REQUIREMENTS:**
+1.  **Thorough Research is Paramount:** Do not rush. The quality of the justification and the data behind it is the most critical part of this task.
+2.  **Cite Your Sources:** The 'sources' array at the root of the JSON object must not be empty.
+3.  **Real Data Only:** Use REAL teams, accurate odds from regulated US sportsbooks like ${REGULATED_BOOKS.join(', ')}.
+4.  **JSON Only:** The final response MUST be PURE JSON. No explanations, no markdown, no text before or after the JSON.
+5.  **American Odds Format:** Use numbers only (e.g., -150 or 125). DO NOT include "+" signs.`;
+}
 // ---------- Enhanced Perplexity with better error handling ----------
 async function callPerplexity(prompt) {
   const { PERPLEXITY_API_KEY } = env;
