@@ -973,6 +973,67 @@ class AIService {
     }
   }
 
+// In aiService.js - ADD this method to the AIService class
+_assessMarketVariety(legs, betType, includeProps) {
+    if (!legs || legs.length === 0) {
+        return { score: 0, meetsRequirements: false };
+    }
+
+    const markets = legs.map(leg => leg.market);
+    const uniqueMarkets = new Set(markets);
+    
+    let varietyScore = 0;
+    const requirements = [];
+    
+    // Base score for market diversity
+    if (uniqueMarkets.size >= 2) {
+        varietyScore += 0.4;
+        requirements.push('multiple_markets');
+    }
+    
+    if (uniqueMarkets.size >= 3) {
+        varietyScore += 0.3;
+        requirements.push('high_diversity');
+    }
+    
+    // Bet type specific requirements
+    if (betType === 'mixed' && includeProps) {
+        const hasPlayerProps = markets.some(m => m.includes('player_'));
+        const hasOtherMarkets = markets.some(m => !m.includes('player_'));
+        
+        if (hasPlayerProps && hasOtherMarkets) {
+            varietyScore += 0.3;
+            requirements.push('mixed_with_props');
+        } else if (!hasPlayerProps) {
+            requirements.push('missing_player_props');
+            varietyScore -= 0.2; // Penalty for missing props when requested
+        }
+    }
+    
+    if (betType === 'props') {
+        const allPlayerProps = markets.every(m => m.includes('player_'));
+        if (!allPlayerProps) {
+            requirements.push('non_prop_included');
+            varietyScore -= 0.3; // Penalty for non-prop in props-only
+        }
+    }
+    
+    return {
+        score: Math.max(0, Math.min(1, varietyScore)),
+        requirements,
+        meetsRequirements: varietyScore >= 0.6,
+        marketBreakdown: {
+            total: legs.length,
+            uniqueMarkets: uniqueMarkets.size,
+            markets: Array.from(uniqueMarkets),
+            hasPlayerProps: markets.some(m => m.includes('player_')),
+            hasMoneyline: markets.some(m => m === 'h2h'),
+            hasSpreads: markets.some(m => m === 'spreads'),
+            hasTotals: markets.some(m => m === 'totals')
+        }
+    };
+}
+  
   // ========== PRIVATE ENHANCED METHODS ==========
 
   async _executeWithTimeout(promise, timeoutMs, operation) {
