@@ -514,8 +514,7 @@ async function sendQuantitativeModeSelection(bot, chatId, messageId) {
 • Assumes perfect independence
 • <i>Result: Higher apparent EV but likely overstated</i>\n\n
 <b>Recommendation</b>: Use Conservative mode for long-term profitability.`;
-  
-  await safeEditMessage(chatId, messageId, helpText, { 
+  await safeEditMessage(chatId, message.message_id, helpText, { 
     parse_mode: 'HTML',
     reply_markup: {
       inline_keyboard: [
