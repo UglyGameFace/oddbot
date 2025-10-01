@@ -11,6 +11,7 @@ import databaseService from './databaseService.js';
 import rateLimitService from './rateLimitService.js';
 import { sentryService } from './sentryService.js';
 import quantitativeService from './quantitativeService.js';
+import { buildParlayPrompt } from './promptService.js';
 
 // ---------- ENHANCED Constants ----------
 const TZ = env.TIMEZONE || 'America/New_York';
@@ -27,9 +28,8 @@ const SAFETY = [
 ];
 
 // Enhanced model selection with fallbacks
-const GEMINI_MODELS = ['gemini-2.0-flash-exp', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'];
+const GEMINI_MODELS = ['gemini-2.0-flash', 'gemini-2.0-pro', 'gemini-pro', 'gemini-1.5-pro-latest'];
 const PERPLEXITY_MODELS = ['sonar-pro', 'sonar-small-chat'];
-
 // Enhanced bookmaker coverage
 const REGULATED_BOOKS = [
   'FanDuel', 'DraftKings', 'BetMGM', 'Caesars', 'ESPN BET', 'BetRivers', 
