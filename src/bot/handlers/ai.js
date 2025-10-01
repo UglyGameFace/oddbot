@@ -9,7 +9,7 @@ import { safeEditMessage } from '../../bot.js';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 // --- CORRECTED: AI Client Initialization ---
 // The client is initialized here, but the specific model is now chosen dynamically later.
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY);
 
 
 // This helper function will be used to escape text for HTML
