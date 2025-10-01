@@ -31,7 +31,8 @@ export function registerSettingsCallbacks(bot) {
     if (action === 'aimode') return sendAiModeMenu(bot, chatId, messageId);
     if (action === 'aimodel') return sendAiModelMenu(bot, chatId, messageId);
     if (action === 'aibettype') return sendAiBetTypeMenu(bot, chatId, messageId);
-    
+    if (action === 'aihorizon') return sendAiTimeHorizonMenu(bot, chatId, messageId); // <-- NEW ACTION
+
     // Builder Settings
     if (action === 'bldodds') return sendBuilderOddsMenu(bot, chatId, messageId);
     if (action === 'bldcutoff') return sendBuilderCutoffMenu(bot, chatId, messageId);
@@ -58,6 +59,8 @@ export function registerSettingsCallbacks(bot) {
       config[key] = isNaN(value) ? value : Number(value);
       await setConfigFunc(chatId, config);
 
+      // Return to the correct menu after setting a value
+      if (category === 'ai' && key === 'horizonHours') return sendAiTimeHorizonMenu(bot, chatId, messageId);
       if (category === 'ai') return sendAiSettingsMenu(bot, chatId, messageId);
       if (category === 'builder' && key.includes('Odds')) return sendBuilderOddsMenu(bot, chatId, messageId);
       if (category === 'builder' && key.includes('cutoff')) return sendBuilderCutoffMenu(bot, chatId, messageId);
@@ -88,10 +91,26 @@ async function sendAiSettingsMenu(bot, chatId, messageId) {
     [{ text: `Default Mode: ${config.mode || 'Live API'}`, callback_data: 'set_aimode' }],
     [{ text: `Default Web AI: ${config.model || 'Gemini'}`, callback_data: 'set_aimodel' }],
     [{ text: `Default Bet Type: ${config.betType || 'Mixed'}`, callback_data: 'set_aibettype' }],
+    [{ text: `Time Horizon: ${config.horizonHours || 72} hours`, callback_data: 'set_aihorizon' }], // <-- NEW BUTTON
     [{ text: '« Back to Main Menu', callback_data: 'set_main' }]
   ];
   const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
   await bot.editMessageText(text, { ...opts, chat_id: chatId, message_id: messageId });
+}
+
+// NEW MENU for Time Horizon
+async function sendAiTimeHorizonMenu(bot, chatId, messageId) {
+    const config = await getAIConfig(chatId);
+    const text = `*Set AI Time Horizon*\n\nCurrent: ${config.horizonHours || 72} hours\n\nSelect the time window for the AI to search for games. Shorter times are faster and more focused on immediate opportunities.`;
+    const keyboard = [
+        [{ text: `Next 12 Hours ${config.horizonHours === 12 ? '✅' : ''}`, callback_data: 'set_set_ai_horizonHours_12' }],
+        [{ text: `Next 24 Hours ${config.horizonHours === 24 ? '✅' : ''}`, callback_data: 'set_set_ai_horizonHours_24' }],
+        [{ text: `Next 48 Hours ${config.horizonHours === 48 ? '✅' : ''}`, callback_data: 'set_set_ai_horizonHours_48' }],
+        [{ text: `Next 72 Hours ${config.horizonHours === 72 ? '✅' : ''}`, callback_data: 'set_set_ai_horizonHours_72' }],
+        [{ text: '« Back to AI Settings', callback_data: 'set_ai' }]
+    ];
+    const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } };
+    await bot.editMessageText(text, { ...opts, chat_id: chatId, message_id: messageId });
 }
 
 async function sendAiModeMenu(bot, chatId, messageId) {
