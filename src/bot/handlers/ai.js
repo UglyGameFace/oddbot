@@ -105,17 +105,6 @@ const DEFAULT_SPORTS = [
   { sport_key: 'golf_pga', sport_title: 'PGA Tour' }
 ];
 
-function sortSports(sports) {
-  const rank = (k) => {
-    if (PREFERRED_FIRST.includes(k)) return -100;
-    if (DEPRIORITIZE_LAST.includes(k)) return 100;
-    return 0;
-  };
-  return [...(sports || [])].sort(
-    (a, b) => rank(a?.sport_key || '') - rank(b?.sport_key || '')
-  );
-}
-
 function pageOf(arr, page) { 
   const start = page * PAGE_SIZE; 
   return arr.slice(start, start + PAGE_SIZE); 
