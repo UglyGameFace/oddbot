@@ -178,6 +178,35 @@ class AnalyticsService {
 
   // ========== PRIVATE METHODS ==========
 
+  async _fetchOddsData(sportKey, options) {
+    try {
+      return await oddsService.getSportOdds(sportKey, {
+        useCache: true,
+        includeLive: true,
+        hoursAhead: options.hoursAhead || 72,
+        ...options
+      });
+    } catch (error) {
+      console.error(`❌ Failed to fetch odds data for ${sportKey}:`, error);
+      return [];
+    }
+  }
+
+  async _fetchGamesData(sportKey, options) {
+    try {
+      return await gamesService.getGamesForSport(sportKey, {
+        useCache: true,
+        hoursAhead: options.hoursAhead || 72,
+        ...options
+      });
+    } catch (error) {
+      console.error(`❌ Failed to fetch games data for ${sportKey}:`, error);
+      return [];
+    }
+  }
+
+
+
   _assessAnalyticsDataQuality(oddsData, gamesData) {
     const oddsQuality = oddsData.length > 0 ? 'high' : 'low';
     const gamesQuality = gamesData.length > 0 ? 'high' : 'low';
