@@ -499,7 +499,6 @@ async function sendQuantitativeModeSelection(bot, chatId, messageId) {
   if (action === 'quantitative') {
     state.quantitativeMode = parts[2];
     await setUserState(chatId, state);
-    return executeAiRequest(bot, chatId, messageId);
   }
 
   if (action === 'quantitative_help') {
