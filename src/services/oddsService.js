@@ -5,7 +5,7 @@ import redisClient from './redisService.js';
 import { sentryService } from './sentryService.js';
 import rateLimitService from './rateLimitService.js';
 import makeCache from './cacheService.js';
-
+import { getSportTitle } from './sportsService.js';
 // Cache configuration aligned with other services
 const CACHE_TTL = {
   ODDS: 60,     // 1 minute for odds data
