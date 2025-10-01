@@ -91,7 +91,13 @@ export function registerCustomCallbacks(bot) {
     const { data, message } = cbq || {};
     if (!data || !message || !data.startsWith('c')) return;
     const chatId = message.chat.id;
-    try { await bot.answerCallbackQuery(cbq.id); } catch {}
+    try { 
+      await bot.answerCallbackQuery(cbq.id); 
+    } catch (error) {
+      if (!error.message.includes("query is too old")) {
+        console.error("Error answering callback query:", error);
+      }
+    }
 
     if (data === 'cback_sports') return sendCustomSportSelection(bot, chatId, message.message_id);
 
