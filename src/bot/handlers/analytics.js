@@ -42,11 +42,12 @@ class AnalyticsService {
     console.log(`📊 Generating analytics for ${sportKey}...`);
     
     try {
-      // CRITICAL FIX: Always fetch fresh, detailed odds data for analytics
-      const oddsData = await oddsService.getSportOdds(sportKey, { useCache: false, includeLive: true, hoursAhead: 72 });
-      const gamesData = oddsData; // Use the same rich data for game analysis
-
-      const [dbStats, healthStatus] = await Promise.all([
+      // FIX: Fetch both odds and games data independently from their respective services.
+      // The previous implementation incorrectly assigned oddsData to gamesData, bypassing the gamesService entirely.
+      const fetchOptions = { useCache: false, includeLive: true, hoursAhead: 72, ...options };
+      const [oddsData, gamesData, dbStats, healthStatus] = await Promise.all([
+        this._fetchOddsData(sportKey, fetchOptions),
+        this._fetchGamesData(sportKey, fetchOptions),
         databaseService.getSportGameCounts(),
         healthService.getHealth(true)
       ]);
@@ -750,17 +751,19 @@ export function registerAnalytics(bot) {
 function formatAnalyticsForTelegram(analytics) {
   const { sport, data_quality, quantitative, market_insights, recommendations } = analytics;
   
-  let message = `📊 *${sport.toUpperCase()} Analytics*\n\n`;
+  // FIX: Escape the sport key in case it contains Markdown characters like '_'
+  let message = `📊 *${escapeMarkdownV2(sport.toUpperCase())} Analytics*\n\n`;
   
   // Data Quality
-  message += `*Data Quality:* ${data_quality.overall.toUpperCase()}\n`;
+  message += `*Data Quality:* ${escapeMarkdownV2(data_quality.overall.toUpperCase())}\n`;
   message += `• Odds Data: ${data_quality.odds_data.games_count} games\n`;
   message += `• Games Data: ${data_quality.games_data.games_count} games\n`;
-  message += `• Confidence: ${data_quality.confidence}\n\n`;
+  message += `• Confidence: ${escapeMarkdownV2(data_quality.confidence)}\n\n`;
   
   // Quantitative Insights
   message += `*Quantitative Insights:*\n`;
-  message += `• Total Games: ${quantitative.totalGamesAnalyzed || quantitative.games_analysis.total_games}\n`;
+  // FIX: Use the definitive total_games count from the games_analysis section, which is sourced from gamesData.
+  message += `• Total Games: ${quantitative.games_analysis.total_games}\n`;
   message += `• Upcoming Games: ${quantitative.games_analysis.upcoming_games}\n`;
   message += `• Avg Books/Game: ${quantitative.market_analysis.average_books_per_game}\n\n`;
   
@@ -768,7 +771,7 @@ function formatAnalyticsForTelegram(analytics) {
   message += `*Market Coverage:*\n`;
   message += `• Bookmakers: ${market_insights.total_books}\n`;
   message += `• Markets: ${market_insights.total_markets}\n`;
-  message += `• Liquidity: ${market_insights.liquidity_indicator.toUpperCase()}\n\n`;
+  message += `• Liquidity: ${escapeMarkdownV2(market_insights.liquidity_indicator.toUpperCase())}\n\n`;
   
   // Recommendations
   if (recommendations.length > 0) {
@@ -779,7 +782,8 @@ function formatAnalyticsForTelegram(analytics) {
     });
   }
   
-  message += `\n_Generated: ${new Date().toLocaleString()}_`;
+  const formattedDate = escapeMarkdownV2(new Date().toLocaleString());
+  message += `\n_${formattedDate}_`;
   
   return message;
 }
@@ -791,18 +795,18 @@ function formatUserAnalyticsForTelegram(userAnalytics) {
   
   // User Profile
   message += `*Your Profile:*\n`;
-  message += `• Risk Appetite: ${user_profile.riskAppetite}\n`;
-  message += `• Strategy: ${user_profile.preferredStrategy}\n\n`;
+  message += `• Risk Appetite: ${escapeMarkdownV2(user_profile.riskAppetite)}\n`;
+  message += `• Strategy: ${escapeMarkdownV2(user_profile.preferredStrategy)}\n\n`;
   
   // Personalized Insights
   message += `*Personalized Insights:*\n`;
   message += `• ${escapeMarkdownV2(personalized_insights.risk_based_advice)}\n`;
-  message += `• Recommended Legs: ${personalized_insights.recommended_legs}\n`;
+  message += `• Recommended Legs: ${escapeMarkdownV2(personalized_insights.recommended_legs)}\n`;
   message += `• Sport Match: ${personalized_insights.sport_suitability.match ? '✅' : '⚠️'}\n\n`;
   
   // Sport Analytics Summary
   message += `*Current Sport Analysis:*\n`;
-  message += `• Data Quality: ${sport_analytics.data_quality.overall}\n`;
+  message += `• Data Quality: ${escapeMarkdownV2(sport_analytics.data_quality.overall)}\n`;
   message += `• Games Available: ${sport_analytics.quantitative.games_analysis.total_games}\n`;
   message += `• Value Opportunities: ${sport_analytics.predictive.high_value_opportunities}\n`;
   
@@ -812,7 +816,7 @@ function formatUserAnalyticsForTelegram(userAnalytics) {
 function formatLiveAnalyticsForTelegram(liveAnalytics) {
   const { sport, total_live_games, summary } = liveAnalytics;
   
-  let message = `🔴 *Live ${sport.toUpperCase()} Analytics*\n\n`;
+  let message = `🔴 *Live ${escapeMarkdownV2(sport.toUpperCase())} Analytics*\n\n`;
   
   message += `*Summary:*\n`;
   message += `• Total Live Games: ${total_live_games}\n`;
@@ -835,12 +839,12 @@ function formatComparisonForTelegram(comparison) {
   
   let message = `⚖️ *Sports Comparison*\n\n`;
   
-  message += `*Sports Compared:* ${sports_compared.join(', ')}\n\n`;
+  message += `*Sports Compared:* ${escapeMarkdownV2(sports_compared.join(', '))}\n\n`;
   
   message += `*Ranked by Value Opportunities:*\n`;
   summary.forEach((sport, index) => {
     const safeSport = escapeMarkdownV2(sport.sport);
-    message += `${index + 1}\\. ${safeSport}: ${sport.value_opportunities} opportunities \\(${sport.data_quality} data\\)\n`;
+    message += `${index + 1}\\. ${safeSport}: ${sport.value_opportunities} opportunities \\(${escapeMarkdownV2(sport.data_quality)} data\\)\n`;
   });
   
   message += `\n*Cross\\-Sport Opportunities:*\n`;
@@ -853,10 +857,11 @@ function formatComparisonForTelegram(comparison) {
     message += `No clear cross\\-sport opportunities found\\.\n`;
   }
   
-  message += `\n*Risk Assessment:* ${risk_assessment.overall_risk.toUpperCase()}\n`;
+  message += `\n*Risk Assessment:* ${escapeMarkdownV2(risk_assessment.overall_risk.toUpperCase())}\n`;
   message += `${escapeMarkdownV2(risk_assessment.recommendation)}`;
   
   return message;
 }
 
 export default analyticsService;
+
