@@ -430,7 +430,8 @@ async function pickSupportedModel(apiKey, candidates = GEMINI_MODELS) {
 }
 
 // In aiService.js - UPDATE the createAnalystPrompt function
-function createAnalystPrompt({ sportKey, numLegs, betType, hours, includeProps = false }) {
+// In aiService.js - REPLACE the existing createAnalystPrompt function
+function createAnalystPrompt({ sportKey, numLegs, betType, hours, includeProps = false, quantitativeMode = 'conservative' }) {
     const sportName = sportKey.replace(/_/g, ' ').toUpperCase();
     const sources = SPORT_SOURCES[sportKey] ? `Use these URLs for current schedules: ${SPORT_SOURCES[sportKey].join(', ')}` : '';
     
@@ -449,12 +450,27 @@ function createAnalystPrompt({ sportKey, numLegs, betType, hours, includeProps =
         }
     }
 
+    let calibrationInstruction = '';
+    if (quantitativeMode === 'conservative') {
+        calibrationInstruction = `QUANTITATIVE CALIBRATION: Apply realistic probability estimates accounting for:
+- Historical overconfidence in AI predictions (shrink probabilities toward 50% by ~15%)
+- Correlation between game events (reduce joint probabilities)
+- Bookmaker vig and market efficiency
+- Line movement risk
+
+Provide CALIBRATED probabilities that reflect these real-world factors. For example, if your raw analysis suggests 70% confidence, output ~62-65% to account for overconfidence.`;
+    } else {
+        calibrationInstruction = `QUANTITATIVE MODE: Use your raw probability estimates without calibration. Still ensure probabilities are realistic and justified.`;
+    }
+
     return `As a professional ${sportName} analyst, create a ${numLegs}-leg parlay.
     
     *Time Constraint:* Use today's date, ${new Date().toDateString()}, as a reference. Find games scheduled to start in the next ${hours} hours.
     ${sources}
 
     *Bet Type Strategy:* ${betTypeInstruction}
+
+    *Quantitative Analysis:* ${calibrationInstruction}
 
     *Market Variety Requirements:*
     - For "mixed" type: Include different markets (moneyline, spreads, totals, player props)
@@ -493,8 +509,9 @@ function createAnalystPrompt({ sportKey, numLegs, betType, hours, includeProps =
     2. For American odds, use numbers only (e.g., -150 or 125). DO NOT include "+" signs.
     3. The final response MUST be PURE JSON only. No markdown, no explanations, no text before or after the JSON.
     4. For MIXED bet types with props enabled: Include 1-2 player props mixed with other bet types
-    5. Validate your JSON syntax: all keys and strings in double quotes, no trailing commas, all brackets and braces properly closed.
-    6. The 'game_date_utc' must be a valid ISO 8601 string for a future game within the ${hours}-hour window.`;
+    5. ${quantitativeMode === 'conservative' ? 'Apply probability calibration as described above.' : 'Use realistic but uncalibrated probabilities.'}
+    6. Validate your JSON syntax: all keys and strings in double quotes, no trailing commas, all brackets and braces properly closed.
+    7. The 'game_date_utc' must be a valid ISO 8601 string for a future game within the ${hours}-hour window.`;
 }
 
 // ---------- Enhanced Perplexity with better error handling ----------
