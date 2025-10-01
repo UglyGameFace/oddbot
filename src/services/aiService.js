@@ -432,46 +432,57 @@ async function pickSupportedModel(apiKey, candidates = GEMINI_MODELS) {
 // ---------- ENHANCED Prompt Engineering with BETTER JSON Formatting ----------
 function createAnalystPrompt({ sportKey, numLegs, betType, hours }) {
     const sportName = sportKey.replace(/_/g, ' ').toUpperCase();
+    const sources = SPORT_SOURCES[sportKey] ? `Use these URLs for current schedules: ${SPORT_SOURCES[sportKey].join(', ')}` : '';
     
-    return `As a professional ${sportName} analyst, create a ${numLegs}-leg parlay for games in the next ${hours} hours.
+    let betTypeInstruction = '';
+    if (betType === 'props') {
+        betTypeInstruction = 'CRITICAL: The parlay must consist ONLY of player prop bets (e.g., player_points, player_assists, player_rebounds). Do NOT include moneyline, spreads, or totals.';
+    } else if (betType === 'moneyline') {
+        betTypeInstruction = 'The parlay should focus on moneyline (h2h) bets.';
+    } else if (betType === 'spreads') {
+        betTypeInstruction = 'The parlay should focus on spreads and totals bets.';
+    }
 
-    CRITICAL: Return ONLY valid JSON in this exact structure:
+    return `As a professional ${sportName} analyst, create a ${numLegs}-leg parlay.
+    
+    *Time Constraint:* Use today's date, ${new Date().toDateString()}, as a reference. Find games scheduled to start in the next ${hours} hours.
+    ${sources}
+
+    *Bet Type:* ${betTypeInstruction}
+
+    *Output Format:* Return ONLY valid JSON in this exact structure:
 
     {
     "parlay_legs": [
         {
         "game": "Team A @ Team B",
-        "market": "moneyline",
-        "pick": "Team A", 
+        "market": "player_points", 
+        "pick": "Player Name Over 20.5", 
         "fair_prob": 0.65,
         "quotes": [
             {
             "book": "DraftKings",
             "american": -150,
             "decimal": 1.67,
-            "opponent_american": 130,
-            "source_url": "https://example.com/odds"
+            "opponent_american": 130
             }
         ],
-        "justification": "Detailed analysis here...",
+        "justification": "Detailed analysis on why this is a good pick.",
         "confidence": 0.75,
-        "game_date_utc": "2025-01-15T20:30:00Z"
+        "game_date_utc": "${new Date(Date.now() + 3 * 3600 * 1000).toISOString()}"
         }
     ],
     "confidence_score": 0.80,
-    "sources": ["https://source1.com"]
+    "sources": ["https://www.espn.com/nfl/matchup?gameId=..."]
     }
 
-    STRICT REQUIREMENTS:
-    - Use REAL teams and accurate odds from ${REGULATED_BOOKS.slice(0, 4).join(', ')}
-    - For American odds: use -150 or 125 (NO + signs)
-    - Return PURE JSON only - no markdown, no explanations
-    - Validate JSON syntax: double quotes, no trailing commas
-    - All brackets must be properly closed
-
-    Your response must be valid JSON that can be parsed by JSON.parse() without modifications.`;
+    *STRICT REQUIREMENTS:*
+    1. Use REAL teams and accurate, current odds from regulated US sportsbooks like ${REGULATED_BOOKS.join(', ')}.
+    2. For American odds, use numbers only (e.g., -150 or 125). DO NOT include "+" signs.
+    3. The final response MUST be PURE JSON only. No markdown, no explanations, no text before or after the JSON.
+    4. Validate your JSON syntax: all keys and strings in double quotes, no trailing commas, all brackets and braces properly closed.
+    5. The 'game_date_utc' must be a valid ISO 8601 string for a future game within the ${hours}-hour window.`;
 }
-
 
 // ---------- Enhanced Perplexity with better error handling ----------
 async function callPerplexity(prompt) {
@@ -1160,3 +1171,5 @@ class AIService {
 }
 
 export default new AIService();
+
+}
