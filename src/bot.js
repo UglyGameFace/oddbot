@@ -95,6 +95,12 @@ async function safeEditMessage(chatId, messageId, text, options = {}) {
       ...editOptions
     });
   } catch (error) {
+    // Gracefully handle "message is not modified" error
+    if (error.response?.body?.description.includes('message is not modified')) {
+      console.log('INFO: Message content was not modified, skipping edit.');
+      return;
+    }
+    
     if (error.response?.body?.error_code === 400 && 
         error.response.body.description.includes('inline keyboard expected')) {
       console.log('🔄 Retrying message edit with explicit empty keyboard...');
@@ -107,7 +113,7 @@ async function safeEditMessage(chatId, messageId, text, options = {}) {
       });
     }
     
-    // Log but don't throw for common Telegram errors
+    // Log but don't throw for other common Telegram errors
     if (error.response?.body?.error_code === 400 && 
         error.response.body.description.includes('message to edit not found')) {
       console.warn('⚠️ Message to edit not found, likely already deleted');
