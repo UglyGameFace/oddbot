@@ -741,7 +741,7 @@ class AIService {
   }
 
   // THIS IS THE CORRECTED generateParlay METHOD
-  async generateParlay(sportKey, numLegs = 2, mode = 'web', aiModel = 'perplexity', betType = 'mixed', options = {}) {
+  async function generateParlay(sportKey, numLegs = 2, mode = 'web', aiModel = 'perplexity', betType = 'mixed', options = {}) {
     const requestId = `parlay_${sportKey}_${Date.now()}`;
     console.log(`🎯 Generating ${numLegs}-leg ${sportKey} parlay in ${mode} mode using ${aiModel} (${requestId})`);
     
@@ -752,14 +752,17 @@ class AIService {
     
     try {
       let result;
+      // Pass the proQuantMode option to the generation methods
+      const proQuantMode = options.proQuantMode || false;
+
       if (mode === 'web') {
         result = await this._executeWithTimeout(
-          this.generateWebResearchParlay(sportKey, numLegs, aiModel, betType, options),
+          this.generateWebResearchParlay(sportKey, numLegs, aiModel, betType, {...options, proQuantMode }),
           120000,
           `Web research for ${sportKey}`
         );
       } else {
-        result = await this.generateContextBasedParlay(sportKey, numLegs, betType, options);
+        result = await this.generateContextBasedParlay(sportKey, numLegs, betType, {...options, proQuantMode });
       }
   
       const processingTime = Date.now() - startTime;
