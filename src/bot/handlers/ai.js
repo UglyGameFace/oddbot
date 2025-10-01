@@ -731,7 +731,7 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
     }
 
     if (parlay.parlay_ev !== null && parlay.parlay_ev !== undefined) {
-        response += `<b>Expected Value:</b> ${escapeHTML(parlay.parlay_ev.toFixed(1))}}%\n`;
+        response += `<b>Expected Value:</b> ${escapeHTML(parlay.parlay_ev.toFixed(1))}%\n`;
     }
 
     const finalKeyboard = [
