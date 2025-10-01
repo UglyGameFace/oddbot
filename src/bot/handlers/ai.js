@@ -1,10 +1,10 @@
-// src/bot/handlers/ai.js - COMPLETE AND VERIFIED VERSION (using HTML)
+// src/bot/handlers/ai.js - COMPLETE AND VERIFIED HTML VERSION
 import { safeTelegramMessage } from '../../utils/enterpriseUtilities.js';
 import aiService from '../../services/aiService.js';
 import gamesService from '../../services/gamesService.js';
 import databaseService from '../../services/databaseService.js';
 import { setUserState, getUserState } from '../state.js';
-import { getSportEmoji, formatGameTimeTZ } from '../../utils/enterpriseUtilities.js';
+import { getSportEmoji } from '../../utils/enterpriseUtilities.js';
 import { safeEditMessage } from '../../bot.js';
 
 const propsToggleLabel = (on) => `${on ? '✅' : '☑️'} Include Player Props`;
@@ -143,21 +143,21 @@ function pageOf(arr, page) {
 }
 
 function formatLocalIfPresent(utcDateString, timezone) {
-    if (!utcDateString) return null;
-    try {
-      const date = new Date(utcDateString);
-      return new Intl.DateTimeFormat('en-US', {
-        timeZone: timezone,
-        year: 'numeric',
-        month: 'short',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit'
-      }).format(date);
-    } catch (error) {
-      console.warn('Date localization failed:', error.message);
-      return null;
-    }
+  if (!utcDateString) return null;
+  try {
+    const date = new Date(utcDateString);
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).format(date);
+  } catch (error) {
+    console.warn('Date localization failed:', error.message);
+    return null;
+  }
 }
 
 // COMPREHENSIVE sports discovery with multiple fallback layers
@@ -273,11 +273,13 @@ export function registerAI(bot) {
   });
 
   bot.onText(/^\/ai_live$/, async (msg) => {
-    await handleDirectFallback(bot, msg.chat.id, 'live');
+    const chatId = msg.chat.id;
+    await handleDirectFallback(bot, chatId, 'live');
   });
 
   bot.onText(/^\/ai_db$/, async (msg) => {
-    await handleDirectFallback(bot, msg.chat.id, 'db');
+    const chatId = msg.chat.id;
+    await handleDirectFallback(bot, chatId, 'db');
   });
 
   bot.onText(/^\/ai_nfl$/, async (msg) => {
@@ -646,39 +648,87 @@ async function sendFallbackOptions(bot, chatId, messageId, error) {
 }
   
 async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = null) {
-  const { sportKey, numLegs, betType } = state;
-  const legs = parlay.parlay_legs;
-  const tzLabel = 'America/New_York';
+    const { sportKey, numLegs, betType } = state;
+    const legs = parlay.parlay_legs;
+    const tzLabel = 'America/New_York';
 
-  let response = `🧠 <b>AI-Generated ${escapeHTML(numLegs)}-Leg Parlay</b>\n`;
-  response += `<b>Sport:</b> ${escapeHTML(SPORT_TITLES[sportKey] || sportKey)}\n`;
-  response += `<b>Mode:</b> ${escapeHTML(mode.toUpperCase())}\n\n`;
+    let response = `<b>AI-Generated ${escapeHTML(numLegs)}-Leg Parlay</b>\n`;
+    response += `<b>Sport:</b> ${escapeHTML(SPORT_TITLES[sportKey] || sportKey)}\n`;
+    response += `<b>Mode:</b> ${escapeHTML(mode.toUpperCase())}\n`;
+    response += `<b>Type:</b> ${escapeHTML(betType === 'props' ? 'Player Props Only' : 'Mixed')}\n`;
+    response += `<b>Confidence:</b> ${escapeHTML(Math.round((parlay.confidence_score || 0) * 100))}%\n`;
 
-  legs.forEach((leg, index) => {
-    const when = formatLocalIfPresent(leg.game_date_utc, tzLabel) || 'Time TBD';
-    response += `<b>Leg ${index + 1}:</b> ${escapeHTML(leg.game)} - <i>${escapeHTML(when)}</i>\n`;
-    response += `<b>Pick:</b> ${escapeHTML(leg.pick)} (${escapeHTML(leg.market)})\n`;
-    response += `<b>Odds:</b> ${leg.odds_american > 0 ? '+' : ''}${leg.odds_american}\n`;
-    response += `<i>${escapeHTML(leg.justification)}</i>\n\n`;
-  });
+    if (parlay.data_freshness) {
+        response += `<b>Data Age:</b> ${escapeHTML(parlay.data_freshness.hours_ago)}h\n`;
+        response += `<i>${escapeHTML(parlay.data_freshness.message)}</i>\n`;
+    }
 
-  const oddsSign = parlay.parlay_odds_american > 0 ? '+' : '';
-  response += `<b>Total Odds:</b> ${oddsSign}${parlay.parlay_odds_american}\n`;
-  response += `<b>Confidence:</b> ${Math.round((parlay.confidence_score || 0) * 100)}%\n`;
+    response += `<i>Timezone: ${escapeHTML(tzLabel)}</i>\n\n`;
 
-  const finalKeyboard = [[{ text: '🔄 Build Another', callback_data: 'ai_back_sport' }]];
+    legs.forEach((leg, index) => {
+        const when = leg.game_date_local
+          ? escapeHTML(leg.game_date_local)
+          : (leg.game_date_utc ? escapeHTML(formatLocalIfPresent(leg.game_date_utc, tzLabel)) : '');
+          
+        const game = escapeHTML(leg.game || '');
+        const pick = escapeHTML(leg.pick || '');
+        const market = escapeHTML(leg.market || '');
+        const justification = leg.justification ? escapeHTML(leg.justification.length > 250 ? `${leg.justification.slice(0, 250)}...` : leg.justification) : '';
+        const book = escapeHTML(leg.sportsbook || 'N/A');
+        const oddsDisplay = escapeHTML(leg.odds_american ? `${leg.odds_american > 0 ? '+' : ''}${leg.odds_american}` : 'N/A');
 
-  await safeEditMessage(chatId, messageId, response, {
-      parse_mode: 'HTML',
-      reply_markup: { inline_keyboard: finalKeyboard }
-  });
+        response += `<b>Leg ${index + 1}:</b> ${game}`;
+        if (when) response += ` — ${when}`;
+        response += `\n<b>Pick:</b> <b>${pick}</b> (${market})\n`;
+        response += `<b>Odds:</b> ${oddsDisplay}\n`;
+        response += `<b>Book:</b> ${book}\n`;
+        if (justification) response += `<b>Justification:</b> ${justification}\n`;
+        
+        if (leg.confidence) {
+        response += `<b>Confidence:</b> ${escapeHTML(Math.round(leg.confidence * 100))}%\n`;
+        }
+        
+        response += `\n`;
+    });
+
+    if (parlay.parlay_odds_american) {
+        const oddsSign = parlay.parlay_odds_american > 0 ? '+' : '';
+        response += `<b>Parlay Odds:</b> ${oddsSign}${escapeHTML(parlay.parlay_odds_american)}\n`;
+    }
+
+    if (parlay.parlay_odds_decimal) {
+        response += `<b>Decimal Odds:</b> ${escapeHTML(parlay.parlay_odds_decimal.toFixed(2))}\n`;
+    }
+
+    if (parlay.parlay_ev !== null && parlay.parlay_ev !== undefined) {
+        response += `<b>Expected Value:</b> ${escapeHTML((parlay.parlay_ev * 100).toFixed(1))}%\n`;
+    }
+
+    const finalKeyboard = [
+        [{ text: '🔄 Build Another', callback_data: 'ai_back_sport' }],
+        [{ text: '⚡️ Quick NFL', callback_data: 'ai_sport_americanfootball_nfl' }],
+        [{ text: '📊 View Analytics', callback_data: 'ai_analytics' }]
+    ];
+
+    const messageOpts = {
+        parse_mode: 'HTML',
+        reply_markup: { 
+            inline_keyboard: finalKeyboard 
+        }
+    };
+
+    if (messageId) {
+        await safeEditMessage(chatId, messageId, response, messageOpts);
+    } else {
+        await bot.sendMessage(chatId, response, messageOpts);
+    }
 }
   
 async function executeAiRequest(bot, chatId, messageId) {
     const state = await getUserState(chatId);
     const { sportKey, numLegs, mode, betType, aiModel = 'gemini', includeProps = false } = state || {};
   
-    if (!sportKey || !numLegs || !mode) {
+    if (!sportKey || !numLegs || !mode || !betType) {
       return safeEditMessage(chatId, messageId, '❌ Incomplete selection. Please start over using /ai.');
     }
   
