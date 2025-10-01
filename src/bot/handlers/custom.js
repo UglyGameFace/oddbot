@@ -29,20 +29,6 @@ const SPORT_TITLES = {
   americanfootball_ncaaf: 'NCAAF',
 };
 
-const PREFERRED_FIRST = ['football_ncaaf', 'americanfootball_ncaaf'];
-const DEPRIORITIZE_LAST = ['hockey_nhl', 'icehockey_nhl'];
-
-function sortSports(sports) {
-  const rank = (k) => {
-    if (PREFERRED_FIRST.includes(k)) return -100;
-    if (DEPRIORITIZE_LAST.includes(k)) return 100;
-    return 0;
-  };
-  return [...(sports || [])].sort(
-    (a, b) => rank(a?.sport_key || '') - rank(b?.sport_key || '')
-  );
-}
-
 function applyFilters(games, { cutoffHours, excludedTeams }) {
   const ex = (excludedTeams || []).map((t) => t.toLowerCase());
   const now = Date.now();
