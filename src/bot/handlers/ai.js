@@ -578,21 +578,23 @@ async function sendModeSelection(bot, chatId, messageId) {
   await safeEditMessage(chatId, messageId, text, opts);
 }
 
+// In ai.js - UPDATE the sendBetTypeSelection function
 async function sendBetTypeSelection(bot, chatId, messageId) {
   const state = await getUserState(chatId) || {};
   const text = '🤖 <b>AI Parlay Builder</b>\n\n<b>Step 4:</b> What kind of parlay should I build?';
+  
   const keyboard = [
     [{ text: '🔥 Player Props Only', callback_data: 'ai_bettype_props'}],
     [{ text: '🎯 Moneyline Focus', callback_data: 'ai_bettype_moneyline'}],
     [{ text: '📊 Spreads & Totals', callback_data: 'ai_bettype_spreads'}],
     [{ text: '🧩 Any Bet Type (Mixed)', callback_data: 'ai_bettype_mixed'}],
-    [{ text: propsToggleLabel(!!state.includeProps), callback_data: 'ai_toggle_props' }],
+    [{ text: `✅ Include Player Props: ${state.includeProps ? 'ON' : 'OFF'}`, callback_data: 'ai_toggle_props' }],
     [{ text: '« Back to Mode', callback_data: 'ai_back_mode' }]
   ];
+  
   const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
   await safeEditMessage(chatId, messageId, text, opts);
 }
-
 async function sendAiModelSelection(bot, chatId, messageId) {
   const text = '🤖 <b>AI Parlay Builder</b>\n\n<b>Step 5:</b> Choose your Research AI.\n\n• 🧠 Gemini: Creative analysis, better narratives\n• ⚡️ Perplexity: Data-focused, faster results';
   const keyboard = [
