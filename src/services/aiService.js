@@ -430,49 +430,48 @@ async function pickSupportedModel(apiKey, candidates = GEMINI_MODELS) {
 }
 
 // ---------- ENHANCED Prompt Engineering with BETTER JSON Formatting ----------
-function createAnalystPrompt({ sportKey, numLegs, betType, hours, tz }) {
-  const sportName = sportKey.replace(/_/g, ' ').toUpperCase();
-  const sources = SPORT_SOURCES[sportKey] || SPORT_SOURCES.soccer;
-  
-  // SIMPLIFIED but still comprehensive prompt
-  return `As a professional ${sportName} analyst, create a ${numLegs}-leg parlay for games in the next ${hours} hours.
+function createAnalystPrompt({ sportKey, numLegs, betType, hours }) {
+    const sportName = sportKey.replace(/_/g, ' ').toUpperCase();
+    
+    return `As a professional ${sportName} analyst, create a ${numLegs}-leg parlay for games in the next ${hours} hours.
 
-CRITICAL: Return ONLY valid JSON in this exact structure:
+    CRITICAL: Return ONLY valid JSON in this exact structure:
 
-{
-  "parlay_legs": [
     {
-      "game": "Team A @ Team B",
-      "market": "moneyline",
-      "pick": "Team A", 
-      "fair_prob": 0.65,
-      "quotes": [
+    "parlay_legs": [
         {
-          "book": "DraftKings",
-          "american": -150,
-          "decimal": 1.67,
-          "opponent_american": 130,
-          "source_url": "https://example.com/odds"
+        "game": "Team A @ Team B",
+        "market": "moneyline",
+        "pick": "Team A", 
+        "fair_prob": 0.65,
+        "quotes": [
+            {
+            "book": "DraftKings",
+            "american": -150,
+            "decimal": 1.67,
+            "opponent_american": 130,
+            "source_url": "https://example.com/odds"
+            }
+        ],
+        "justification": "Detailed analysis here...",
+        "confidence": 0.75,
+        "game_date_utc": "2025-01-15T20:30:00Z"
         }
-      ],
-      "justification": "Detailed analysis here...",
-      "confidence": 0.75,
-      "game_date_utc": "2025-01-15T20:30:00Z"
+    ],
+    "confidence_score": 0.80,
+    "sources": ["https://source1.com"]
     }
-  ],
-  "confidence_score": 0.80,
-  "sources": ["https://source1.com"]
+
+    STRICT REQUIREMENTS:
+    - Use REAL teams and accurate odds from ${REGULATED_BOOKS.slice(0, 4).join(', ')}
+    - For American odds: use -150 or 125 (NO + signs)
+    - Return PURE JSON only - no markdown, no explanations
+    - Validate JSON syntax: double quotes, no trailing commas
+    - All brackets must be properly closed
+
+    Your response must be valid JSON that can be parsed by JSON.parse() without modifications.`;
 }
 
-STRICT REQUIREMENTS:
-- Use REAL teams and accurate odds from ${REGULATED_BOOKS.slice(0, 4).join(', ')}
-- For American odds: use -150 or 125 (NO + signs)
-- Return PURE JSON only - no markdown, no explanations
-- Validate JSON syntax: double quotes, no trailing commas
-- All brackets must be properly closed
-
-Your response must be valid JSON that can be parsed by JSON.parse() without modifications.`;
-}
 
 // ---------- Enhanced Perplexity with better error handling ----------
 async function callPerplexity(prompt) {
@@ -763,7 +762,7 @@ class AIService {
   async generateWebResearchParlay(sportKey, numLegs, aiModel, betType, options = {}) {
     const hours = Number(options.horizonHours || 72);
     const prompt = createAnalystPrompt({ sportKey, numLegs, betType, hours });
-    console.log('📝 Sending enhanced prompt to AI...');
+    console.log(`📝 Sending enhanced prompt to AI with a ${hours}-hour horizon...`);
     const obj = await callProvider(aiModel, prompt);
     if (!obj || !Array.isArray(obj.parlay_legs)) {
       throw new Error('AI returned invalid JSON structure - missing parlay_legs array');
