@@ -6,8 +6,12 @@ import databaseService from '../../services/databaseService.js';
 import { setUserState, getUserState, getAIConfig } from '../state.js';
 import { getSportEmoji, sortSports } from '../../services/sportsService.js';
 import { safeEditMessage } from '../../bot.js';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
-const propsToggleLabel = (on) => `${on ? '✅' : '☑️'} Include Player Props`;
+// --- CORRECTED: AI Client Initialization ---
+// The client is initialized here, but the specific model is now chosen dynamically later.
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
 
 // This helper function will be used to escape text for HTML
 const escapeHTML = (text) => {
@@ -20,7 +24,6 @@ const escapeHTML = (text) => {
     .replace(/'/g, '&#39;');
 };
 
-// ... (SPORT_TITLES, PAGE_SIZE, DEFAULTS, and helper functions remain the same) ...
 const SPORT_TITLES = {
   americanfootball_nfl: 'NFL',
   americanfootball_ncaaf: 'NCAAF',
@@ -93,6 +96,134 @@ const DEFAULT_SPORTS = [
   { sport_key: 'soccer_england_premier_league', sport_title: 'Premier League' },
 ];
 
+// --- Prompt Template & Builder Logic ---
+const getBasePrompt = (userSettings = {}) => {
+  const settings = {
+    sport: userSettings.sportKey || 'NCAAF',
+    numLegs: userSettings.numLegs || 3,
+    ...userSettings,
+  };
+
+  return `
+ROLE
+You are an expert assistant for a Telegram sports-betting + engineering bot. Objectives:
+- Produce data-backed picks/parlays with EV and Kelly staking.
+- Debug/author production-ready Node.js 20+ code for this bot.
+- Provide deployment/infra guidance for Railway/Render.
+- Return Telegram-safe MarkdownV2, plus a strict JSON payload for downstream automation.
+
+MODES (auto-detect unless specified by user)
+- BETS: Betting analysis, lines, parlays, EV, staking, bankroll.
+- CODE: Code fixes, patches, refactors, stack traces.
+- OPS: Deploy/infra, Docker, env vars, health checks, logs.
+- RESEARCH: Verify odds, statuses, news, movements, summaries.
+- TELEGRAM: Build Markdown and MarkdownV2-escaped messages.
+
+GLOBAL RULES
+- Start with a 1-2 sentence direct answer; then short headers with flat bullet lists (no nested lists).
+- Deterministic outputs: specify versions, limits, steps, and acceptance checks.
+- Separate facts from assumptions; if key context is missing, state the single most critical assumption and proceed.
+- For numerical work (EV/Kelly), show key intermediate values and formulas.
+- Always produce TWO artifacts:
+  A) human_readable: concise Markdown for humans.
+  B) output_json: strict JSON matching the selected Mode schema.
+- For Telegram, produce both message_markdown (readable) and message_markdown_v2 (escaped).
+
+BETTING MODE
+- Default: ${settings.sport} emphasis; support MLB/NBA/WNBA/NFL/soccer as requested.
+- Only recommend a bet if EV > 0 and key player/status info is confirmed; otherwise “No bet”.
+- Default parlay legs: ${settings.numLegs} unless explicitly requested otherwise.
+- Price discipline: line-shop; never fabricate lines. If exact unavailable, state nearest widely-posted price and uncertainty.
+- Math:
+  - American odds implied probability:
+    - For +A: p_implied = 100 / (A + 100)
+    - For -A: p_implied = A / (A + 100) with A absolute
+  - Decimal odds: p_implied = 1 / decimal_odds
+  - Kelly (binary): f* = p - (1 - p) / b, where b = decimal_odds - 1
+  - Default staking: Half Kelly; cap stake if liquidity/uncertainty elevated.
+  - Parlays: P_win = product(p_i); EV uses joint probability and combined price.
+- Human_readable sections: Picks, Rationale (2-3 bullets/leg), Pricing/Line-Shop Notes, EV/Kelly, Risks, Final Call (“Bet” or “No bet”).
+- If data freshness is uncertain, say so and prefer “No bet” unless instructed to proceed.
+
+CODE MODE
+- Environment: Node.js 20+, ESM, Express-style; Telegram bot formatting conventions.
+- Produce copy-paste ready full files or unified diffs with imports/exports, no placeholders.
+- Enforce MarkdownV2 escaping for all dynamic fields; keep parse_mode consistent on send/edit.
+- Include timeouts, retries/backoff, structured logging, and /health if missing.
+- Structure: Fix summary, Code block(s), Why it works, How to verify (commands + expected outputs), Rollback plan.
+
+OPS MODE
+- Targets: Railway/Render; include Dockerfile, service config, port binding, health checks, logs, env/secrets.
+- Provide rate-limit/backoff guidance for free tiers; verification steps for webhook vs polling; fallback plan.
+
+RESEARCH MODE
+- Verify lines/totals/statuses with multiple recent, reputable sources; timestamp findings and note movements.
+- If sources conflict or are stale, state uncertainty and prefer “No bet” unless asked to proceed.
+- Summarize line-shopping impact and sensitivity.
+
+TELEGRAM SAFETY (MarkdownV2)
+- Escape dynamic characters: _ * [ ] ( ) ~ \` > # + - = | { } . !
+- Keep static formatting tokens unescaped; escape only dynamic insertions.
+- Prefer inline code for timestamps/paths/errors; avoid nested formatting.
+- Always supply both: message_markdown (readable) and message_markdown_v2 (escaped).
+
+OUTPUT CONTRACT (always include)
+- human_readable: concise Markdown with headers and flat bullets.
+- output_json: strict JSON for the selected mode, matching one of the schemas below.
+
+SCHEMAS
+Mode=BETS
+{
+  "mode": "BETS",
+  "sport": "string",
+  "legs": [
+    {
+      "event": "string",
+      "market": "moneyline|spread|total|prop",
+      "selection": "string",
+      "price_american": "number",
+      "price_decimal": "number|null",
+      "book": "string|null",
+      "rationale": "string",
+      "implied_prob": "number"
+    }
+  ],
+  "parlay_price_american": "number",
+  "parlay_price_decimal": "number|null",
+  "est_win_prob": "number",
+  "est_ev_pct": "number",
+  "kelly": { "fraction": "number", "stake_pct_bankroll": "number" },
+  "constraints": { "max_legs": "number", "allow_same_game": "boolean" },
+  "risks": ["string"],
+  "assumptions": ["string"],
+  "telegram": {
+    "message_markdown": "string",
+    "message_markdown_v2": "string"
+  }
+}
+Mode=CODE { /* ...schema... */ }
+Mode=OPS { /* ...schema... */ }
+Mode=RESEARCH { /* ...schema... */ }
+Mode=TELEGRAM { /* ...schema... */ }
+
+FAIL-SAFE
+- If constraints conflict or data is unavailable: produce a best-effort result with explicit assumptions and a short checklist to resolve gaps. If betting data freshness is unclear, default to “No bet”.
+`;
+};
+
+const buildParlayPrompt = (userQuery, userSettings = {}) => {
+    const basePrompt = getBasePrompt(userSettings);
+    const finalPrompt = `${basePrompt}
+
+USER QUERY:
+Analyze the following request and generate a response adhering strictly to the rules and output contract specified above.
+
+"${userQuery}"
+`;
+    return finalPrompt;
+};
+
+// --- Existing Helper Functions ---
 function pageOf(arr, page) {
   const start = page * PAGE_SIZE;
   return arr.slice(start, start + PAGE_SIZE);
@@ -187,7 +318,7 @@ async function getCachedSports() {
   }
 }
 
-// ... (registerAI, handleQuickSport, handleDirectFallback functions are unchanged) ...
+// --- Command Registration ---
 export function registerAI(bot) {
   bot.onText(/^\/ai$/, async (msg) => {
     const chatId = msg.chat.id;
@@ -227,7 +358,8 @@ async function handleQuickSport(bot, chatId, sportKey) {
       numLegs: 4,
       mode: 'web',
       betType: 'mixed',
-      aiModel: 'perplexity'
+      aiModel: 'perplexity', // 'perplexity' (data-focused) is a good default
+      quantitativeMode: 'conservative'
     });
 
     const sportTitle = SPORT_TITLES[sportKey] || sportKey.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
@@ -272,7 +404,8 @@ async function handleDirectFallback(bot, chatId, mode) {
     const parlay = await aiService.handleFallbackSelection(sportKey, numLegs, mode, betType);
     await sendParlayResult(bot, chatId, parlay, state, mode, sentMessage.message_id);
 
-  } catch (error) {
+  } catch (error)
+ {
     console.error('Direct fallback execution error:', error);
     await bot.sendMessage(
       chatId,
@@ -283,7 +416,8 @@ async function handleDirectFallback(bot, chatId, mode) {
     await setUserState(chatId, {});
   }
 }
-// --- REWRITTEN AI CALLBACK HANDLER ---
+
+// --- Callback Handler ---
 export function registerAICallbacks(bot) {
   bot.on('callback_query', async (cbq) => {
     const { data, message } = cbq || {};
@@ -508,7 +642,8 @@ export function registerAICallbacks(bot) {
 
   });
 }
-// ... (sendSportSelection, sendLegSelection, etc. are unchanged) ...
+
+// --- UI Message Functions ---
 async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
   let sports = [];
   let errorMessage = '';
@@ -684,7 +819,23 @@ async function sendFallbackOptions(bot, chatId, messageId, error) {
 
 async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
     const { sportKey, numLegs } = state;
-    const { parlay_legs: legs, parlay_odds_american, quantitative_analysis: quant, sources, market_variety } = parlay;
+    const legs = parlay.legs || parlay.parlay_legs;
+    const parlay_odds_american = parlay.parlay_price_american || parlay.parlay_odds_american;
+    const quant = parlay.kelly ? {
+        calibrated: {
+            evPercentage: (parlay.est_ev_pct || 0) * 100,
+            jointProbability: parlay.est_win_prob || 0,
+        },
+        riskAssessment: {
+            overallRisk: parlay.risks ? parlay.risks.join(', ') : 'N/A'
+        },
+        staking: {
+            kellyFractionHalf: (parlay.kelly.fraction || 0) / 2
+        }
+    } : parlay.quantitative_analysis;
+    const sources = parlay.sources;
+    const market_variety = parlay.market_variety;
+
     const tzLabel = 'America/New_York';
 
     await setUserState(chatId, { ...state, lastSportKey: sportKey });
@@ -693,17 +844,23 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
     response += `<b>Sport:</b> ${escapeHTML(SPORT_TITLES[sportKey] || sportKey)}\n`;
     response += `<b>Mode:</b> ${escapeHTML(mode.toUpperCase())}\n\n`;
 
-    legs.forEach((leg, index) => {
-        const when = leg.game_date_local || (leg.game_date_utc ? formatLocalIfPresent(leg.game_date_utc, tzLabel) : '');
-        const game = escapeHTML(leg.game || '');
-        const pick = escapeHTML(leg.pick || '');
-        const oddsDisplay = escapeHTML(leg.odds_american > 0 ? `+${leg.odds_american}` : leg.odds_american);
+    if (!legs || legs.length === 0) {
+        response += '<i>The AI could not construct a valid parlay with the given parameters. This might be due to a lack of available games or data.</i>';
+    } else {
+        legs.forEach((leg, index) => {
+            const when = leg.game_date_local || (leg.game_date_utc ? formatLocalIfPresent(leg.game_date_utc, tzLabel) : 'TBD');
+            const game = escapeHTML(leg.event || leg.game || '');
+            const pick = escapeHTML(leg.selection || leg.pick || '');
+            const oddsValue = leg.price_american || leg.odds_american;
+            const oddsDisplay = escapeHTML(oddsValue > 0 ? `+${oddsValue}` : oddsValue);
+            const justification = escapeHTML(leg.rationale || leg.justification || '');
 
-        response += `<b>Leg ${index + 1}: ${game}</b>\n`;
-        response += `  <b>Pick:</b> ${pick} (${oddsDisplay})\n`;
-        if (when) response += `  <i>${escapeHTML(when)}</i>\n`;
-        response += `  <i>${escapeHTML(leg.justification)}</i>\n\n`;
-    });
+            response += `<b>Leg ${index + 1}: ${game}</b>\n`;
+            response += `  <b>Pick:</b> ${pick} (${oddsDisplay})\n`;
+            if (when) response += `  <i>${escapeHTML(when)}</i>\n`;
+            response += `  <i>${justification}</i>\n\n`;
+        });
+    }
 
     if (parlay_odds_american) {
         const oddsSign = parlay_odds_american > 0 ? '+' : '';
@@ -712,10 +869,10 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
 
     if (quant) {
         const calEV = quant.calibrated.evPercentage;
-        const rawEV = quant.raw.evPercentage;
+        const rawEV = quant.raw ? quant.raw.evPercentage : null;
 
         response += `<b>Calibrated EV:</b> ${escapeHTML(calEV.toFixed(1))}% ${calEV > 0 ? '👍' : '👎'}\n`;
-        response += `<i>(Raw EV: ${escapeHTML(rawEV.toFixed(1))}%)</i>\n`;
+        if (rawEV) response += `<i>(Raw EV: ${escapeHTML(rawEV.toFixed(1))}%)</i>\n`;
         response += `<b>Win Probability:</b> ${escapeHTML((quant.calibrated.jointProbability * 100).toFixed(1))}%\n`;
         response += `<b>Risk Level:</b> ${escapeHTML(quant.riskAssessment.overallRisk)}\n`;
         if (quant.staking.kellyFractionHalf > 0) {
@@ -750,7 +907,8 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
     }
 }
 
-// --- UPDATED AI REQUEST EXECUTION ---
+
+// --- The Corrected and Upgraded AI Request Execution ---
 async function executeAiRequest(bot, chatId, messageId) {
     const state = await getUserState(chatId);
     const aiConfig = await getAIConfig(chatId);
@@ -765,7 +923,7 @@ async function executeAiRequest(bot, chatId, messageId) {
 
     const text = `🤖 <b>Initiating Deep Web Analysis...</b>\n\n` +
                  `<b>Strategy:</b> ${escapeHTML(numLegs)}-Leg Parlay\n` +
-                 `<b>Sport:</b> ${escapeHTML(sportKey)}\n` +
+                 `<b>Sport:</b> ${escapeHTML(SPORT_TITLES[sportKey] || sportKey)}\n` +
                  `<b>Mode:</b> ${escapeHTML(modeText)}\n\n` +
                  `<b>Process:</b>\n` +
                  `  1.  Scanning schedules & injury reports...\n` +
@@ -787,20 +945,58 @@ async function executeAiRequest(bot, chatId, messageId) {
 
     try {
       const startTime = Date.now();
-      const options = {
-          horizonHours: aiConfig.horizonHours,
-          includeProps,
-          quantitativeMode,
-          proQuantMode: aiConfig.proQuantMode || false
-      };
-      const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, options);
+      let parlay;
+
+      if (mode === 'web') {
+          // --- ADDED: DYNAMIC MODEL SELECTION ---
+          // Map the UI choice ('gemini' or 'perplexity') to a specific Google model.
+          const modelName = aiModel === 'gemini' 
+              ? 'gemini-1.5-flash-latest' // Use Flash for creative/narrative tasks
+              : 'gemini-1.5-pro-latest';    // Use Pro for data-focused tasks
+          
+          const model = genAI.getGenerativeModel({ model: modelName });
+          console.log(`Using dynamically selected model: ${modelName} for user choice: ${aiModel}`);
+
+          const userQuery = `Generate a ${numLegs}-leg parlay for ${SPORT_TITLES[sportKey] || sportKey}. ` +
+                            `The parlay should focus on ${betType} bets. ` +
+                            `Please include player props: ${includeProps ? 'Yes' : 'No'}.`;
+
+          const fullPrompt = buildParlayPrompt(userQuery, state);
+
+          const result = await model.generateContent(fullPrompt);
+          const responseText = result.response.text();
+          
+          const jsonBlockRegex = /```json\s*([\s\S]+?)\s*```/;
+          const jsonMatch = responseText.match(jsonBlockRegex);
+          if (!jsonMatch || !jsonMatch[1]) {
+            throw new Error("AI response did not contain a valid JSON block.");
+          }
+          const aiResponse = JSON.parse(jsonMatch[1]);
+
+          if (aiResponse.mode !== 'BETS' || !aiResponse.output_json) {
+              throw new Error("Parsed JSON from AI has an invalid structure or mode.");
+          }
+          parlay = aiResponse.output_json;
+
+      } else {
+          // Keep original logic for 'live' and 'db' modes
+          const options = {
+              horizonHours: aiConfig.horizonHours,
+              includeProps,
+              quantitativeMode,
+              proQuantMode: ai.proQuantMode || false
+          };
+          parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, options);
+      }
+
       const processingTime = Math.round((Date.now() - startTime) / 1000);
 
-      if (!parlay || !parlay.parlay_legs || parlay.parlay_legs.length === 0) {
+      const legs = parlay.legs || parlay.parlay_legs;
+      if (!parlay || !legs || legs.length === 0) {
         throw new Error('AI returned an empty or invalid parlay. This can happen if no games are found for the selected sport.');
       }
 
-      console.log(`✅ Parlay generated in ${processingTime}s with ${parlay.parlay_legs.length} legs`);
+      console.log(`✅ Parlay generated in ${processingTime}s with ${legs.length} legs`);
       parlay.processing_time = processingTime;
 
       await sendParlayResult(bot, chatId, parlay, state, mode, messageId);
@@ -835,6 +1031,7 @@ async function executeAiRequest(bot, chatId, messageId) {
     }
 }
 
+// --- Help Command ---
 export function registerAIHelp(bot) {
     bot.onText(/^\/ai_help$/, async (msg) => {
       const chatId = msg.chat.id;
