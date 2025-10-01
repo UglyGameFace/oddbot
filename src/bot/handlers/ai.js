@@ -298,21 +298,22 @@ async function handleDirectFallback(bot, chatId, mode) {
 
 export function registerAICallbacks(bot) {
   bot.on('callback_query', async (cbq) => {
-    const { data, message } = cbq || {};
-    if (!data || !message || !data.startsWith('ai_')) return;
+  const { data, message } = cbq || {};
+  if (!data || !message || !data.startsWith('ai_')) return;
 
-    const chatId = message.chat.id;
-    try {
-        await bot.answerCallbackQuery(cbq.id);
-    } catch (error) {
-        if (!error.message.includes("query is too old")) {
-            console.error("Error answering callback query:", error);
-        }
+  const chatId = message.chat.id;
+  try {
+    await bot.answerCallbackQuery(cbq.id);
+  } catch (error) {
+    if (!error.message.includes("query is too old")) {
+      console.error("Error answering callback query:", error);
     }
+  }
 
-    let state = await getUserState(chatId) || {};
-    const parts = data.split('_');
-    const action = parts[1];
+  let state = await getUserState(chatId) || {};
+  const parts = data.split('_');
+  const action = parts[1];
+
 
     if (action === 'page') {
       const page = parseInt(parts[2], 10) || 0;
@@ -494,14 +495,15 @@ async function sendQuantitativeModeSelection(bot, chatId, messageId) {
   await safeEditMessage(chatId, messageId, text, opts);
 }
 
-// Update the callback handler
-if (action === 'quantitative') {
-  state.quantitativeMode = parts[2];
-  await setUserState(chatId, state);
-}
+// FIXED: Quantitative mode with proper braces
+  if (action === 'quantitative') {
+    state.quantitativeMode = parts[2];
+    await setUserState(chatId, state);
+    return executeAiRequest(bot, chatId, messageId);
+  }
 
-if (action === 'quantitative_help') {
-  const helpText = `📊 <b>Quantitative Analysis Modes</b>\n\n
+  if (action === 'quantitative_help') {
+    const helpText = `📊 <b>Quantitative Analysis Modes</b>\n\n
 🔬 <b>Conservative Mode</b>:
 • Applies 15% probability shrinkage toward 50%
 • Adds correlation penalty (5% per leg)
