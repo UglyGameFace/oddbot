@@ -11,7 +11,6 @@ import databaseService from './databaseService.js';
 import rateLimitService from './rateLimitService.js';
 import { sentryService } from './sentryService.js';
 import quantitativeService from './quantitativeService.js';
-import { buildParlayPrompt } from './promptService.js';
 
 // ---------- ENHANCED Constants ----------
 const TZ = env.TIMEZONE || 'America/New_York';
@@ -27,9 +26,10 @@ const SAFETY = [
   { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
 ];
 
-// Enhanced model selection with fallbacks
-const GEMINI_MODELS = ['gemini-2.0-flash', 'gemini-2.0-pro', 'gemini-pro', 'gemini-1.5-pro-latest'];
+// --- FIX: Updated model list to prioritize Gemini 2.0 and match available models ---
+const GEMINI_MODELS = ['gemini-2.0-flash', 'gemini-2.0-pro', 'gemini-pro'];
 const PERPLEXITY_MODELS = ['sonar-pro', 'sonar-small-chat'];
+
 // Enhanced bookmaker coverage
 const REGULATED_BOOKS = [
   'FanDuel', 'DraftKings', 'BetMGM', 'Caesars', 'ESPN BET', 'BetRivers', 
@@ -1010,7 +1010,6 @@ class AIService {
     }
   }
 
-// In aiService.js - ADD this method to the AIService class
 _assessMarketVariety(legs, betType, includeProps) {
     if (!legs || legs.length === 0) {
         return { score: 0, meetsRequirements: false };
