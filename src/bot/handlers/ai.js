@@ -3,8 +3,8 @@ import { safeTelegramMessage } from '../../utils/enterpriseUtilities.js';
 import aiService from '../../services/aiService.js';
 import gamesService from '../../services/gamesService.js';
 import databaseService from '../../services/databaseService.js';
-import { setUserState, getUserState } from '../state.js';
-import { getSportEmoji } from '../../utils/enterpriseUtilities.js';
+import { setUserState, getUserState, getAIConfig } from '../state.js';
+import { getSportEmoji, formatGameTimeTZ, escapeMarkdownV2 } from '../../utils/enterpriseUtilities.js';
 import { safeEditMessage } from '../../bot.js';
 
 const propsToggleLabel = (on) => `${on ? '✅' : '☑️'} Include Player Props`;
@@ -22,31 +22,22 @@ const escapeHTML = (text) => {
 
 // EXPANDED SPORT SUPPORT - All major sports
 const SPORT_TITLES = {
-  // American Football
   americanfootball_nfl: 'NFL',
   americanfootball_ncaaf: 'NCAAF',
   americanfootball_xfl: 'XFL',
   americanfootball_usfl: 'USFL',
-  
-  // Basketball
   basketball_nba: 'NBA',
   basketball_wnba: 'WNBA', 
   basketball_ncaab: 'NCAAB',
   basketball_euroleague: 'EuroLeague',
-  
-  // Baseball
   baseball_mlb: 'MLB',
   baseball_npb: 'NPB (Japan)',
   baseball_kbo: 'KBO (Korea)',
-  
-  // Hockey
   icehockey_nhl: 'NHL',
   hockey_nhl: 'NHL',
   icehockey_khl: 'KHL',
   icehockey_sweden: 'Swedish Hockey',
   icehockey_finland: 'Finnish Hockey',
-  
-  // Soccer
   soccer_england_premier_league: 'Premier League',
   soccer_spain_la_liga: 'La Liga',
   soccer_italy_serie_a: 'Serie A',
@@ -58,26 +49,18 @@ const SPORT_TITLES = {
   soccer_world_cup: 'World Cup',
   soccer_euro: 'European Championship',
   soccer_copa_america: 'Copa America',
-  
-  // Tennis
   tennis_atp: 'ATP Tennis',
   tennis_wta: 'WTA Tennis',
   tennis_aus_open: 'Australian Open',
   tennis_french_open: 'French Open',
   tennis_wimbledon: 'Wimbledon',
   tennis_us_open: 'US Open',
-  
-  // Fighting Sports
   mma_ufc: 'UFC',
   boxing: 'Boxing',
-  
-  // Motorsports
   formula1: 'Formula 1',
   motogp: 'MotoGP',
   nascar: 'NASCAR',
   indycar: 'IndyCar',
-  
-  // Golf
   golf_pga: 'PGA Tour',
   golf_european: 'European Tour',
   golf_liv: 'LIV Golf',
@@ -85,8 +68,6 @@ const SPORT_TITLES = {
   golf_us_open: 'US Open',
   golf_pga_championship: 'PGA Championship',
   golf_open_championship: 'The Open',
-  
-  // International Sports
   cricket_ipl: 'IPL Cricket',
   cricket_big_bash: 'Big Bash',
   cricket_psl: 'PSL Cricket',
@@ -101,16 +82,14 @@ const SPORT_TITLES = {
   snooker: 'Snooker'
 };
 
-// Priority order for sports display
 const PREFERRED_FIRST = [
   'americanfootball_nfl', 'americanfootball_ncaaf', 
   'basketball_nba', 'baseball_mlb', 'icehockey_nhl',
   'soccer_england_premier_league', 'soccer_uefa_champions_league'
 ];
-const DEPRIORITIZE_LAST = ['hockey_nhl', 'icehockey_nhl']; // duplicates
+const DEPRIORITIZE_LAST = ['hockey_nhl', 'icehockey_nhl'];
 const PAGE_SIZE = 10;
 
-// Last-resort static defaults with expanded coverage
 const DEFAULT_SPORTS = [
   { sport_key: 'americanfootball_nfl', sport_title: 'NFL' },
   { sport_key: 'americanfootball_ncaaf', sport_title: 'NCAAF' },
@@ -143,32 +122,28 @@ function pageOf(arr, page) {
 }
 
 function formatLocalIfPresent(utcDateString, timezone) {
-  if (!utcDateString) return null;
-  try {
-    const date = new Date(utcDateString);
-    return new Intl.DateTimeFormat('en-US', {
-      timeZone: timezone,
-      year: 'numeric',
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit'
-    }).format(date);
-  } catch (error) {
-    console.warn('Date localization failed:', error.message);
-    return null;
-  }
+    if (!utcDateString) return null;
+    try {
+        const date = new Date(utcDateString);
+        return new Intl.DateTimeFormat('en-US', {
+        timeZone: timezone,
+        year: 'numeric',
+        month: 'short',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+        }).format(date);
+    } catch (error) {
+        console.warn('Date localization failed:', error.message);
+        return null;
+    }
 }
 
 // COMPREHENSIVE sports discovery with multiple fallback layers
 async function getAllAvailableSports() {
   const sportsCollection = new Map();
-  
   console.log('🔄 Starting comprehensive sports discovery...');
-  
-  // Layer 1: Primary - gamesService (cached/provider mixed)
   try {
-    console.log('📡 Layer 1: Querying gamesService...');
     const gamesServiceSports = await gamesService.getAvailableSports();
     if (gamesServiceSports && Array.isArray(gamesServiceSports)) {
       gamesServiceSports.forEach(sport => {
@@ -181,15 +156,11 @@ async function getAllAvailableSports() {
           });
         }
       });
-      console.log(`✅ Layer 1: Added ${gamesServiceSports.length} sports from gamesService`);
     }
   } catch (error) {
-    console.warn('❌ Layer 1 (gamesService) failed:', error.message);
+    console.warn('❌ gamesService failed during sport discovery:', error.message);
   }
-  
-  // Layer 2: Secondary - databaseService comprehensive list
   try {
-    console.log('🗄️ Layer 2: Querying databaseService...');
     const dbSports = await databaseService.getDistinctSports();
     if (dbSports && Array.isArray(dbSports)) {
       dbSports.forEach(sport => {
@@ -202,60 +173,35 @@ async function getAllAvailableSports() {
           });
         }
       });
-      console.log(`✅ Layer 2: Added ${dbSports.length} sports from databaseService`);
     }
   } catch (error) {
-    console.warn('❌ Layer 2 (databaseService) failed:', error.message);
+    console.warn('❌ databaseService failed during sport discovery:', error.message);
   }
-  
-  // Layer 3: Tertiary - Add known sports from our comprehensive list
-  console.log('🌍 Layer 3: Adding known sports from comprehensive list...');
   Object.entries(SPORT_TITLES).forEach(([sport_key, sport_title]) => {
     if (!sportsCollection.has(sport_key)) {
-      sportsCollection.set(sport_key, {
-        sport_key,
-        sport_title,
-        source: 'comprehensive_list',
-        priority: 3
-      });
+      sportsCollection.set(sport_key, { sport_key, sport_title, source: 'comprehensive_list', priority: 3 });
     }
   });
-  console.log(`✅ Layer 3: Added known sports from comprehensive list`);
-  
-  // Layer 4: Final fallback - static defaults
   if (sportsCollection.size === 0) {
-    console.log('🆘 Layer 4: Using static defaults as final fallback...');
     DEFAULT_SPORTS.forEach(sport => {
-      sportsCollection.set(sport.sport_key, {
-        ...sport,
-        source: 'static_defaults',
-        priority: 4
-      });
+      sportsCollection.set(sport.sport_key, { ...sport, source: 'static_defaults', priority: 4 });
     });
   }
-  
-  const sports = Array.from(sportsCollection.values())
-    .sort((a, b) => a.priority - b.priority);
-  
+  const sports = Array.from(sportsCollection.values()).sort((a, b) => a.priority - b.priority);
   console.log(`🎉 Sports discovery complete: ${sports.length} total sports found`);
-  
   return sports;
 }
 
-// Enhanced sport selection with better error handling and caching
 let sportsCache = null;
 let sportsCacheTime = null;
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const CACHE_DURATION = 5 * 60 * 1000;
 
 async function getCachedSports() {
   const now = Date.now();
   if (sportsCache && sportsCacheTime && (now - sportsCacheTime) < CACHE_DURATION) {
-    console.log('📦 Using cached sports list');
     return sportsCache;
   }
-  
   try {
-    console.log('🔄 Refreshing sports cache...');
     sportsCache = await getAllAvailableSports();
     sportsCacheTime = now;
     return sportsCache;
@@ -273,13 +219,11 @@ export function registerAI(bot) {
   });
 
   bot.onText(/^\/ai_live$/, async (msg) => {
-    const chatId = msg.chat.id;
-    await handleDirectFallback(bot, chatId, 'live');
+    await handleDirectFallback(bot, msg.chat.id, 'live');
   });
 
   bot.onText(/^\/ai_db$/, async (msg) => {
-    const chatId = msg.chat.id;
-    await handleDirectFallback(bot, chatId, 'db');
+    await handleDirectFallback(bot, msg.chat.id, 'db');
   });
 
   bot.onText(/^\/ai_nfl$/, async (msg) => {
@@ -647,29 +591,33 @@ async function sendFallbackOptions(bot, chatId, messageId, error) {
   );
 }
   
-async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = null) {
+async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
     const { sportKey, numLegs, betType } = state;
     const legs = parlay.parlay_legs;
     const tzLabel = 'America/New_York';
 
-    let response = `<b>AI-Generated ${escapeHTML(numLegs)}-Leg Parlay</b>\n`;
+    let response = `🧠 <b>AI-Generated ${escapeHTML(numLegs)}-Leg Parlay</b>\n`;
     response += `<b>Sport:</b> ${escapeHTML(SPORT_TITLES[sportKey] || sportKey)}\n`;
     response += `<b>Mode:</b> ${escapeHTML(mode.toUpperCase())}\n`;
-    response += `<b>Type:</b> ${escapeHTML(betType === 'props' ? 'Player Props Only' : 'Mixed')}\n`;
-    response += `<b>Confidence:</b> ${escapeHTML(Math.round((parlay.confidence_score || 0) * 100))}%\n`;
+    
+    if (betType) {
+        response += `<b>Type:</b> ${escapeHTML(betType === 'props' ? 'Player Props Only' : 'Mixed')}\n`;
+    }
 
+    response += `<b>Confidence:</b> ${escapeHTML(Math.round((parlay.confidence_score || 0) * 100))}%\n`;
+    
     if (parlay.data_freshness) {
         response += `<b>Data Age:</b> ${escapeHTML(parlay.data_freshness.hours_ago)}h\n`;
         response += `<i>${escapeHTML(parlay.data_freshness.message)}</i>\n`;
     }
-
+    
     response += `<i>Timezone: ${escapeHTML(tzLabel)}</i>\n\n`;
 
     legs.forEach((leg, index) => {
         const when = leg.game_date_local
-          ? escapeHTML(leg.game_date_local)
-          : (leg.game_date_utc ? escapeHTML(formatLocalIfPresent(leg.game_date_utc, tzLabel)) : '');
-          
+        ? escapeHTML(leg.game_date_local)
+        : (leg.game_date_utc ? escapeHTML(formatLocalIfPresent(leg.game_date_utc, tzLabel)) : '');
+        
         const game = escapeHTML(leg.game || '');
         const pick = escapeHTML(leg.pick || '');
         const market = escapeHTML(leg.market || '');
@@ -678,11 +626,11 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = nu
         const oddsDisplay = escapeHTML(leg.odds_american ? `${leg.odds_american > 0 ? '+' : ''}${leg.odds_american}` : 'N/A');
 
         response += `<b>Leg ${index + 1}:</b> ${game}`;
-        if (when) response += ` — ${when}`;
+        if (when) response += ` — <i>${when}</i>`;
         response += `\n<b>Pick:</b> <b>${pick}</b> (${market})\n`;
         response += `<b>Odds:</b> ${oddsDisplay}\n`;
         response += `<b>Book:</b> ${book}\n`;
-        if (justification) response += `<b>Justification:</b> ${justification}\n`;
+        if (justification) response += `<i>${justification}</i>\n`;
         
         if (leg.confidence) {
         response += `<b>Confidence:</b> ${escapeHTML(Math.round(leg.confidence * 100))}%\n`;
@@ -693,7 +641,7 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = nu
 
     if (parlay.parlay_odds_american) {
         const oddsSign = parlay.parlay_odds_american > 0 ? '+' : '';
-        response += `<b>Parlay Odds:</b> ${oddsSign}${escapeHTML(parlay.parlay_odds_american)}\n`;
+        response += `<b>Total Odds:</b> ${oddsSign}${escapeHTML(parlay.parlay_odds_american)}\n`;
     }
 
     if (parlay.parlay_odds_decimal) {
@@ -709,7 +657,7 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = nu
         [{ text: '⚡️ Quick NFL', callback_data: 'ai_sport_americanfootball_nfl' }],
         [{ text: '📊 View Analytics', callback_data: 'ai_analytics' }]
     ];
-
+    
     const messageOpts = {
         parse_mode: 'HTML',
         reply_markup: { 
@@ -726,6 +674,7 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId = nu
   
 async function executeAiRequest(bot, chatId, messageId) {
     const state = await getUserState(chatId);
+    const aiConfig = await getAIConfig(chatId);
     const { sportKey, numLegs, mode, betType, aiModel = 'gemini', includeProps = false } = state || {};
   
     if (!sportKey || !numLegs || !mode || !betType) {
@@ -733,7 +682,7 @@ async function executeAiRequest(bot, chatId, messageId) {
     }
   
     let modeText = { web: 'Web Research', live: 'Live API Data', db: 'Database Only' }[mode];
-    if (mode === 'web') modeText += ` via ${aiModel.charAt(0).toUpperCase() + aiModel.slice(1)}`;
+    if (mode === 'web' && aiModel) modeText += ` via ${aiModel.charAt(0).toUpperCase() + aiModel.slice(1)}`;
     const betTypeText = betType === 'props' ? 'Player Props Only' : 
                        betType === 'moneyline' ? 'Moneyline Focus' :
                        betType === 'spreads' ? 'Spreads & Totals' : 'Mixed';
@@ -743,7 +692,8 @@ async function executeAiRequest(bot, chatId, messageId) {
                  `<b>Legs:</b> ${numLegs}\n` +
                  `<b>Mode:</b> ${escapeHTML(modeText)}\n` +
                  `<b>Type:</b> ${escapeHTML(betTypeText)}\n` +
-                 `<b>Props:</b> ${escapeHTML(includeProps ? 'On' : 'Off')}\n\n` +
+                 `<b>Props:</b> ${escapeHTML(includeProps ? 'On' : 'Off')}\n` +
+                 `<b>Time Horizon:</b> ${escapeHTML(aiConfig.horizonHours)} hours\n\n` +
                  `<i>⏳ This may take 30-90 seconds...</i>`;
                  
     await safeEditMessage(
@@ -758,7 +708,7 @@ async function executeAiRequest(bot, chatId, messageId) {
   
     try {
       const startTime = Date.now();
-      const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, { includeProps });
+      const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, { horizonHours: aiConfig.horizonHours });
       const processingTime = Math.round((Date.now() - startTime) / 1000);
   
       if (!parlay || !parlay.parlay_legs || parlay.parlay_legs.length === 0) {
