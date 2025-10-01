@@ -47,29 +47,34 @@ export async function setParlaySlip(chatId, slip) {
 async function getConfig(telegramId, type) {
     const settings = await databaseService.getUserSettings(telegramId);
     const defaults = {
-        ai: { mode: 'live', model: 'gemini', betType: 'mixed' },
-        builder: { minOdds: -500, maxOdds: 500, avoidSameGame: true, cutoffHours: 48 },
+        ai: { mode: 'web', model: 'perplexity', betType: 'mixed', horizonHours: 72 },
+        builder: { minOdds: -200, maxOdds: 500, avoidSameGame: true, cutoffHours: 48 },
     };
+    // Return the specific config type, merged with defaults
     return { ...defaults[type], ...(settings[type] || {}) };
 }
 
 async function setConfig(telegramId, type, newConfigData) {
     const currentSettings = await databaseService.getUserSettings(telegramId);
-    const updatedSettings = {
-        ...currentSettings,
-        [type]: {
-            ...(currentSettings[type] || {}),
-            ...newConfigData
-        }
-    };
+    // Create a deep copy to avoid mutation issues if settings object is reused
+    const updatedSettings = JSON.parse(JSON.stringify(currentSettings));
+    
+    // Ensure the config type object exists
+    if (!updatedSettings[type]) {
+        updatedSettings[type] = {};
+    }
+
+    // Merge new data into the specific config type
+    Object.assign(updatedSettings[type], newConfigData);
+    
     await databaseService.updateUserSettings(telegramId, updatedSettings);
 }
 
 export const getAIConfig = (id) => getConfig(id, 'ai');
-export const setAIConfig = (id, cfg) => setConfig(id, 'ai', { ...cfg });
+export const setAIConfig = (id, cfg) => setConfig(id, 'ai', cfg);
 
 export const getBuilderConfig = (id) => getConfig(id, 'builder');
-export const setBuilderConfig = (id, cfg) => setConfig(id, 'builder', { ...cfg });
+export const setBuilderConfig = (id, cfg) => setConfig(id, 'builder', cfg);
 
 
 // --- Tokens (unchanged, good use for Redis) ---
