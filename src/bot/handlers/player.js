@@ -3,8 +3,8 @@
 import oddsService from '../../services/oddsService.js';
 import gamesService from '../../services/gamesService.js';
 import { setUserState, getUserState, saveToken, loadToken } from '../state.js';
-import { getSportEmoji, formatGameTimeTZ } from '../../utils/enterpriseUtilities.js';
-
+import { formatGameTimeTZ } from '../../utils/enterpriseUtilities.js';
+import { getSportEmoji } from '../../services/sportsService.js';
 // --- Command to Start the Player Search Flow ---
 export function registerPlayer(bot) {
   bot.onText(/^\/player$/, async (msg) => {
