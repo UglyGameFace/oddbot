@@ -1,4 +1,4 @@
-// src/bot/handlers/ai.js - COMPLETE AND CORRECTED
+// src/bot/handlers/ai.js - FULLY COMPLETE AND REFACTORED
 import { safeTelegramMessage } from '../../utils/enterpriseUtilities.js';
 import aiService from '../../services/aiService.js';
 import gamesService from '../../services/gamesService.js';
@@ -6,12 +6,6 @@ import databaseService from '../../services/databaseService.js';
 import { setUserState, getUserState, getAIConfig } from '../state.js';
 import { getSportEmoji, sortSports } from '../../services/sportsService.js';
 import { safeEditMessage } from '../../bot.js';
-import { GoogleGenerativeAI } from '@google/generative-ai';
-
-// --- CORRECTED: AI Client Initialization ---
-// The client is initialized here, but the specific model is now chosen dynamically later.
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
 
 // This helper function will be used to escape text for HTML
 const escapeHTML = (text) => {
@@ -24,6 +18,7 @@ const escapeHTML = (text) => {
     .replace(/'/g, '&#39;');
 };
 
+// --- Your Original Constants and Helpers (Restored) ---
 const SPORT_TITLES = {
   americanfootball_nfl: 'NFL',
   americanfootball_ncaaf: 'NCAAF',
@@ -96,134 +91,6 @@ const DEFAULT_SPORTS = [
   { sport_key: 'soccer_england_premier_league', sport_title: 'Premier League' },
 ];
 
-// --- Prompt Template & Builder Logic ---
-const getBasePrompt = (userSettings = {}) => {
-  const settings = {
-    sport: userSettings.sportKey || 'NCAAF',
-    numLegs: userSettings.numLegs || 3,
-    ...userSettings,
-  };
-
-  return `
-ROLE
-You are an expert assistant for a Telegram sports-betting + engineering bot. Objectives:
-- Produce data-backed picks/parlays with EV and Kelly staking.
-- Debug/author production-ready Node.js 20+ code for this bot.
-- Provide deployment/infra guidance for Railway/Render.
-- Return Telegram-safe MarkdownV2, plus a strict JSON payload for downstream automation.
-
-MODES (auto-detect unless specified by user)
-- BETS: Betting analysis, lines, parlays, EV, staking, bankroll.
-- CODE: Code fixes, patches, refactors, stack traces.
-- OPS: Deploy/infra, Docker, env vars, health checks, logs.
-- RESEARCH: Verify odds, statuses, news, movements, summaries.
-- TELEGRAM: Build Markdown and MarkdownV2-escaped messages.
-
-GLOBAL RULES
-- Start with a 1-2 sentence direct answer; then short headers with flat bullet lists (no nested lists).
-- Deterministic outputs: specify versions, limits, steps, and acceptance checks.
-- Separate facts from assumptions; if key context is missing, state the single most critical assumption and proceed.
-- For numerical work (EV/Kelly), show key intermediate values and formulas.
-- Always produce TWO artifacts:
-  A) human_readable: concise Markdown for humans.
-  B) output_json: strict JSON matching the selected Mode schema.
-- For Telegram, produce both message_markdown (readable) and message_markdown_v2 (escaped).
-
-BETTING MODE
-- Default: ${settings.sport} emphasis; support MLB/NBA/WNBA/NFL/soccer as requested.
-- Only recommend a bet if EV > 0 and key player/status info is confirmed; otherwise “No bet”.
-- Default parlay legs: ${settings.numLegs} unless explicitly requested otherwise.
-- Price discipline: line-shop; never fabricate lines. If exact unavailable, state nearest widely-posted price and uncertainty.
-- Math:
-  - American odds implied probability:
-    - For +A: p_implied = 100 / (A + 100)
-    - For -A: p_implied = A / (A + 100) with A absolute
-  - Decimal odds: p_implied = 1 / decimal_odds
-  - Kelly (binary): f* = p - (1 - p) / b, where b = decimal_odds - 1
-  - Default staking: Half Kelly; cap stake if liquidity/uncertainty elevated.
-  - Parlays: P_win = product(p_i); EV uses joint probability and combined price.
-- Human_readable sections: Picks, Rationale (2-3 bullets/leg), Pricing/Line-Shop Notes, EV/Kelly, Risks, Final Call (“Bet” or “No bet”).
-- If data freshness is uncertain, say so and prefer “No bet” unless instructed to proceed.
-
-CODE MODE
-- Environment: Node.js 20+, ESM, Express-style; Telegram bot formatting conventions.
-- Produce copy-paste ready full files or unified diffs with imports/exports, no placeholders.
-- Enforce MarkdownV2 escaping for all dynamic fields; keep parse_mode consistent on send/edit.
-- Include timeouts, retries/backoff, structured logging, and /health if missing.
-- Structure: Fix summary, Code block(s), Why it works, How to verify (commands + expected outputs), Rollback plan.
-
-OPS MODE
-- Targets: Railway/Render; include Dockerfile, service config, port binding, health checks, logs, env/secrets.
-- Provide rate-limit/backoff guidance for free tiers; verification steps for webhook vs polling; fallback plan.
-
-RESEARCH MODE
-- Verify lines/totals/statuses with multiple recent, reputable sources; timestamp findings and note movements.
-- If sources conflict or are stale, state uncertainty and prefer “No bet” unless asked to proceed.
-- Summarize line-shopping impact and sensitivity.
-
-TELEGRAM SAFETY (MarkdownV2)
-- Escape dynamic characters: _ * [ ] ( ) ~ \` > # + - = | { } . !
-- Keep static formatting tokens unescaped; escape only dynamic insertions.
-- Prefer inline code for timestamps/paths/errors; avoid nested formatting.
-- Always supply both: message_markdown (readable) and message_markdown_v2 (escaped).
-
-OUTPUT CONTRACT (always include)
-- human_readable: concise Markdown with headers and flat bullets.
-- output_json: strict JSON for the selected mode, matching one of the schemas below.
-
-SCHEMAS
-Mode=BETS
-{
-  "mode": "BETS",
-  "sport": "string",
-  "legs": [
-    {
-      "event": "string",
-      "market": "moneyline|spread|total|prop",
-      "selection": "string",
-      "price_american": "number",
-      "price_decimal": "number|null",
-      "book": "string|null",
-      "rationale": "string",
-      "implied_prob": "number"
-    }
-  ],
-  "parlay_price_american": "number",
-  "parlay_price_decimal": "number|null",
-  "est_win_prob": "number",
-  "est_ev_pct": "number",
-  "kelly": { "fraction": "number", "stake_pct_bankroll": "number" },
-  "constraints": { "max_legs": "number", "allow_same_game": "boolean" },
-  "risks": ["string"],
-  "assumptions": ["string"],
-  "telegram": {
-    "message_markdown": "string",
-    "message_markdown_v2": "string"
-  }
-}
-Mode=CODE { /* ...schema... */ }
-Mode=OPS { /* ...schema... */ }
-Mode=RESEARCH { /* ...schema... */ }
-Mode=TELEGRAM { /* ...schema... */ }
-
-FAIL-SAFE
-- If constraints conflict or data is unavailable: produce a best-effort result with explicit assumptions and a short checklist to resolve gaps. If betting data freshness is unclear, default to “No bet”.
-`;
-};
-
-const buildParlayPrompt = (userQuery, userSettings = {}) => {
-    const basePrompt = getBasePrompt(userSettings);
-    const finalPrompt = `${basePrompt}
-
-USER QUERY:
-Analyze the following request and generate a response adhering strictly to the rules and output contract specified above.
-
-"${userQuery}"
-`;
-    return finalPrompt;
-};
-
-// --- Existing Helper Functions ---
 function pageOf(arr, page) {
   const start = page * PAGE_SIZE;
   return arr.slice(start, start + PAGE_SIZE);
@@ -358,7 +225,7 @@ async function handleQuickSport(bot, chatId, sportKey) {
       numLegs: 4,
       mode: 'web',
       betType: 'mixed',
-      aiModel: 'perplexity', // 'perplexity' (data-focused) is a good default
+      aiModel: 'perplexity',
       quantitativeMode: 'conservative'
     });
 
@@ -392,29 +259,16 @@ async function handleDirectFallback(bot, chatId, mode) {
     return;
   }
 
-  const { sportKey, numLegs, betType = 'mixed' } = state;
+  // Set the mode in the state and execute the main request function
+  state.mode = mode;
+  await setUserState(chatId, state);
 
-  try {
-    const sentMessage = await bot.sendMessage(
-      chatId,
-      `🔄 Switching to <b>${escapeHTML(mode.toUpperCase())}</b> mode for ${escapeHTML(sportKey)}...\n\nThis uses stored data and may not reflect current odds.`,
-      { parse_mode: 'HTML' }
-    );
-
-    const parlay = await aiService.handleFallbackSelection(sportKey, numLegs, mode, betType);
-    await sendParlayResult(bot, chatId, parlay, state, mode, sentMessage.message_id);
-
-  } catch (error)
- {
-    console.error('Direct fallback execution error:', error);
-    await bot.sendMessage(
-      chatId,
-      `❌ Fallback mode failed: <code>${escapeHTML(error.message || 'Unknown error')}</code>\n\nPlease try /ai again with a different sport or mode.`,
-      { parse_mode: 'HTML' }
-    );
-  } finally {
-    await setUserState(chatId, {});
-  }
+  const sentMessage = await bot.sendMessage(
+    chatId,
+    `🔄 Switching to <b>${escapeHTML(mode.toUpperCase())}</b> mode...`,
+    { parse_mode: 'HTML' }
+  );
+  await executeAiRequest(bot, chatId, sentMessage.message_id);
 }
 
 // --- Callback Handler ---
@@ -508,28 +362,11 @@ export function registerAICallbacks(bot) {
 
     if (action === 'fallback') {
         const selectedMode = parts[2];
-        const { sportKey, numLegs, betType = 'mixed' } = state;
-  
-        if (!sportKey || !numLegs) {
-          return safeEditMessage(chatId, message.message_id, 'Missing sport or leg selection. Please start over with /ai.');
-        }
-  
-        try {
-          await safeEditMessage(chatId, message.message_id, `🔄 Switching to <b>${escapeHTML(selectedMode.toUpperCase())}</b> mode...\n\nThis uses stored data and may not reflect current odds.`, { parse_mode: 'HTML' });
-  
-          const parlay = await aiService.handleFallbackSelection(sportKey, numLegs, selectedMode, betType);
-          await sendParlayResult(bot, chatId, parlay, state, selectedMode, message.message_id);
-  
-        } catch (error) {
-          console.error('Fallback selection error:', error);
-          await safeEditMessage(chatId, message.message_id, `❌ Fallback mode failed: <code>${escapeHTML(error.message || 'Unknown error')}</code>\n\nPlease try /ai again.`, {
-            parse_mode: 'HTML',
-            reply_markup: { inline_keyboard: [[{ text: 'Start Over', callback_data: 'ai_back_sport' }]] }
-          });
-        } finally {
-          await setUserState(chatId, {});
-        }
-        return;
+        state.mode = selectedMode;
+        await setUserState(chatId, state);
+        
+        await safeEditMessage(chatId, message.message_id, `🔄 Switching to <b>${escapeHTML(selectedMode.toUpperCase())}</b> mode...`, { parse_mode: 'HTML' });
+        return executeAiRequest(bot, chatId, message.message_id);
     }
 
     if (action === 'analytics') {
@@ -553,30 +390,25 @@ export function registerAICallbacks(bot) {
         const analytics = await analyticsService.generateSportAnalytics(sportKey);
 
         let analyticsText = `📊 <b>Analytics for ${escapeHTML(sportKey.replace(/_/g, ' ').toUpperCase())}</b>\n\n`;
-
         analyticsText += `<b>Data Quality: ${escapeHTML(analytics.data_quality.overall.toUpperCase())}</b>\n`;
         analyticsText += `  - Odds Data: ${analytics.data_quality.odds_data.games_count} games\n`;
         analyticsText += `  - Games Data: ${analytics.data_quality.games_data.games_count} games\n\n`;
-
         const quant = analytics.quantitative;
         analyticsText += `<b>Quantitative Insights:</b>\n`;
         analyticsText += `  - Upcoming Games (72h): ${quant.games_analysis.upcoming_games}\n`;
         analyticsText += `  - Avg. Bookmakers per Game: ${quant.market_analysis.average_books_per_game}\n`;
         analyticsText += `  - Market Variety: ${escapeHTML(quant.market_analysis.market_variety.toUpperCase())}\n\n`;
-
         const pred = analytics.predictive;
         analyticsText += `<b>Predictive Model:</b>\n`;
         analyticsText += `  - Clear Favorites Found: ${pred.clear_favorites}\n`;
         analyticsText += `  - Close Matchups: ${pred.close_games}\n`;
         analyticsText += `  - High-Value Opportunities: ${pred.high_value_opportunities}\n\n`;
-
         if (analytics.recommendations && analytics.recommendations.length > 0) {
             analyticsText += `<b>Key Recommendations:</b>\n`;
             analytics.recommendations.slice(0, 2).forEach(rec => {
                 analyticsText += `  • ${escapeHTML(rec.message)}\n`;
             });
         }
-
         await safeEditMessage(chatId, message.message_id, analyticsText, {
             parse_mode: 'HTML',
             reply_markup: {
@@ -585,7 +417,6 @@ export function registerAICallbacks(bot) {
                 ]
             }
         });
-
       } catch (error) {
           console.error('Analytics generation failed:', error);
           await safeEditMessage(chatId, message.message_id,
@@ -639,7 +470,6 @@ export function registerAICallbacks(bot) {
       });
       return;
     }
-
   });
 }
 
@@ -907,12 +737,11 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
     }
 }
 
-
-// --- The Corrected and Upgraded AI Request Execution ---
+// --- The Refactored AI Request Execution ---
 async function executeAiRequest(bot, chatId, messageId) {
     const state = await getUserState(chatId);
     const aiConfig = await getAIConfig(chatId);
-    const { sportKey, numLegs, mode, betType, aiModel = 'gemini', includeProps = false, quantitativeMode = 'conservative' } = state || {};
+    const { sportKey, numLegs, mode, betType, aiModel, includeProps, quantitativeMode } = state || {};
 
     if (!sportKey || !numLegs || !mode || !betType) {
       return safeEditMessage(chatId, messageId, '❌ Incomplete selection. Please start over using /ai.');
@@ -921,79 +750,23 @@ async function executeAiRequest(bot, chatId, messageId) {
     let modeText = { web: 'Web Research', live: 'Live API Data', db: 'Database Only' }[mode];
     if (mode === 'web' && aiModel) modeText += ` via ${aiModel.charAt(0).toUpperCase() + aiModel.slice(1)}`;
 
-    const text = `🤖 <b>Initiating Deep Web Analysis...</b>\n\n` +
+    const text = `🤖 <b>Initiating Deep Analysis...</b>\n\n` +
                  `<b>Strategy:</b> ${escapeHTML(numLegs)}-Leg Parlay\n` +
                  `<b>Sport:</b> ${escapeHTML(SPORT_TITLES[sportKey] || sportKey)}\n` +
                  `<b>Mode:</b> ${escapeHTML(modeText)}\n\n` +
-                 `<b>Process:</b>\n` +
-                 `  1.  Scanning schedules & injury reports...\n` +
-                 `  2.  Analyzing matchups & statistical trends...\n` +
-                 `  3.  Constructing optimal parlay...\n` +
-                 `  4.  Running quantitative validation...\n\n` +
-                 `<i>This thorough process may take up to 90 seconds. Please wait...</i>`;
+                 `<i>This may take up to 90 seconds. Please wait...</i>`;
 
-
-    await safeEditMessage(
-      chatId,
-      messageId,
-      text,
-      {
-        parse_mode: 'HTML',
-        reply_markup: { remove_keyboard: true }
-      }
-    );
+    await safeEditMessage(chatId, messageId, text, { parse_mode: 'HTML', reply_markup: { remove_keyboard: true } });
 
     try {
       const startTime = Date.now();
-      let parlay;
-
-      if (mode === 'web') {
-          // --- ADDED: DYNAMIC MODEL SELECTION ---
-          // Map the UI choice ('gemini' or 'perplexity') to a specific Google model.
-          const modelName = aiModel === 'gemini' 
-              ? 'gemini-1.5-flash-latest' // Use Flash for creative/narrative tasks
-              : 'gemini-1.5-pro-latest';    // Use Pro for data-focused tasks
-          
-          const model = genAI.getGenerativeModel({ model: modelName });
-          console.log(`Using dynamically selected model: ${modelName} for user choice: ${aiModel}`);
-
-          const userQuery = `Generate a ${numLegs}-leg parlay for ${SPORT_TITLES[sportKey] || sportKey}. ` +
-                            `The parlay should focus on ${betType} bets. ` +
-                            `Please include player props: ${includeProps ? 'Yes' : 'No'}.`;
-
-          const fullPrompt = buildParlayPrompt(userQuery, state);
-
-          const result = await model.generateContent(fullPrompt);
-          const responseText = result.response.text();
-          
-          const jsonBlockRegex = /```json\s*([\s\S]+?)\s*```/;
-          const jsonMatch = responseText.match(jsonBlockRegex);
-          if (!jsonMatch || !jsonMatch[1]) {
-            throw new Error("AI response did not contain a valid JSON block.");
-          }
-          const aiResponse = JSON.parse(jsonMatch[1]);
-
-          if (aiResponse.mode !== 'BETS' || !aiResponse.output_json) {
-              throw new Error("Parsed JSON from AI has an invalid structure or mode.");
-          }
-          parlay = aiResponse.output_json;
-
-      } else {
-          // Keep original logic for 'live' and 'db' modes
-          const options = {
-              horizonHours: aiConfig.horizonHours,
-              includeProps,
-              quantitativeMode,
-              proQuantMode: ai.proQuantMode || false
-          };
-          parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, options);
-      }
-
+      // Delegate the entire parlay generation logic to the new, powerful aiService
+      const parlay = await aiService.generateParlay(state, aiConfig);
       const processingTime = Math.round((Date.now() - startTime) / 1000);
 
       const legs = parlay.legs || parlay.parlay_legs;
       if (!parlay || !legs || legs.length === 0) {
-        throw new Error('AI returned an empty or invalid parlay. This can happen if no games are found for the selected sport.');
+        throw new Error('AI returned an empty or invalid parlay.');
       }
 
       console.log(`✅ Parlay generated in ${processingTime}s with ${legs.length} legs`);
@@ -1009,8 +782,7 @@ async function executeAiRequest(bot, chatId, messageId) {
         return;
       }
 
-      const errorMessage = `❌ I encountered a critical error: <code>${escapeHTML(error.message || 'Unknown error')}</code>\n\nPlease try again later, or select a different mode.\n\n💡 Try:\n• Different sport\n• Fewer legs\n• Database mode`;
-
+      const errorMessage = `❌ I encountered a critical error: <code>${escapeHTML(error.message || 'Unknown error')}</code>`;
       await safeEditMessage(
         chatId,
         messageId,
@@ -1026,7 +798,6 @@ async function executeAiRequest(bot, chatId, messageId) {
           }
         }
       );
-
       await setUserState(chatId, {});
     }
 }
