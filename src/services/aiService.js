@@ -10,6 +10,7 @@ import gamesService from './gamesService.js';
 import databaseService from './databaseService.js';
 import rateLimitService from './rateLimitService.js';
 import { sentryService } from './sentryService.js';
+import quantitativeService from './quantitativeService.js';
 
 // ---------- ENHANCED Constants ----------
 const TZ = env.TIMEZONE || 'America/New_York';
