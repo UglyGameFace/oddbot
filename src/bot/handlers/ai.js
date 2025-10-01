@@ -1,11 +1,11 @@
-// src/bot/handlers/ai.js - COMPLETE AND VERIFIED HTML VERSION
+// src/bot/handlers/ai.js - COMPLETE AND CORRECTED
 import { safeTelegramMessage } from '../../utils/enterpriseUtilities.js';
 import aiService from '../../services/aiService.js';
 import gamesService from '../../services/gamesService.js';
 import databaseService from '../../services/databaseService.js';
 import { setUserState, getUserState, getAIConfig } from '../state.js';
-import { getSportEmoji, getSportTitle, sortSports } from '../../services/sportsService.js';
-import { safeEditMessage } from '../../bot.js';
+import { getSportEmoji, sortSports } from '../../services/sportsService.js';
+import { safeEditMessage } from '../../utils/safeEditMessage.js';
 
 const propsToggleLabel = (on) => `${on ? '✅' : '☑️'} Include Player Props`;
 
@@ -27,14 +27,14 @@ const SPORT_TITLES = {
   americanfootball_xfl: 'XFL',
   americanfootball_usfl: 'USFL',
   basketball_nba: 'NBA',
-  basketball_wnba: 'WNBA', 
+  basketball_wnba: 'WNBA',
   basketball_ncaab: 'NCAAB',
   basketball_euroleague: 'EuroLeague',
   baseball_mlb: 'MLB',
   baseball_npb: 'NPB (Japan)',
   baseball_kbo: 'KBO (Korea)',
   icehockey_nhl: 'NHL',
-  hockey_nhl: 'NHL',
+  hockey_nhl: 'NHL', // Alias
   icehockey_khl: 'KHL',
   icehockey_sweden: 'Swedish Hockey',
   icehockey_finland: 'Finnish Hockey',
@@ -82,32 +82,20 @@ const SPORT_TITLES = {
   snooker: 'Snooker'
 };
 
-const PREFERRED_FIRST = [
-  'americanfootball_nfl', 'americanfootball_ncaaf', 
-  'basketball_nba', 'baseball_mlb', 'icehockey_nhl',
-  'soccer_england_premier_league', 'soccer_uefa_champions_league'
-];
-const DEPRIORITIZE_LAST = ['hockey_nhl', 'icehockey_nhl'];
 const PAGE_SIZE = 10;
 
 const DEFAULT_SPORTS = [
   { sport_key: 'americanfootball_nfl', sport_title: 'NFL' },
   { sport_key: 'americanfootball_ncaaf', sport_title: 'NCAAF' },
   { sport_key: 'basketball_nba', sport_title: 'NBA' },
-  { sport_key: 'basketball_wnba', sport_title: 'WNBA' },
   { sport_key: 'baseball_mlb', sport_title: 'MLB' },
   { sport_key: 'icehockey_nhl', sport_title: 'NHL' },
   { sport_key: 'soccer_england_premier_league', sport_title: 'Premier League' },
-  { sport_key: 'soccer_uefa_champions_league', sport_title: 'Champions League' },
-  { sport_key: 'tennis_atp', sport_title: 'ATP Tennis' },
-  { sport_key: 'mma_ufc', sport_title: 'UFC' },
-  { sport_key: 'formula1', sport_title: 'Formula 1' },
-  { sport_key: 'golf_pga', sport_title: 'PGA Tour' }
 ];
 
-function pageOf(arr, page) { 
-  const start = page * PAGE_SIZE; 
-  return arr.slice(start, start + PAGE_SIZE); 
+function pageOf(arr, page) {
+  const start = page * PAGE_SIZE;
+  return arr.slice(start, start + PAGE_SIZE);
 }
 
 function formatLocalIfPresent(utcDateString, timezone) {
@@ -234,23 +222,23 @@ export function registerAI(bot) {
 
 async function handleQuickSport(bot, chatId, sportKey) {
   try {
-    await setUserState(chatId, { 
-      sportKey, 
-      numLegs: 4, 
-      mode: 'web', 
+    await setUserState(chatId, {
+      sportKey,
+      numLegs: 4,
+      mode: 'web',
       betType: 'mixed',
       aiModel: 'perplexity'
     });
-    
+
     const sportTitle = SPORT_TITLES[sportKey] || sportKey.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-    await bot.sendMessage(
+    const sentMessage = await bot.sendMessage(
       chatId,
       `⚡️ Quick start: Building 4-leg ${escapeHTML(sportTitle)} parlay via Web Research...`,
       { parse_mode: 'HTML' }
     );
-    
-    await executeAiRequest(bot, chatId);
-    
+
+    await executeAiRequest(bot, chatId, sentMessage.message_id);
+
   } catch (error) {
     console.error('Quick sport command failed:', error);
     await bot.sendMessage(
@@ -265,7 +253,7 @@ async function handleDirectFallback(bot, chatId, mode) {
   const state = await getUserState(chatId);
   if (!state?.sportKey || !state?.numLegs) {
     await bot.sendMessage(
-      chatId, 
+      chatId,
       `Please start with /ai first to select sport and legs, then use /ai_${mode} if web research fails.\n\nOr use quick commands: /ai_nfl, /ai_nba, /ai_mlb, /ai_soccer`,
       { parse_mode: 'HTML' }
     );
@@ -273,17 +261,17 @@ async function handleDirectFallback(bot, chatId, mode) {
   }
 
   const { sportKey, numLegs, betType = 'mixed' } = state;
-  
+
   try {
-    await bot.sendMessage(
+    const sentMessage = await bot.sendMessage(
       chatId,
       `🔄 Switching to <b>${escapeHTML(mode.toUpperCase())}</b> mode for ${escapeHTML(sportKey)}...\n\nThis uses stored data and may not reflect current odds.`,
       { parse_mode: 'HTML' }
     );
 
     const parlay = await aiService.handleFallbackSelection(sportKey, numLegs, mode, betType);
-    await sendParlayResult(bot, chatId, parlay, state, mode);
-    
+    await sendParlayResult(bot, chatId, parlay, state, mode, sentMessage.message_id);
+
   } catch (error) {
     console.error('Direct fallback execution error:', error);
     await bot.sendMessage(
@@ -298,22 +286,21 @@ async function handleDirectFallback(bot, chatId, mode) {
 
 export function registerAICallbacks(bot) {
   bot.on('callback_query', async (cbq) => {
-  const { data, message } = cbq || {};
-  if (!data || !message || !data.startsWith('ai_')) return;
+    const { data, message } = cbq || {};
+    if (!data || !message || !data.startsWith('ai_')) return;
 
-  const chatId = message.chat.id;
-  try {
-    await bot.answerCallbackQuery(cbq.id);
-  } catch (error) {
-    if (!error.message.includes("query is too old")) {
-      console.error("Error answering callback query:", error);
+    const chatId = message.chat.id;
+    try {
+      await bot.answerCallbackQuery(cbq.id);
+    } catch (error) {
+      if (!error.message.includes("query is too old")) {
+        console.error("Error answering callback query:", error);
+      }
     }
-  }
 
-  let state = await getUserState(chatId) || {};
-  const parts = data.split('_');
-  const action = parts[1];
-
+    let state = await getUserState(chatId) || {};
+    const parts = data.split('_');
+    const action = parts[1];
 
     if (action === 'page') {
       const page = parseInt(parts[2], 10) || 0;
@@ -363,7 +350,7 @@ export function registerAICallbacks(bot) {
     if (action === 'model') {
       state.aiModel = parts[2];
       await setUserState(chatId, state);
-      executeAiRequest(bot, chatId, message.message_id);
+      sendQuantitativeModeSelection(bot, chatId, message.message_id);
       return;
     }
 
@@ -378,16 +365,17 @@ export function registerAICallbacks(bot) {
 
     if (action === 'back') {
       const to = parts[2];
-      if (to === 'sport')  return sendSportSelection(bot, chatId, message.message_id, state.page || 0);
-      if (to === 'legs')   return sendLegSelection(bot, chatId, message.message_id);
-      if (to === 'mode')   return sendModeSelection(bot, chatId, message.message_id);
-      if (to === 'bettype')return sendBetTypeSelection(bot, chatId, message.message_id);
+      if (to === 'sport') return sendSportSelection(bot, chatId, message.message_id, state.page || 0);
+      if (to === 'legs') return sendLegSelection(bot, chatId, message.message_id);
+      if (to === 'mode') return sendModeSelection(bot, chatId, message.message_id);
+      if (to === 'bettype') return sendBetTypeSelection(bot, chatId, message.message_id);
+      if (to === 'model') return sendAiModelSelection(bot, chatId, message.message_id);
     }
 
     if (action === 'fallback') {
       const selectedMode = parts[2];
       const { sportKey, numLegs, betType = 'mixed' } = state;
-      
+
       if (!sportKey || !numLegs) {
         return safeEditMessage(chatId, message.message_id, 'Missing sport or leg selection. Please start over with /ai.');
       }
@@ -397,10 +385,10 @@ export function registerAICallbacks(bot) {
 
         const parlay = await aiService.handleFallbackSelection(sportKey, numLegs, selectedMode, betType);
         await sendParlayResult(bot, chatId, parlay, state, selectedMode, message.message_id);
-        
+
       } catch (error) {
         console.error('Fallback selection error:', error);
-        await safeEditMessage(chatId, message.message_id, `❌ Fallback mode failed: <code>${escapeHTML(error.message || 'Unknown error')}</code>\n\nPlease try /ai again.`, { 
+        await safeEditMessage(chatId, message.message_id, `❌ Fallback mode failed: <code>${escapeHTML(error.message || 'Unknown error')}</code>\n\nPlease try /ai again.`, {
           parse_mode: 'HTML',
           reply_markup: { inline_keyboard: [[{ text: 'Start Over', callback_data: 'ai_back_sport' }]] }
         });
@@ -410,36 +398,34 @@ export function registerAICallbacks(bot) {
       return;
     }
 
-// In the registerAICallbacks function in ai.js - ADD THIS SECTION
-if (action === 'analytics') {
-    const state = await getUserState(chatId);
-    const sportKey = state.lastSportKey || state.sportKey;
-    
-    if (!sportKey) {
-        return safeEditMessage(chatId, message.message_id, 
-            '❌ No sport data available for analytics. Please generate a parlay first.', 
+    if (action === 'analytics') {
+      const currentState = await getUserState(chatId);
+      const sportKey = currentState.lastSportKey || currentState.sportKey;
+
+      if (!sportKey) {
+        return safeEditMessage(chatId, message.message_id,
+            '❌ No sport data available for analytics. Please generate a parlay first.',
             { parse_mode: 'HTML' }
         );
-    }
+      }
 
-    try {
-        await safeEditMessage(chatId, message.message_id, 
-            `📊 Generating analytics for ${escapeHTML(sportKey)}...`, 
+      try {
+        await safeEditMessage(chatId, message.message_id,
+            `📊 Generating analytics for ${escapeHTML(sportKey)}...`,
             { parse_mode: 'HTML' }
         );
 
-        // Import analytics service
+        // This assumes analytics.js exports an analyticsService object
         const { analyticsService } = await import('./analytics.js');
         const analytics = await analyticsService.generateSportAnalytics(sportKey);
-        
-        // Format and send analytics
-        let analyticsText = `📊 *Analytics for ${escapeHTML(sportKey)}*\n\n`;
-        analyticsText += `*Data Quality:* ${analytics.data_quality.overall.toUpperCase()}\n`;
-        analyticsText += `*Games Available:* ${analytics.quantitative.games_analysis.total_games}\n`;
-        analyticsText += `*Upcoming Games:* ${analytics.quantitative.games_analysis.upcoming_games}\n\n`;
-        
+
+        let analyticsText = `📊 <b>Analytics for ${escapeHTML(sportKey)}</b>\n\n`;
+        analyticsText += `<b>Data Quality:</b> ${escapeHTML(analytics.data_quality.overall.toUpperCase())}\n`;
+        analyticsText += `<b>Games Available:</b> ${escapeHTML(analytics.quantitative.games_analysis.total_games)}\n`;
+        analyticsText += `<b>Upcoming Games:</b> ${escapeHTML(analytics.quantitative.games_analysis.upcoming_games)}\n\n`;
+
         if (analytics.recommendations && analytics.recommendations.length > 0) {
-            analyticsText += `*Recommendations:*\n`;
+            analyticsText += `<b>Recommendations:</b>\n`;
             analytics.recommendations.slice(0, 3).forEach(rec => {
                 analyticsText += `• ${escapeHTML(rec.message)}\n`;
             });
@@ -449,22 +435,21 @@ if (action === 'analytics') {
             parse_mode: 'HTML',
             reply_markup: {
                 inline_keyboard: [
-                    [{ text: '🔄 Back to Parlay', callback_data: 'ai_quick_retry' }],
-                    [{ text: '📈 Detailed Analytics', callback_data: 'ai_detailed_analytics' }]
+                    [{ text: '🔄 Build Another Parlay', callback_data: 'ai_back_sport' }]
                 ]
             }
         });
 
-    } catch (error) {
-        console.error('Analytics generation failed:', error);
-        await safeEditMessage(chatId, message.message_id,
-            `❌ Analytics generation failed: ${escapeHTML(error.message)}`,
-            { parse_mode: 'HTML' }
-        );
+      } catch (error) {
+          console.error('Analytics generation failed:', error);
+          await safeEditMessage(chatId, message.message_id,
+              `❌ Analytics generation failed: <code>${escapeHTML(error.message)}</code>`,
+              { parse_mode: 'HTML' }
+          );
+      }
+      return;
     }
-    return;
-}
-    
+
     if (action === 'quick') {
       const quickAction = parts[2];
       if (quickAction === 'retry') {
@@ -476,60 +461,46 @@ if (action === 'analytics') {
         return sendSportSelection(bot, chatId, message.message_id, 0);
       }
     }
-  });
-}
 
-// In ai.js - ADD quantitative mode selection
-async function sendQuantitativeModeSelection(bot, chatId, messageId) {
-  const state = await getUserState(chatId);
-  const text = '🤖 <b>AI Parlay Builder</b>\n\n<b>Step 6:</b> Select Quantitative Analysis Mode\n\n• 🔬 <b>Conservative</b>: Applies realistic calibration for overconfidence and correlation (Recommended)\n• 🚀 <b>Aggressive</b>: Uses raw AI probabilities (Higher risk, higher potential reward)';
-  
-  const keyboard = [
-    [{ text: '🔬 Conservative (Recommended)', callback_data: 'ai_quantitative_conservative' }],
-    [{ text: '🚀 Aggressive (High Risk)', callback_data: 'ai_quantitative_aggressive' }],
-    [{ text: '📊 Explain Modes', callback_data: 'ai_quantitative_help' }],
-    [{ text: '« Back to AI Model', callback_data: 'ai_back_model' }]
-  ];
-  
-  const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
-  await safeEditMessage(chatId, messageId, text, opts);
-}
-
-// FIXED: Quantitative mode with proper braces
-  if (action === 'quantitative') {
-    state.quantitativeMode = parts[2];
-    await setUserState(chatId, state);
-  }
-
-  if (action === 'quantitative_help') {
-    const helpText = `📊 <b>Quantitative Analysis Modes</b>\n\n
-🔬 <b>Conservative Mode</b>:
-• Applies 15% probability shrinkage toward 50%
-• Adds correlation penalty (5% per leg)
-• Accounts for bookmaker vig and line movement
-• <i>Result: Realistic, sustainable EV estimates</i>\n\n
-🚀 <b>Aggressive Mode</b>:
-• Uses raw AI probability estimates
-• No calibration for overconfidence
-• Assumes perfect independence
-• <i>Result: Higher apparent EV but likely overstated</i>\n\n
-<b>Recommendation</b>: Use Conservative mode for long-term profitability.`;
-  await safeEditMessage(chatId, message.message_id, helpText, { 
-    parse_mode: 'HTML',
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '🔬 Use Conservative', callback_data: 'ai_quantitative_conservative' }],
-        [{ text: '🚀 Use Aggressive', callback_data: 'ai_quantitative_aggressive' }],
-        [{ text: '« Back', callback_data: 'ai_back_model' }]
-      ]
+    if (action === 'quantitative') {
+      state.quantitativeMode = parts[2];
+      await setUserState(chatId, state);
+      return executeAiRequest(bot, chatId, message.message_id);
     }
+
+    if (action === 'quantitative_help') {
+      const helpText = `📊 <b>Quantitative Analysis Modes</b>\n\n` +
+      `🔬 <b>Conservative Mode</b>:\n` +
+      `• Applies 15% probability shrinkage toward 50%\n` +
+      `• Adds correlation penalty (5% per leg)\n` +
+      `• Accounts for bookmaker vig and line movement\n` +
+      `• <i>Result: Realistic, sustainable EV estimates</i>\n\n` +
+      `🚀 <b>Aggressive Mode</b>:\n` +
+      `• Uses raw AI probability estimates\n` +
+      `• No calibration for overconfidence\n` +
+      `• Assumes perfect independence\n` +
+      `• <i>Result: Higher apparent EV but likely overstated</i>\n\n` +
+      `<b>Recommendation</b>: Use Conservative mode for long-term profitability.`;
+      await safeEditMessage(chatId, message.message_id, helpText, {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🔬 Use Conservative', callback_data: 'ai_quantitative_conservative' }],
+            [{ text: '🚀 Use Aggressive', callback_data: 'ai_quantitative_aggressive' }],
+            [{ text: '« Back', callback_data: 'ai_back_model' }]
+          ]
+        }
+      });
+      return;
+    }
+
   });
 }
 
 async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
   let sports = [];
   let errorMessage = '';
-  
+
   try {
     sports = await getCachedSports();
   } catch (error) {
@@ -587,25 +558,25 @@ async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
 async function sendLegSelection(bot, chatId, messageId) {
   const state = await getUserState(chatId);
   const sportTitle = SPORT_TITLES[state.sportKey] || state.sportKey?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-  
+
   const legOptions = [2, 3, 4, 5, 6, 7, 8];
-  const buttons = legOptions.map(num => ({ 
-    text: `${num} Leg${num > 1 ? 's' : ''}`, 
-    callback_data: `ai_legs_${num}` 
+  const buttons = legOptions.map(num => ({
+    text: `${num} Leg${num > 1 ? 's' : ''}`,
+    callback_data: `ai_legs_${num}`
   }));
-  
+
   const keyboard = [];
   for (let i = 0; i < buttons.length; i += 4) keyboard.push(buttons.slice(i, i + 4));
-  
+
   const popularCombos = [
     { text: '🔥 4-Leg (Balanced)', callback_data: 'ai_legs_4' },
     { text: '⚡️ 3-Leg (Conservative)', callback_data: 'ai_legs_3' },
     { text: '🎯 5-Leg (Aggressive)', callback_data: 'ai_legs_5' }
   ];
   keyboard.unshift(popularCombos);
-  
+
   keyboard.push([{ text: '« Back to Sports', callback_data: 'ai_back_sport' }]);
-  
+
   const text = `🤖 <b>AI Parlay Builder</b>\n\n<b>Step 2:</b> How many legs for your ${escapeHTML(sportTitle)} parlay?\n\n• 2-3 legs: Higher confidence\n• 4-5 legs: Balanced risk/reward\n• 6+ legs: Higher payout, more risk`;
   const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
   await safeEditMessage(chatId, messageId, text, opts);
@@ -614,7 +585,7 @@ async function sendLegSelection(bot, chatId, messageId) {
 async function sendModeSelection(bot, chatId, messageId) {
   const state = await getUserState(chatId);
   const sportTitle = SPORT_TITLES[state.sportKey] || state.sportKey?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-  
+
   const text = `🤖 <b>AI Parlay Builder</b>\n\n<b>Step 3:</b> Select analysis mode for ${escapeHTML(sportTitle)}.`;
   const keyboard = [
     [{ text: '🌐 Web Research (Recommended)', callback_data: 'ai_mode_web'}],
@@ -626,11 +597,10 @@ async function sendModeSelection(bot, chatId, messageId) {
   await safeEditMessage(chatId, messageId, text, opts);
 }
 
-// In ai.js - UPDATE the sendBetTypeSelection function
 async function sendBetTypeSelection(bot, chatId, messageId) {
   const state = await getUserState(chatId) || {};
   const text = '🤖 <b>AI Parlay Builder</b>\n\n<b>Step 4:</b> What kind of parlay should I build?';
-  
+
   const keyboard = [
     [{ text: '🔥 Player Props Only', callback_data: 'ai_bettype_props'}],
     [{ text: '🎯 Moneyline Focus', callback_data: 'ai_bettype_moneyline'}],
@@ -639,10 +609,11 @@ async function sendBetTypeSelection(bot, chatId, messageId) {
     [{ text: `✅ Include Player Props: ${state.includeProps ? 'ON' : 'OFF'}`, callback_data: 'ai_toggle_props' }],
     [{ text: '« Back to Mode', callback_data: 'ai_back_mode' }]
   ];
-  
+
   const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
   await safeEditMessage(chatId, messageId, text, opts);
 }
+
 async function sendAiModelSelection(bot, chatId, messageId) {
   const text = '🤖 <b>AI Parlay Builder</b>\n\n<b>Step 5:</b> Choose your Research AI.\n\n• 🧠 Gemini: Creative analysis, better narratives\n• ⚡️ Perplexity: Data-focused, faster results';
   const keyboard = [
@@ -654,10 +625,24 @@ async function sendAiModelSelection(bot, chatId, messageId) {
   await safeEditMessage(chatId, messageId, text, opts);
 }
 
+async function sendQuantitativeModeSelection(bot, chatId, messageId) {
+    const text = '🤖 <b>AI Parlay Builder</b>\n\n<b>Step 6:</b> Select Quantitative Analysis Mode\n\n• 🔬 <b>Conservative</b>: Applies realistic calibration for overconfidence and correlation (Recommended)\n• 🚀 <b>Aggressive</b>: Uses raw AI probabilities (Higher risk, higher potential reward)';
+
+    const keyboard = [
+      [{ text: '🔬 Conservative (Recommended)', callback_data: 'ai_quantitative_conservative' }],
+      [{ text: '🚀 Aggressive (High Risk)', callback_data: 'ai_quantitative_aggressive' }],
+      [{ text: '📊 Explain Modes', callback_data: 'ai_quantitative_help' }],
+      [{ text: '« Back to AI Model', callback_data: 'ai_back_model' }]
+    ];
+
+    const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
+    await safeEditMessage(chatId, messageId, text, opts);
+}
+
 async function sendFallbackOptions(bot, chatId, messageId, error) {
   const { fallbackOptions, dataFreshness } = error;
-  
-  const text = 
+
+  const text =
     `❌ <b>Web Research Failed</b>\n\n` +
     `<b>Error:</b> ${escapeHTML(error.originalError)}\n\n` +
     `<b>${escapeHTML(fallbackOptions.db_mode.warning)}</b>\n\n` +
@@ -678,40 +663,43 @@ async function sendFallbackOptions(bot, chatId, messageId, error) {
     chatId,
     messageId,
     text,
-    { 
+    {
       parse_mode: 'HTML',
       reply_markup: { inline_keyboard: keyboard }
     }
   );
 }
-  
+
 async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
     const { sportKey, numLegs, betType } = state;
     const legs = parlay.parlay_legs;
     const tzLabel = 'America/New_York';
 
+    // Store the sport key for analytics later
+    await setUserState(chatId, { ...state, lastSportKey: sportKey });
+
     let response = `🧠 <b>AI-Generated ${escapeHTML(numLegs)}-Leg Parlay</b>\n`;
     response += `<b>Sport:</b> ${escapeHTML(SPORT_TITLES[sportKey] || sportKey)}\n`;
     response += `<b>Mode:</b> ${escapeHTML(mode.toUpperCase())}\n`;
-    
+
     if (betType) {
         response += `<b>Type:</b> ${escapeHTML(betType === 'props' ? 'Player Props Only' : 'Mixed')}\n`;
     }
 
     response += `<b>Confidence:</b> ${escapeHTML(Math.round((parlay.confidence_score || 0) * 100))}%\n`;
-    
+
     if (parlay.data_freshness) {
         response += `<b>Data Age:</b> ${escapeHTML(parlay.data_freshness.hours_ago)}h\n`;
         response += `<i>${escapeHTML(parlay.data_freshness.message)}</i>\n`;
     }
-    
+
     response += `<i>Timezone: ${escapeHTML(tzLabel)}</i>\n\n`;
 
     legs.forEach((leg, index) => {
         const when = leg.game_date_local
         ? escapeHTML(leg.game_date_local)
         : (leg.game_date_utc ? escapeHTML(formatLocalIfPresent(leg.game_date_utc, tzLabel)) : '');
-        
+
         const game = escapeHTML(leg.game || '');
         const pick = escapeHTML(leg.pick || '');
         const market = escapeHTML(leg.market || '');
@@ -725,11 +713,11 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
         response += `<b>Odds:</b> ${oddsDisplay}\n`;
         response += `<b>Book:</b> ${book}\n`;
         if (justification) response += `<i>${justification}</i>\n`;
-        
+
         if (leg.confidence) {
         response += `<b>Confidence:</b> ${escapeHTML(Math.round(leg.confidence * 100))}%\n`;
         }
-        
+
         response += `\n`;
     });
 
@@ -751,11 +739,11 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
         [{ text: '⚡️ Quick NFL', callback_data: 'ai_sport_americanfootball_nfl' }],
         [{ text: '📊 View Analytics', callback_data: 'ai_analytics' }]
     ];
-    
+
     const messageOpts = {
         parse_mode: 'HTML',
-        reply_markup: { 
-            inline_keyboard: finalKeyboard 
+        reply_markup: {
+            inline_keyboard: finalKeyboard
         }
     };
 
@@ -765,22 +753,22 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
         await bot.sendMessage(chatId, response, messageOpts);
     }
 }
-  
+
 async function executeAiRequest(bot, chatId, messageId) {
     const state = await getUserState(chatId);
     const aiConfig = await getAIConfig(chatId);
-    const { sportKey, numLegs, mode, betType, aiModel = 'gemini', includeProps = false } = state || {};
-  
+    const { sportKey, numLegs, mode, betType, aiModel = 'gemini', includeProps = false, quantitativeMode = 'conservative' } = state || {};
+
     if (!sportKey || !numLegs || !mode || !betType) {
       return safeEditMessage(chatId, messageId, '❌ Incomplete selection. Please start over using /ai.');
     }
-  
+
     let modeText = { web: 'Web Research', live: 'Live API Data', db: 'Database Only' }[mode];
     if (mode === 'web' && aiModel) modeText += ` via ${aiModel.charAt(0).toUpperCase() + aiModel.slice(1)}`;
-    const betTypeText = betType === 'props' ? 'Player Props Only' : 
+    const betTypeText = betType === 'props' ? 'Player Props Only' :
                        betType === 'moneyline' ? 'Moneyline Focus' :
                        betType === 'spreads' ? 'Spreads & Totals' : 'Mixed';
-  
+
     const text = `🤖 Accessing advanced analytics...\n\n` +
                  `<b>Sport:</b> ${escapeHTML(sportKey)}\n` +
                  `<b>Legs:</b> ${numLegs}\n` +
@@ -789,48 +777,53 @@ async function executeAiRequest(bot, chatId, messageId) {
                  `<b>Props:</b> ${escapeHTML(includeProps ? 'On' : 'Off')}\n` +
                  `<b>Time Horizon:</b> ${escapeHTML(aiConfig.horizonHours)} hours\n\n` +
                  `<i>⏳ This may take 30-90 seconds...</i>`;
-                 
+
     await safeEditMessage(
       chatId,
       messageId,
       text,
-      { 
-        parse_mode: 'HTML', 
-        reply_markup: { remove_keyboard: true } 
+      {
+        parse_mode: 'HTML',
+        reply_markup: { remove_keyboard: true }
       }
     );
-  
+
     try {
       const startTime = Date.now();
-      const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, { horizonHours: aiConfig.horizonHours });
+      const options = {
+          horizonHours: aiConfig.horizonHours,
+          includeProps,
+          quantitativeMode
+      };
+      const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, options);
       const processingTime = Math.round((Date.now() - startTime) / 1000);
-  
+
       if (!parlay || !parlay.parlay_legs || parlay.parlay_legs.length === 0) {
         throw new Error('AI returned an empty or invalid parlay. This can happen if no games are found for the selected sport.');
       }
-  
+
       console.log(`✅ Parlay generated in ${processingTime}s with ${parlay.parlay_legs.length} legs`);
       parlay.processing_time = processingTime;
-      
+
       await sendParlayResult(bot, chatId, parlay, state, mode, messageId);
-  
+
     } catch (error) {
       console.error('AI handler execution error:', error);
-      
+
       if (error.fallbackAvailable) {
         await sendFallbackOptions(bot, chatId, messageId, error);
         return;
       }
-  
+
       const errorMessage = `❌ I encountered a critical error: <code>${escapeHTML(error.message || 'Unknown error')}</code>\n\nPlease try again later, or select a different mode.\n\n💡 Try:\n• Different sport\n• Fewer legs\n• Database mode`;
-      
+
       await safeEditMessage(
         chatId,
         messageId,
         errorMessage,
         {
           parse_mode: 'HTML',
-          reply_markup: { 
+          reply_markup: {
             inline_keyboard: [
               [{ text: '🔄 Try Again', callback_data: 'ai_quick_retry' }],
               [{ text: '🎯 Change Sport', callback_data: 'ai_quick_change_sport' }],
@@ -839,7 +832,7 @@ async function executeAiRequest(bot, chatId, messageId) {
           }
         }
       );
-      
+
       await setUserState(chatId, {});
     }
 }
@@ -847,36 +840,35 @@ async function executeAiRequest(bot, chatId, messageId) {
 export function registerAIHelp(bot) {
     bot.onText(/^\/ai_help$/, async (msg) => {
       const chatId = msg.chat.id;
-      
-      const helpText = `
-  🤖 <b>AI Parlay Builder Help</b>
-  
-  <b>Quick Commands:</b>
-  • /ai - Full builder
-  • /ai_nfl - Quick NFL parlay  
-  • /ai_nba - Quick NBA parlay
-  • /ai_mlb - Quick MLB parlay
-  • /ai_soccer - Quick Soccer parlay
-  • /ai_live - Fallback to Live mode
-  • /ai_db - Fallback to Database mode
-  
-  <b>Modes:</b>
-  • 🌐 <b>Web Research</b>: Real-time data (recommended)
-  • 📡 <b>Live API</b>: Direct API data (requires quota)
-  • 💾 <b>Database</b>: Stored data (fallback)
-  
-  <b>Need Help?</b>
-  • Ensure you have stable internet
-  • Try fewer legs for faster results  
-  • Use popular sports for better data
-  • Database mode always works but may be stale
-  
-  <b>Tips:</b>
-  • 3-5 legs is optimal for balance
-  • Player props work best for NBA/NFL
-  • Web research takes 30-90 seconds
-      `;
-      
+
+      const helpText =
+  `🤖 <b>AI Parlay Builder Help</b>
+
+<b>Quick Commands:</b>
+• /ai - Full builder
+• /ai_nfl - Quick NFL parlay
+• /ai_nba - Quick NBA parlay
+• /ai_mlb - Quick MLB parlay
+• /ai_soccer - Quick Soccer parlay
+• /ai_live - Fallback to Live mode
+• /ai_db - Fallback to Database mode
+
+<b>Modes:</b>
+• 🌐 <b>Web Research</b>: Real-time data (recommended)
+• 📡 <b>Live API</b>: Direct API data (requires quota)
+• 💾 <b>Database</b>: Stored data (fallback)
+
+<b>Need Help?</b>
+• Ensure you have stable internet
+• Try fewer legs for faster results
+• Use popular sports for better data
+• Database mode always works but may be stale
+
+<b>Tips:</b>
+• 3-5 legs is optimal for balance
+• Player props work best for NBA/NFL
+• Web research takes 30-90 seconds`;
+
       await bot.sendMessage(chatId, helpText, { parse_mode: 'HTML' });
     });
 }
