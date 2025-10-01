@@ -3,7 +3,7 @@
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
 import axios from 'axios';
 import env from '../config/env.js';
-
+import { getSportTitle } from './sportsService.js';
 // Internal services for Live/DB modes only
 import oddsService from './oddsService.js';
 import gamesService from './gamesService.js';
