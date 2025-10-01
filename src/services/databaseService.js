@@ -539,7 +539,7 @@ class DatabaseService {
     }
   }
 
-  // ========== USER MANAGEMENT METHODS ==========
+    // ========== USER MANAGEMENT METHODS ==========
 
   /**
    * Enhanced user management with better preferences
@@ -556,28 +556,30 @@ class DatabaseService {
 
       if (error && error.code === 'PGRST116') {
         // User doesn't exist, create with enhanced preferences
+        const initialPreferences = {
+            favorite_sports: [],
+            bet_preferences: {
+              max_legs: 5,
+              include_props: true,
+              preferred_mode: 'web',
+              risk_tolerance: 'medium'
+            },
+            notifications: {
+              ai_parlays: true,
+              live_odds: false,
+              results: true
+            },
+            created_at: new Date().toISOString(),
+            last_active: new Date().toISOString()
+        };
+
         const { data: newUser, error: insertError } = await this.client
           .from('users')
           .insert({
             tg_id: telegramId,
             first_name: firstName,
             username: username,
-            preferences: {
-              favorite_sports: [],
-              bet_preferences: {
-                max_legs: 5,
-                include_props: true,
-                preferred_mode: 'web',
-                risk_tolerance: 'medium'
-              },
-              notifications: {
-                ai_parlays: true,
-                live_odds: false,
-                results: true
-              },
-              created_at: new Date().toISOString(),
-              last_active: new Date().toISOString()
-            }
+            preferences: initialPreferences
           })
           .select()
           .single();
@@ -590,9 +592,13 @@ class DatabaseService {
         throw error;
       } else {
         // Update last active timestamp for existing user
+        const updatedPreferences = {
+            ...(user.preferences || {}),
+            last_active: new Date().toISOString()
+        };
         await this.client
           .from('users')
-          .update({ last_active: new Date().toISOString() })
+          .update({ preferences: updatedPreferences })
           .eq('tg_id', telegramId);
       }
 
@@ -600,6 +606,7 @@ class DatabaseService {
 
     } catch (error) {
       console.error(`❌ Supabase findOrCreateUser error for ${telegramId}:`, error.message);
+      sentryService.captureError(error, { component: 'database_service', operation: 'findOrCreateUser' });
       return null;
     }
   }
@@ -613,12 +620,16 @@ class DatabaseService {
     if (!this.client) return null;
     
     try {
+      const updatedPreferences = {
+          ...newSettings,
+          updated_at: new Date().toISOString(),
+          last_active: new Date().toISOString()
+      };
+
       const { data, error } = await this.client
         .from('users')
         .update({ 
-          preferences: newSettings, 
-          updated_at: new Date().toISOString(),
-          last_active: new Date().toISOString()
+          preferences: updatedPreferences
         })
         .eq('tg_id', telegramId)
         .select()
@@ -631,10 +642,10 @@ class DatabaseService {
 
     } catch (error) {
       console.error(`❌ Supabase updateUserSettings error for ${telegramId}:`, error.message);
+      sentryService.captureError(error, { component: 'database_service', operation: 'updateUserSettings' });
       return null;
     }
   }
-
   // ========== SERVICE MANAGEMENT METHODS ==========
 
   /**
