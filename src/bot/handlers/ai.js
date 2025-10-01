@@ -525,7 +525,6 @@ async function sendQuantitativeModeSelection(bot, chatId, messageId) {
       ]
     }
   });
-  return;
 }
 
 async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
