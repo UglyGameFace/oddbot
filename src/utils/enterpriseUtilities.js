@@ -105,27 +105,6 @@ export const advancedOddsModel = {
     }
 };
 
-
-// --- EXISTING UTILITY FUNCTIONS ---
-
-/**
- * Returns an emoji for a given sport key.
- * @param {string} key - The sport key (e.g., 'baseball_mlb').
- * @returns {string} An emoji.
- */
-export function getSportEmoji(key = '') {
-  const k = key.toLowerCase();
-  if (k.includes('americanfootball_nfl')) return '🏈';
-  if (k.includes('americanfootball_ncaaf')) return '🎓'; // College Football
-  if (k.includes('basketball_nba')) return '🏀';
-  if (k.includes('basketball_wnba')) return '⛹️‍♀️'; // WNBA
-  if (k.includes('basketball_ncaab')) return '🏀'; // College Basketball
-  if (k.includes('baseball_mlb')) return '⚾';
-  if (k.includes('icehockey_nhl')) return '🏒';
-  if (k.includes('soccer')) return '⚽';
-  return '🏆'; // Default
-}
-
 /**
  * Converts American odds to decimal odds.
  * @param {number} americanOdds - e.g., -110 or 200
