@@ -409,6 +409,61 @@ export function registerAICallbacks(bot) {
       return;
     }
 
+// In the registerAICallbacks function in ai.js - ADD THIS SECTION
+if (action === 'analytics') {
+    const state = await getUserState(chatId);
+    const sportKey = state.lastSportKey || state.sportKey;
+    
+    if (!sportKey) {
+        return safeEditMessage(chatId, message.message_id, 
+            '❌ No sport data available for analytics. Please generate a parlay first.', 
+            { parse_mode: 'HTML' }
+        );
+    }
+
+    try {
+        await safeEditMessage(chatId, message.message_id, 
+            `📊 Generating analytics for ${escapeHTML(sportKey)}...`, 
+            { parse_mode: 'HTML' }
+        );
+
+        // Import analytics service
+        const { analyticsService } = await import('./analytics.js');
+        const analytics = await analyticsService.generateSportAnalytics(sportKey);
+        
+        // Format and send analytics
+        let analyticsText = `📊 *Analytics for ${escapeHTML(sportKey)}*\n\n`;
+        analyticsText += `*Data Quality:* ${analytics.data_quality.overall.toUpperCase()}\n`;
+        analyticsText += `*Games Available:* ${analytics.quantitative.games_analysis.total_games}\n`;
+        analyticsText += `*Upcoming Games:* ${analytics.quantitative.games_analysis.upcoming_games}\n\n`;
+        
+        if (analytics.recommendations && analytics.recommendations.length > 0) {
+            analyticsText += `*Recommendations:*\n`;
+            analytics.recommendations.slice(0, 3).forEach(rec => {
+                analyticsText += `• ${escapeHTML(rec.message)}\n`;
+            });
+        }
+
+        await safeEditMessage(chatId, message.message_id, analyticsText, {
+            parse_mode: 'HTML',
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: '🔄 Back to Parlay', callback_data: 'ai_quick_retry' }],
+                    [{ text: '📈 Detailed Analytics', callback_data: 'ai_detailed_analytics' }]
+                ]
+            }
+        });
+
+    } catch (error) {
+        console.error('Analytics generation failed:', error);
+        await safeEditMessage(chatId, message.message_id,
+            `❌ Analytics generation failed: ${escapeHTML(error.message)}`,
+            { parse_mode: 'HTML' }
+        );
+    }
+    return;
+}
+    
     if (action === 'quick') {
       const quickAction = parts[2];
       if (quickAction === 'retry') {
