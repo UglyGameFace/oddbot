@@ -429,8 +429,8 @@ async function pickSupportedModel(apiKey, candidates = GEMINI_MODELS) {
   }
 }
 
-// ---------- ENHANCED Prompt Engineering with BETTER JSON Formatting ----------
-function createAnalystPrompt({ sportKey, numLegs, betType, hours }) {
+// In aiService.js - UPDATE the createAnalystPrompt function
+function createAnalystPrompt({ sportKey, numLegs, betType, hours, includeProps = false }) {
     const sportName = sportKey.replace(/_/g, ' ').toUpperCase();
     const sources = SPORT_SOURCES[sportKey] ? `Use these URLs for current schedules: ${SPORT_SOURCES[sportKey].join(', ')}` : '';
     
@@ -438,9 +438,15 @@ function createAnalystPrompt({ sportKey, numLegs, betType, hours }) {
     if (betType === 'props') {
         betTypeInstruction = 'CRITICAL: The parlay must consist ONLY of player prop bets (e.g., player_points, player_assists, player_rebounds). Do NOT include moneyline, spreads, or totals.';
     } else if (betType === 'moneyline') {
-        betTypeInstruction = 'The parlay should focus on moneyline (h2h) bets.';
+        betTypeInstruction = 'The parlay should focus on moneyline (h2h) bets. Include 1-2 player props only if they are exceptional values.';
     } else if (betType === 'spreads') {
-        betTypeInstruction = 'The parlay should focus on spreads and totals bets.';
+        betTypeInstruction = 'The parlay should focus on spreads and totals bets. Include 1 player prop only if it provides strong value.';
+    } else if (betType === 'mixed') {
+        if (includeProps) {
+            betTypeInstruction = 'CRITICAL: The parlay should include a VARIETY of bet types (moneyline, spreads, totals, AND player props). MUST include at least 1-2 player props mixed with other bet types for diversity.';
+        } else {
+            betTypeInstruction = 'The parlay should include a variety of bet types (moneyline, spreads, totals) but NO player props.';
+        }
     }
 
     return `As a professional ${sportName} analyst, create a ${numLegs}-leg parlay.
@@ -448,7 +454,12 @@ function createAnalystPrompt({ sportKey, numLegs, betType, hours }) {
     *Time Constraint:* Use today's date, ${new Date().toDateString()}, as a reference. Find games scheduled to start in the next ${hours} hours.
     ${sources}
 
-    *Bet Type:* ${betTypeInstruction}
+    *Bet Type Strategy:* ${betTypeInstruction}
+
+    *Market Variety Requirements:*
+    - For "mixed" type: Include different markets (moneyline, spreads, totals, player props)
+    - Ensure diversity across games and bet types
+    - Balance risk across different market types
 
     *Output Format:* Return ONLY valid JSON in this exact structure:
 
@@ -456,8 +467,8 @@ function createAnalystPrompt({ sportKey, numLegs, betType, hours }) {
     "parlay_legs": [
         {
         "game": "Team A @ Team B",
-        "market": "player_points", 
-        "pick": "Player Name Over 20.5", 
+        "market": "h2h", 
+        "pick": "Team A to win", 
         "fair_prob": 0.65,
         "quotes": [
             {
@@ -473,15 +484,17 @@ function createAnalystPrompt({ sportKey, numLegs, betType, hours }) {
         }
     ],
     "confidence_score": 0.80,
-    "sources": ["https://www.espn.com/nfl/matchup?gameId=..."]
+    "sources": ["https://www.espn.com/nfl/matchup?gameId=..."],
+    "market_variety_score": 0.85
     }
 
     *STRICT REQUIREMENTS:*
     1. Use REAL teams and accurate, current odds from regulated US sportsbooks like ${REGULATED_BOOKS.join(', ')}.
     2. For American odds, use numbers only (e.g., -150 or 125). DO NOT include "+" signs.
     3. The final response MUST be PURE JSON only. No markdown, no explanations, no text before or after the JSON.
-    4. Validate your JSON syntax: all keys and strings in double quotes, no trailing commas, all brackets and braces properly closed.
-    5. The 'game_date_utc' must be a valid ISO 8601 string for a future game within the ${hours}-hour window.`;
+    4. For MIXED bet types with props enabled: Include 1-2 player props mixed with other bet types
+    5. Validate your JSON syntax: all keys and strings in double quotes, no trailing commas, all brackets and braces properly closed.
+    6. The 'game_date_utc' must be a valid ISO 8601 string for a future game within the ${hours}-hour window.`;
 }
 
 // ---------- Enhanced Perplexity with better error handling ----------
