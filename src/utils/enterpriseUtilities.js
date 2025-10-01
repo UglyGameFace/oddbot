@@ -3,7 +3,7 @@
 import { createHash } from 'crypto';
 import CryptoJS from 'crypto-js';
 import MerkleTree from 'merkletreejs';
-
+import { getSportEmoji as getEmoji } from '../services/sportsService.js';
 // --- ENHANCED TELEGRAM MARKDOWN ESCAPING ---
 /**
  * Escapes characters that have special meaning in Telegram's MarkdownV2.
