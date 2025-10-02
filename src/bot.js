@@ -5,6 +5,8 @@ import TelegramBot from 'node-telegram-bot-api';
 import { sentryService } from './services/sentryService.js';
 import healthService from './services/healthService.js';
 import redisClient from './services/redisService.js';
+import { registerAllCallbacks } from './bot/handlers/callbackManager.js';
+
 // --- Handler imports ---
 import { registerAnalytics } from './bot/handlers/analytics.js';
 import { registerModel } from './bot/handlers/model.js';
@@ -17,7 +19,6 @@ import { registerSettings } from './bot/handlers/settings.js';
 import { registerSystem } from './bot/handlers/system.js';
 import { registerTools } from './bot/handlers/tools.js';
 import { registerChat } from './bot/handlers/chat.js';
-import { registerAllCallbacks } from './bot/handlers/callbackManager.js';
 // --- Global error hooks ---
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ UNHANDLED REJECTION AT:', promise, 'REASON:', reason);
