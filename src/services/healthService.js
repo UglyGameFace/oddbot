@@ -3,7 +3,8 @@ import redisClient from './redisService.js';
 import databaseService from './databaseService.js';
 import oddsService from './oddsService.js';
 import gamesService from './gamesService.js';
-import rateLimitService from './rateLimitService.js';
+// FIXED: Import the named export correctly
+import { rateLimitService } from './rateLimitService.js';
 import { sentryService } from './sentryService.js';
 import { withTimeout } from '../utils/asyncUtils.js';
 
