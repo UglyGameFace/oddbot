@@ -7,10 +7,22 @@ import { setUserState, getUserState, getAIConfig } from '../state.js';
 import { getSportEmoji, sortSports } from '../../services/sportsService.js';
 import { safeEditMessage } from '../../bot.js';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+
 // --- CORRECTED: AI Client Initialization ---
-// The client is initialized here, but the specific model is now chosen dynamically later.
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY);
 
+// --- Add this function at top level ---
+function getGeminiModel(choice) {
+    const GEMINI_MODELS = {
+        pro_2_5: "gemini-2.5-pro",
+        flash_2_5: "gemini-2.5-flash", 
+        flash_lite_2_5: "gemini-2.5-flash-lite",
+        flash_2_5_preview: "gemini-2.5-flash-lite-preview-09-2025",
+        flash_2_0: "gemini-2.0-flash",
+        flash_2_0_alt: "gemini-2.0-flash-001",
+    };
+    return GEMINI_MODELS[choice] || GEMINI_MODELS.pro_2_5;
+}
 
 // This helper function will be used to escape text for HTML
 const escapeHTML = (text) => {
@@ -22,7 +34,6 @@ const escapeHTML = (text) => {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 };
-
 
 const SPORT_TITLES = {
   americanfootball_nfl: 'NFL',
@@ -131,7 +142,7 @@ GLOBAL RULES
 
 BETTING MODE
 - Default: ${settings.sport} emphasis; support MLB/NBA/WNBA/NFL/soccer as requested.
-- Only recommend a bet if EV > 0 and key player/status info is confirmed; otherwise “No bet”.
+- Only recommend a bet if EV > 0 and key player/status info is confirmed; otherwise "No bet".
 - Default parlay legs: ${settings.numLegs} unless explicitly requested otherwise.
 - Price discipline: line-shop; never fabricate lines. If exact unavailable, state nearest widely-posted price and uncertainty.
 - Math:
@@ -142,8 +153,8 @@ BETTING MODE
   - Kelly (binary): f* = p - (1 - p) / b, where b = decimal_odds - 1
   - Default staking: Half Kelly; cap stake if liquidity/uncertainty elevated.
   - Parlays: P_win = product(p_i); EV uses joint probability and combined price.
-- Human_readable sections: Picks, Rationale (2-3 bullets/leg), Pricing/Line-Shop Notes, EV/Kelly, Risks, Final Call (“Bet” or “No bet”).
-- If data freshness is uncertain, say so and prefer “No bet” unless instructed to proceed.
+- Human_readable sections: Picks, Rationale (2-3 bullets/leg), Pricing/Line-Shop Notes, EV/Kelly, Risks, Final Call ("Bet" or "No bet").
+- If data freshness is uncertain, say so and prefer "No bet" unless instructed to proceed.
 
 CODE MODE
 - Environment: Node.js 20+, ESM, Express-style; Telegram bot formatting conventions.
@@ -158,7 +169,7 @@ OPS MODE
 
 RESEARCH MODE
 - Verify lines/totals/statuses with multiple recent, reputable sources; timestamp findings and note movements.
-- If sources conflict or are stale, state uncertainty and prefer “No bet” unless asked to proceed.
+- If sources conflict or are stale, state uncertainty and prefer "No bet" unless asked to proceed.
 - Summarize line-shopping impact and sensitivity.
 
 TELEGRAM SAFETY (MarkdownV2)
@@ -207,7 +218,7 @@ Mode=RESEARCH { /* ...schema... */ }
 Mode=TELEGRAM { /* ...schema... */ }
 
 FAIL-SAFE
-- If constraints conflict or data is unavailable: produce a best-effort result with explicit assumptions and a short checklist to resolve gaps. If betting data freshness is unclear, default to “No bet”.
+- If constraints conflict or data is unavailable: produce a best-effort result with explicit assumptions and a short checklist to resolve gaps. If betting data freshness is unclear, default to "No bet".
 `;
 };
 
@@ -358,7 +369,7 @@ async function handleQuickSport(bot, chatId, sportKey) {
       numLegs: 4,
       mode: 'web',
       betType: 'mixed',
-      aiModel: 'perplexity', // 'perplexity' (data-focused) is a good default
+      aiModel: 'perplexity',
       quantitativeMode: 'conservative'
     });
 
@@ -404,8 +415,7 @@ async function handleDirectFallback(bot, chatId, mode) {
     const parlay = await aiService.handleFallbackSelection(sportKey, numLegs, mode, betType);
     await sendParlayResult(bot, chatId, parlay, state, mode, sentMessage.message_id);
 
-  } catch (error)
- {
+  } catch (error) {
     console.error('Direct fallback execution error:', error);
     await bot.sendMessage(
       chatId,
@@ -907,7 +917,6 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
     }
 }
 
-
 // --- The Corrected and Upgraded AI Request Execution ---
 async function executeAiRequest(bot, chatId, messageId) {
     const state = await getUserState(chatId);
@@ -932,7 +941,6 @@ async function executeAiRequest(bot, chatId, messageId) {
                  `  4.  Running quantitative validation...\n\n` +
                  `<i>This thorough process may take up to 90 seconds. Please wait...</i>`;
 
-
     await safeEditMessage(
       chatId,
       messageId,
@@ -948,59 +956,45 @@ async function executeAiRequest(bot, chatId, messageId) {
       let parlay;
 
       if (mode === 'web') {
-    // --- CORRECTED: DYNAMIC MODEL SELECTION ---
-    // Map the UI choice ('gemini' or 'perplexity') to a specific Google model.
-    const GEMINI_MODELS = {
-        pro_2_5: "gemini-2.5-pro",
-        flash_2_5: "gemini-2.5-flash", 
-        flash_lite_2_5: "gemini-2.5-flash-lite",
-        flash_2_5_preview: "gemini-2.5-flash-lite-preview-09-2025",
-        flash_2_0: "gemini-2.0-flash",
-        flash_2_0_alt: "gemini-2.0-flash-001",
-    };
+          // --- CORRECTED: DYNAMIC MODEL SELECTION ---
+          // aiModel is set from state or UI ("pro_2_5", "flash_2_5", etc.)
+          const modelName = getGeminiModel(aiModel);
+          
+          // SINGLE DECLARATION - REMOVED DUPLICATE
+          const model = genAI.getGenerativeModel({ model: modelName });
+          console.log(`Using dynamically selected model: ${modelName} for user choice: ${aiModel}`);
 
-    function getGeminiModel(choice) {
-        return GEMINI_MODELS[choice] || GEMINI_MODELS.pro_2_5;
-    }
+          const userQuery = `Generate a ${numLegs}-leg parlay for ${SPORT_TITLES[sportKey] || sportKey}. ` +
+                            `The parlay should focus on ${betType} bets. ` +
+                            `Please include player props: ${includeProps ? 'Yes' : 'No'}.`;
 
-    // aiModel is set from state or UI ("pro_2_5", "flash_2_5", etc.)
-    const modelName = getGeminiModel(aiModel);
-    
-    // SINGLE DECLARATION - REMOVED DUPLICATE
-    const model = genAI.getGenerativeModel({ model: modelName });
-    console.log(`Using dynamically selected model: ${modelName} for user choice: ${aiModel}`);
+          const fullPrompt = buildParlayPrompt(userQuery, state);
 
-    const userQuery = `Generate a ${numLegs}-leg parlay for ${SPORT_TITLES[sportKey] || sportKey}. ` +
-                        `The parlay should focus on ${betType} bets. ` +
-                        `Please include player props: ${includeProps ? 'Yes' : 'No'}.`;
+          const result = await model.generateContent(fullPrompt);
+          const responseText = result.response.text();
+          
+          const jsonBlockRegex = /```json\s*([\s\S]+?)\s*```/;
+          const jsonMatch = responseText.match(jsonBlockRegex);
+          if (!jsonMatch || !jsonMatch[1]) {
+            throw new Error("AI response did not contain a valid JSON block.");
+          }
+          const aiResponse = JSON.parse(jsonMatch[1]);
 
-    const fullPrompt = buildParlayPrompt(userQuery, state);
+          if (aiResponse.mode !== 'BETS' || !aiResponse.output_json) {
+              throw new Error("Parsed JSON from AI has an invalid structure or mode.");
+          }
+          parlay = aiResponse.output_json;
 
-    const result = await model.generateContent(fullPrompt);
-    const responseText = result.response.text();
-    
-    const jsonBlockRegex = /```json\s*([\s\S]+?)\s*```/;
-    const jsonMatch = responseText.match(jsonBlockRegex);
-    if (!jsonMatch || !jsonMatch[1]) {
-        throw new Error("AI response did not contain a valid JSON block.");
-    }
-    const aiResponse = JSON.parse(jsonMatch[1]);
-
-    if (aiResponse.mode !== 'BETS' || !aiResponse.output_json) {
-        throw new Error("Parsed JSON from AI has an invalid structure or mode.");
-    }
-    parlay = aiResponse.output_json;
-
-} else {
-    // Keep original logic for 'live' and 'db' modes
-    const options = {
-        horizonHours: aiConfig.horizonHours,
-        includeProps,
-        quantitativeMode,
-        proQuantMode: aiConfig.proQuantMode || false
-    };
-    parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, options);
-} else 
+      } else {
+          // Keep original logic for 'live' and 'db' modes
+          const options = {
+              horizonHours: aiConfig.horizonHours,
+              includeProps,
+              quantitativeMode,
+              proQuantMode: aiConfig.proQuantMode || false
+          };
+          parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, options);
+      }
 
       const processingTime = Math.round((Date.now() - startTime) / 1000);
 
