@@ -14,11 +14,13 @@ const DEFAULT_SLIP = { picks: [], stake: 10, totalOdds: 0, messageId: null };
 const safeParse = (s, f) => { try { return JSON.parse(s); } catch (e) { sentryService.captureError(e, { component: 'state', op: 'parse' }); return f; } };
 const withTimeout = (p, ms, label) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error(`Timeout ${ms}ms: ${label}`)), ms))]);
 
-// --- VERIFIED FIX: Use older, more compatible Redis syntax for SET with TTL ---
+// --- VERIFIED FIX: Use the dedicated SETEX command for wider compatibility ---
 const setWithTTL = async (c, k, v, ttl) => {
-  if (!ttl) return c.set(k, v);
-  // Use 'EX' flag in a flat list instead of an options object
-  return c.set(k, v, 'EX', ttl);
+  if (!ttl) {
+    return c.set(k, v);
+  }
+  // Use the 'SETEX key seconds value' command for better compatibility
+  return c.setex(k, ttl, v);
 };
 
 // --- Conversational state (remains in Redis for speed) ---
