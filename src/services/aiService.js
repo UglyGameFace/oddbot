@@ -8,7 +8,7 @@ import { getSportTitle } from './sportsService.js';
 import oddsService from './oddsService.js';
 import gamesService from './gamesService.js';
 import databaseService from './databaseService.js';
-import rateLimitService from './rateLimitService.js';
+import { rateLimitService } from './rateLimitService.js';
 import { sentryService } from './sentryService.js';
 import quantitativeService from './quantitativeService.js';
 
@@ -586,7 +586,8 @@ async function callGemini(prompt) {
     
     const genAI = new GoogleGenerativeAI(GOOGLE_GEMINI_API_KEY);
     
-    const model = genAI.getGenerativeModel({ 
+    // FIXED: Renamed variable to avoid duplicate declaration
+    const aiModel = genAI.getGenerativeModel({ 
       model: modelId,
       generationConfig: {
         maxOutputTokens: MAX_OUTPUT_TOKENS,
@@ -597,7 +598,7 @@ async function callGemini(prompt) {
       safetySettings: SAFETY,
     });
 
-    const result = await model.generateContent([{ text: prompt }]);
+    const result = await aiModel.generateContent([{ text: prompt }]);
     const response = await result.response;
     const text = response.text();
     
