@@ -948,52 +948,59 @@ async function executeAiRequest(bot, chatId, messageId) {
       let parlay;
 
       if (mode === 'web') {
-          // --- ADDED: DYNAMIC MODEL SELECTION ---
-          // Map the UI choice ('gemini' or 'perplexity') to a specific Google model.
-          const GEMINI_MODELS = {
-  pro_2_5: "gemini-2.5-pro",
-  flash_2_5: "gemini-2.5-flash",
-  flash_lite_2_5: "gemini-2.5-flash-lite",
-  flash_2_5_preview: "gemini-2.5-flash-lite-preview-09-2025",
-  flash_2_0: "gemini-2.0-flash",
-  flash_2_0_alt: "gemini-2.0-flash-001",
-};
+    // --- CORRECTED: DYNAMIC MODEL SELECTION ---
+    // Map the UI choice ('gemini' or 'perplexity') to a specific Google model.
+    const GEMINI_MODELS = {
+        pro_2_5: "gemini-2.5-pro",
+        flash_2_5: "gemini-2.5-flash", 
+        flash_lite_2_5: "gemini-2.5-flash-lite",
+        flash_2_5_preview: "gemini-2.5-flash-lite-preview-09-2025",
+        flash_2_0: "gemini-2.0-flash",
+        flash_2_0_alt: "gemini-2.0-flash-001",
+    };
 
-function getGeminiModel(choice) {
-  return GEMINI_MODELS[choice] || GEMINI_MODELS.pro_2_5;
-}
+    function getGeminiModel(choice) {
+        return GEMINI_MODELS[choice] || GEMINI_MODELS.pro_2_5;
+    }
 
-// aiModel is set from state or UI ("pro_2_5", "flash_2_5", etc.)
-const modelName = getGeminiModel(aiModel); // <-- modelName is NOW DEFINED
-const model = genAI.getGenerativeModel({ model: modelName });
-console.log(`Using dynamically selected model: ${modelName} for user choice: ${aiModel}`);
+    // aiModel is set from state or UI ("pro_2_5", "flash_2_5", etc.)
+    const modelName = getGeminiModel(aiModel);
+    
+    // SINGLE DECLARATION - REMOVED DUPLICATE
+    const model = genAI.getGenerativeModel({ model: modelName });
+    console.log(`Using dynamically selected model: ${modelName} for user choice: ${aiModel}`);
 
-          
-          const model = genAI.getGenerativeModel({ model: modelName });
-          console.log(`Using dynamically selected model: ${modelName} for user choice: ${aiModel}`);
+    const userQuery = `Generate a ${numLegs}-leg parlay for ${SPORT_TITLES[sportKey] || sportKey}. ` +
+                        `The parlay should focus on ${betType} bets. ` +
+                        `Please include player props: ${includeProps ? 'Yes' : 'No'}.`;
 
-          const userQuery = `Generate a ${numLegs}-leg parlay for ${SPORT_TITLES[sportKey] || sportKey}. ` +
-                            `The parlay should focus on ${betType} bets. ` +
-                            `Please include player props: ${includeProps ? 'Yes' : 'No'}.`;
+    const fullPrompt = buildParlayPrompt(userQuery, state);
 
-          const fullPrompt = buildParlayPrompt(userQuery, state);
+    const result = await model.generateContent(fullPrompt);
+    const responseText = result.response.text();
+    
+    const jsonBlockRegex = /```json\s*([\s\S]+?)\s*```/;
+    const jsonMatch = responseText.match(jsonBlockRegex);
+    if (!jsonMatch || !jsonMatch[1]) {
+        throw new Error("AI response did not contain a valid JSON block.");
+    }
+    const aiResponse = JSON.parse(jsonMatch[1]);
 
-          const result = await model.generateContent(fullPrompt);
-          const responseText = result.response.text();
-          
-          const jsonBlockRegex = /```json\s*([\s\S]+?)\s*```/;
-          const jsonMatch = responseText.match(jsonBlockRegex);
-          if (!jsonMatch || !jsonMatch[1]) {
-            throw new Error("AI response did not contain a valid JSON block.");
-          }
-          const aiResponse = JSON.parse(jsonMatch[1]);
+    if (aiResponse.mode !== 'BETS' || !aiResponse.output_json) {
+        throw new Error("Parsed JSON from AI has an invalid structure or mode.");
+    }
+    parlay = aiResponse.output_json;
 
-          if (aiResponse.mode !== 'BETS' || !aiResponse.output_json) {
-              throw new Error("Parsed JSON from AI has an invalid structure or mode.");
-          }
-          parlay = aiResponse.output_json;
-
-      } else {
+} else {
+    // Keep original logic for 'live' and 'db' modes
+    const options = {
+        horizonHours: aiConfig.horizonHours,
+        includeProps,
+        quantitativeMode,
+        proQuantMode: aiConfig.proQuantMode || false
+    };
+    parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, options);
+} else {
           // Keep original logic for 'live' and 'db' modes
           const options = {
               horizonHours: aiConfig.horizonHours,
