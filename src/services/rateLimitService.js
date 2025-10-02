@@ -519,4 +519,3 @@ class EnterpriseRateLimitService {
 
 // FIXED: Export as named export
 export const rateLimitService = new EnterpriseRateLimitService();
-export default rateLimitService;
