@@ -960,8 +960,14 @@ async function executeAiRequest(bot, chatId, messageId) {
 };
 
 function getGeminiModel(choice) {
-  return GEMINI_MODELS[choice] || GEMINI_MODELS.pro_2_5; // fallback
+  return GEMINI_MODELS[choice] || GEMINI_MODELS.pro_2_5;
 }
+
+// aiModel is set from state or UI ("pro_2_5", "flash_2_5", etc.)
+const modelName = getGeminiModel(aiModel); // <-- modelName is NOW DEFINED
+const model = genAI.getGenerativeModel({ model: modelName });
+console.log(`Using dynamically selected model: ${modelName} for user choice: ${aiModel}`);
+
           
           const model = genAI.getGenerativeModel({ model: modelName });
           console.log(`Using dynamically selected model: ${modelName} for user choice: ${aiModel}`);
