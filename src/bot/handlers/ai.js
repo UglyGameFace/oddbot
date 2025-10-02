@@ -1000,16 +1000,7 @@ async function executeAiRequest(bot, chatId, messageId) {
         proQuantMode: aiConfig.proQuantMode || false
     };
     parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, options);
-} else {
-          // Keep original logic for 'live' and 'db' modes
-          const options = {
-              horizonHours: aiConfig.horizonHours,
-              includeProps,
-              quantitativeMode,
-              proQuantMode: ai.proQuantMode || false
-          };
-          parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, options);
-      }
+} else 
 
       const processingTime = Math.round((Date.now() - startTime) / 1000);
 
