@@ -17,7 +17,7 @@ import { registerSettings } from './bot/handlers/settings.js';
 import { registerSystem } from './bot/handlers/system.js';
 import { registerTools } from './bot/handlers/tools.js';
 import { registerChat } from './bot/handlers/chat.js';
-
+import { registerAllCallbacks } from './bot/handlers/callbackManager.js';
 // --- Global error hooks ---
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ UNHANDLED REJECTION AT:', promise, 'REASON:', reason);
