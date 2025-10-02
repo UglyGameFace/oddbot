@@ -2,7 +2,8 @@
 import env from '../config/env.js';
 import redisClient from './redisService.js';
 import { sentryService } from './sentryService.js';
-import rateLimitService from './rateLimitService.js';
+// FIXED: Import the named export correctly
+import { rateLimitService } from './rateLimitService.js';
 import makeCache from './cacheService.js';
 import { TheOddsProvider } from './providers/theOddsProvider.js';
 import { SportRadarProvider } from './providers/sportRadarProvider.js';
