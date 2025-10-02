@@ -4,6 +4,7 @@ import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
 import { sentryService } from './services/sentryService.js';
 import healthService from './services/healthService.js';
+import redisClient from './services/redisService.js';
 import { registerAllCallbacks } from './bot/handlers/callbackManager.js';
 
 // --- Handler imports ---
