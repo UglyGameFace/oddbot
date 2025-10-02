@@ -11,8 +11,7 @@ import { registerAllCallbacks } from './bot/handlers/callbackManager.js';
 import { registerAnalytics } from './bot/handlers/analytics.js';
 import { registerModel } from './bot/handlers/model.js';
 import { registerCacheHandler } from './bot/handlers/cache.js';
-import { registerCustom } from './bot/handlers/custom.js'; // FIX: Removed registerCustomCallbacks
-import { registerAI } from './bot/handlers/ai.js';         // FIX: Removed registerAICallbacks
+import { registerCustom } from './bot/handlers/custom.js'; // FIX: Removed registerCustomCallbacks        // FIX: Removed registerAICallbacks
 import { registerQuant } from './bot/handlers/quant.js';
 import { registerPlayer } from './bot/handlers/player.js'; // FIX: Removed registerPlayerCallbacks
 import { registerSettings } from './bot/handlers/settings.js'; // FIX: Removed registerSettingsCallbacks
