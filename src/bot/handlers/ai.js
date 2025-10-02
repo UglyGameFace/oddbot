@@ -222,19 +222,6 @@ FAIL-SAFE
 - If constraints conflict or data is unavailable: produce a best-effort result with explicit assumptions and a short checklist to resolve gaps. If betting data freshness is unclear, default to "No bet".
 `;
 };
-
-const buildParlayPrompt = (userQuery, userSettings = {}) => {
-    const basePrompt = getBasePrompt(userSettings);
-    const finalPrompt = `${basePrompt}
-
-USER QUERY:
-Analyze the following request and generate a response adhering strictly to the rules and output contract specified above.
-
-"${userQuery}"
-`;
-    return finalPrompt;
-};
-
 // --- Existing Helper Functions ---
 function pageOf(arr, page) {
   const start = page * PAGE_SIZE;
