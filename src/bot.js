@@ -8,16 +8,13 @@ import redisClient from './services/redisService.js';
 import { registerAllCallbacks } from './bot/handlers/callbackManager.js';
 
 // --- Handler imports ---
-import { registerAnalytics } from './bot/handlers/analytics.js';
-import { registerModel } from './bot/handlers/model.js';
-import { registerCacheHandler } from './bot/handlers/cache.js';
-import { registerCustom } from './bot/handlers/custom.js';
-import { registerAI } from './bot/handlers/ai.js';
+import { registerCustom, registerCustomCallbacks } from './bot/handlers/custom.js';
+import { registerAI, registerAICallbacks } from './bot/handlers/ai.js';
 import { registerQuant } from './bot/handlers/quant.js';
-import { registerPlayer } from './bot/handlers/player.js';
-import { registerSettings } from './bot/handlers/settings.js';
-import { registerSystem } from './bot/handlers/system.js';
-import { registerTools } from './bot/handlers/tools.js';
+import { registerPlayer, registerPlayerCallbacks } from './bot/handlers/player.js';
+import { registerSettings, registerSettingsCallbacks } from './bot/handlers/settings.js';
+import { registerSystem, registerSystemCallbacks } from './bot/handlers/system.js';
+import { registerTools, registerCommonCallbacks } from './bot/handlers/tools.js';
 import { registerChat } from './bot/handlers/chat.js';
 // --- Global error hooks ---
 process.on('unhandledRejection', (reason, promise) => {
