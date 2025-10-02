@@ -1,25 +1,25 @@
-// src/bot.js - CORRECTED VERSION
+// src/bot.js - CORRECTED AND ALIGNED VERSION
 import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
 import { sentryService } from './services/sentryService.js';
 import healthService from './services/healthService.js';
-import redisClient from './services/redisService.js';
+import { registerAllCallbacks } from './bot/handlers/callbackManager.js';
 
-// --- Handler imports
+// --- Handler imports ---
 import { registerAnalytics } from './bot/handlers/analytics.js';
 import { registerModel } from './bot/handlers/model.js';
 import { registerCacheHandler } from './bot/handlers/cache.js';
-import { registerCustom, registerCustomCallbacks } from './bot/handlers/custom.js';
-import { registerAI, registerAICallbacks } from './bot/handlers/ai.js';
+import { registerCustom } from './bot/handlers/custom.js';
+import { registerAI } from './bot/handlers/ai.js';
 import { registerQuant } from './bot/handlers/quant.js';
-import { registerPlayer, registerPlayerCallbacks } from './bot/handlers/player.js';
-import { registerSettings, registerSettingsCallbacks } from './bot/handlers/settings.js';
-import { registerSystem, registerSystemCallbacks } from './bot/handlers/system.js';
-import { registerTools, registerCommonCallbacks } from './bot/handlers/tools.js';
+import { registerPlayer } from './bot/handlers/player.js';
+import { registerSettings } from './bot/handlers/settings.js';
+import { registerSystem } from './bot/handlers/system.js';
+import { registerTools } from './bot/handlers/tools.js';
 import { registerChat } from './bot/handlers/chat.js';
 
-// --- Global error hooks
+// --- Global error hooks ---
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ UNHANDLED REJECTION AT:', promise, 'REASON:', reason);
   sentryService.captureError(new Error(`Unhandled Rejection: ${reason}`), { extra: { promise } });
@@ -31,12 +31,12 @@ process.on('uncaughtException', (error) => {
   process.exit(1);
 });
 
-// --- App and bot bootstrap
+// --- App and bot bootstrap ---
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = '0.0.0.0';
 
-// --- Global Config & State
+// --- Global Config & State ---
 const TOKEN = env.TELEGRAM_BOT_TOKEN;
 const APP_URL = env.APP_URL || '';
 const WEBHOOK_SECRET = (env.WEBHOOK_SECRET || env.TELEGRAM_WEBHOOK_SECRET || env.TG_WEBHOOK_SECRET || '').trim();
@@ -49,7 +49,7 @@ let isServiceReady = false;
 let healthCheckCount = 0;
 let initializationPromise = null;
 
-// --- Utility Functions
+// --- Utility Functions ---
 
 /**
  * Validate required environment variables
@@ -72,7 +72,7 @@ function validateEnvironment() {
 /**
  * Safely edit Telegram messages to avoid inline keyboard errors
  */
-async function safeEditMessage(chatId, messageId, text, options = {}) {
+export async function safeEditMessage(chatId, messageId, text, options = {}) {
   if (!bot) {
     console.warn('⚠️ Bot not initialized, cannot edit message');
     return;
@@ -125,7 +125,7 @@ async function safeEditMessage(chatId, messageId, text, options = {}) {
   }
 }
 
-// --- Health endpoints
+// --- Health endpoints ---
 app.get('/health', (_req, res) => res.sendStatus(200));
 
 app.get('/', (_req, res) => {
@@ -247,25 +247,25 @@ async function initializeBot() {
       bot = new TelegramBot(TOKEN, botOptions);
 
       // Register handlers
-      console.log('🔧 Registering handlers...');
+      console.log('🔧 Registering command handlers...');
       registerAnalytics(bot); 
       registerModel(bot); 
       registerCacheHandler(bot);
       registerCustom(bot); 
-      registerCustomCallbacks(bot);
       registerAI(bot); 
-      registerAICallbacks(bot); 
       registerQuant(bot);
       registerPlayer(bot); 
-      registerPlayerCallbacks(bot);
       registerSettings(bot); 
-      registerSettingsCallbacks(bot);
       registerSystem(bot); 
-      registerSystemCallbacks(bot);
       registerTools(bot); 
-      registerCommonCallbacks(bot);
       registerChat(bot);
-      console.log('✅ All handlers registered.');
+      console.log('✅ Command handlers registered.');
+      
+      // Register all callback query handlers
+      console.log('🔧 Registering callback handlers...');
+      registerAllCallbacks(bot);
+      console.log('✅ All callback handlers registered.');
+
 
       app.use(express.json());
       sentryService.attachExpressPreRoutes?.(app);
@@ -370,19 +370,22 @@ const shutdown = async (signal) => {
   }
 
   try {
-    const useWebhook = (env.USE_WEBHOOK === true) || (env.APP_URL || '').startsWith('https');
-    
-    if (!useWebhook && bot && bot.isPolling()) {
-      await bot.stopPolling({ cancel: true, reason: 'Graceful shutdown' });
-      console.log('✅ Bot polling stopped.');
-    } else if (useWebhook) {
-      console.log('✅ Webhook mode - no polling to stop.');
+    if (bot) {
+        if (USE_WEBHOOK) {
+            await bot.deleteWebHook();
+            console.log('✅ Webhook removed.');
+        } else if (bot.isPolling()) {
+            await bot.stopPolling({ cancel: true, reason: 'Graceful shutdown' });
+            console.log('✅ Bot polling stopped.');
+        }
     }
     
     // Close Redis connection
-    const redis = await redisClient;
-    await redis.quit();
-    console.log('✅ Redis connection closed.');
+    const redis = await import('./services/redisService.js').then(m => m.default);
+    if (redis.status === 'ready' || redis.status === 'connecting') {
+        await redis.quit();
+        console.log('✅ Redis connection closed.');
+    }
   } catch (error) {
     console.warn('⚠️ Error during bot/redis shutdown:', error.message);
   }
@@ -407,8 +410,6 @@ const shutdown = async (signal) => {
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
-// Export the safeEditMessage function for use in handlers
-export { safeEditMessage, bot };
 
 // Kick off the initialization
 initializeBot().catch((error) => {
