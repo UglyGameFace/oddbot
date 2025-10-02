@@ -2,88 +2,15 @@
 import { createClient } from '@supabase/supabase-js';
 import env from '../config/env.js';
 import { sentryService } from './sentryService.js';
+import { COMPREHENSIVE_SPORTS } from '../config/sportDefinitions.js';
+
+// Use the single source of truth from sportDefinitions.js
+const COMPREHENSIVE_FALLBACK_SPORTS = Object.entries(COMPREHENSIVE_SPORTS).map(([sport_key, data]) => ({
+  sport_key,
+  sport_title: data.title
+}));
 
 const SUPABASE_KEY = env.SUPABASE_SERVICE_KEY || env.SUPABASE_ANON_KEY;
-
-// COMPREHENSIVE sports mapping - identical to gamesService and AI handler
-const COMPREHENSIVE_FALLBACK_SPORTS = [
-  // American Football
-  { sport_key: 'americanfootball_nfl', sport_title: 'NFL' },
-  { sport_key: 'americanfootball_ncaaf', sport_title: 'NCAAF' },
-  { sport_key: 'americanfootball_xfl', sport_title: 'XFL' },
-  { sport_key: 'americanfootball_usfl', sport_title: 'USFL' },
-  
-  // Basketball
-  { sport_key: 'basketball_nba', sport_title: 'NBA' },
-  { sport_key: 'basketball_wnba', sport_title: 'WNBA' },
-  { sport_key: 'basketball_ncaab', sport_title: 'NCAAB' },
-  { sport_key: 'basketball_euroleague', sport_title: 'EuroLeague' },
-  
-  // Baseball
-  { sport_key: 'baseball_mlb', sport_title: 'MLB' },
-  { sport_key: 'baseball_npb', sport_title: 'NPB (Japan)' },
-  { sport_key: 'baseball_kbo', sport_title: 'KBO (Korea)' },
-  
-  // Hockey
-  { sport_key: 'icehockey_nhl', sport_title: 'NHL' },
-  { sport_key: 'icehockey_khl', sport_title: 'KHL' },
-  { sport_key: 'icehockey_sweden', sport_title: 'Swedish Hockey' },
-  { sport_key: 'icehockey_finland', sport_title: 'Finnish Hockey' },
-  
-  // Soccer
-  { sport_key: 'soccer_england_premier_league', sport_title: 'Premier League' },
-  { sport_key: 'soccer_spain_la_liga', sport_title: 'La Liga' },
-  { sport_key: 'soccer_italy_serie_a', sport_title: 'Serie A' },
-  { sport_key: 'soccer_germany_bundesliga', sport_title: 'Bundesliga' },
-  { sport_key: 'soccer_france_ligue_1', sport_title: 'Ligue 1' },
-  { sport_key: 'soccer_uefa_champions_league', sport_title: 'Champions League' },
-  { sport_key: 'soccer_uefa_europa_league', sport_title: 'Europa League' },
-  { sport_key: 'soccer_mls', sport_title: 'MLS' },
-  { sport_key: 'soccer_world_cup', sport_title: 'World Cup' },
-  { sport_key: 'soccer_euro', sport_title: 'European Championship' },
-  { sport_key: 'soccer_copa_america', sport_title: 'Copa America' },
-  
-  // Tennis
-  { sport_key: 'tennis_atp', sport_title: 'ATP Tennis' },
-  { sport_key: 'tennis_wta', sport_title: 'WTA Tennis' },
-  { sport_key: 'tennis_aus_open', sport_title: 'Australian Open' },
-  { sport_key: 'tennis_french_open', sport_title: 'French Open' },
-  { sport_key: 'tennis_wimbledon', sport_title: 'Wimbledon' },
-  { sport_key: 'tennis_us_open', sport_title: 'US Open' },
-  
-  // Fighting Sports
-  { sport_key: 'mma_ufc', sport_title: 'UFC' },
-  { sport_key: 'boxing', sport_title: 'Boxing' },
-  
-  // Motorsports
-  { sport_key: 'formula1', sport_title: 'Formula 1' },
-  { sport_key: 'motogp', sport_title: 'MotoGP' },
-  { sport_key: 'nascar', sport_title: 'NASCAR' },
-  { sport_key: 'indycar', sport_title: 'IndyCar' },
-  
-  // Golf
-  { sport_key: 'golf_pga', sport_title: 'PGA Tour' },
-  { sport_key: 'golf_european', sport_title: 'European Tour' },
-  { sport_key: 'golf_liv', sport_title: 'LIV Golf' },
-  { sport_key: 'golf_masters', sport_title: 'The Masters' },
-  { sport_key: 'golf_us_open', sport_title: 'US Open' },
-  { sport_key: 'golf_pga_championship', sport_title: 'PGA Championship' },
-  { sport_key: 'golf_open_championship', sport_title: 'The Open' },
-  
-  // International Sports
-  { sport_key: 'cricket_ipl', sport_title: 'IPL Cricket' },
-  { sport_key: 'cricket_big_bash', sport_title: 'Big Bash' },
-  { sport_key: 'cricket_psl', sport_title: 'PSL Cricket' },
-  { sport_key: 'rugby_union', sport_title: 'Rugby Union' },
-  { sport_key: 'rugby_league', sport_title: 'Rugby League' },
-  { sport_key: 'aussie_rules_afl', sport_title: 'AFL' },
-  { sport_key: 'handball', sport_title: 'Handball' },
-  { sport_key: 'volleyball', sport_title: 'Volleyball' },
-  { sport_key: 'table_tennis', sport_title: 'Table Tennis' },
-  { sport_key: 'badminton', sport_title: 'Badminton' },
-  { sport_key: 'darts', sport_title: 'Darts' },
-  { sport_key: 'snooker', sport_title: 'Snooker' }
-];
 
 function buildClient() {
   if (!env.SUPABASE_URL || !SUPABASE_KEY) {
