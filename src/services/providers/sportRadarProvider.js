@@ -1,5 +1,6 @@
 // src/services/providers/sportRadarProvider.js
 import axios from 'axios';
+// FIXED: Import the named export correctly
 import { rateLimitService } from '../rateLimitService.js';
 import { withTimeout } from '../../utils/asyncUtils.js';
 import { sentryService } from '../sentryService.js';
