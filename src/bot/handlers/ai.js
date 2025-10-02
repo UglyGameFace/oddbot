@@ -15,7 +15,7 @@ const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY);
 function getGeminiModel(choice) {
     const GEMINI_MODELS = {
         pro_2_5: "gemini-2.5-pro",
-        flash_2_5: "gemini-2.5-flash", 
+        flash_2_5: "gemini-2.5-flash",
         flash_lite_2_5: "gemini-2.5-flash-lite",
         flash_2_5_preview: "gemini-2.5-flash-lite-preview-09-2025",
         flash_2_0: "gemini-2.0-flash",
@@ -956,12 +956,9 @@ async function executeAiRequest(bot, chatId, messageId) {
       let parlay;
 
       if (mode === 'web') {
-          // --- CORRECTED: DYNAMIC MODEL SELECTION ---
-          // aiModel is set from state or UI ("pro_2_5", "flash_2_5", etc.)
+          // --- FIX: Rename the 'model' variable to avoid redeclaration ---
           const modelName = getGeminiModel(aiModel);
-          
-          // SINGLE DECLARATION - REMOVED DUPLICATE
-          const model = genAI.getGenerativeModel({ model: modelName });
+          const generativeModel = genAI.getGenerativeModel({ model: modelName });
           console.log(`Using dynamically selected model: ${modelName} for user choice: ${aiModel}`);
 
           const userQuery = `Generate a ${numLegs}-leg parlay for ${SPORT_TITLES[sportKey] || sportKey}. ` +
@@ -970,7 +967,7 @@ async function executeAiRequest(bot, chatId, messageId) {
 
           const fullPrompt = buildParlayPrompt(userQuery, state);
 
-          const result = await model.generateContent(fullPrompt);
+          const result = await generativeModel.generateContent(fullPrompt);
           const responseText = result.response.text();
           
           const jsonBlockRegex = /```json\s*([\s\S]+?)\s*```/;
@@ -1037,6 +1034,7 @@ async function executeAiRequest(bot, chatId, messageId) {
       await setUserState(chatId, {});
     }
 }
+
 
 // --- Help Command ---
 export function registerAIHelp(bot) {
