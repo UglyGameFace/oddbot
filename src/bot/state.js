@@ -1,4 +1,4 @@
-// src/bot/state.js - CORRECTED AND FINAL
+// src/bot/state.js
 import env from '../config/env.js';
 import { sentryService } from '../services/sentryService.js';
 import redisClient from '../services/redisService.js';
@@ -14,12 +14,14 @@ const DEFAULT_SLIP = { picks: [], stake: 10, totalOdds: 0, messageId: null };
 const safeParse = (s, f) => { try { return JSON.parse(s); } catch (e) { sentryService.captureError(e, { component: 'state', op: 'parse' }); return f; } };
 const withTimeout = (p, ms, label) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error(`Timeout ${ms}ms: ${label}`)), ms))]);
 
-// --- FINAL FIX: Use the dedicated and universally compatible SETEX command ---
 // --- VERIFIED FIX: Use older, more compatible Redis syntax for SET with TTL ---
 const setWithTTL = async (c, k, v, ttl) => {
   if (!ttl) return c.set(k, v);
   // Use 'EX' flag in a flat list instead of an options object
   return c.set(k, v, 'EX', ttl);
+
+
+};
 
 // --- Conversational state (remains in Redis for speed) ---
 export async function setUserState(chatId, state, ttl = 3600) {
@@ -50,18 +52,23 @@ async function getConfig(telegramId, type) {
         ai: { mode: 'web', model: 'perplexity', betType: 'mixed', horizonHours: 72 },
         builder: { minOdds: -200, maxOdds: 500, avoidSameGame: true, cutoffHours: 48 },
     };
+    // Return the specific config type, merged with defaults
     return { ...defaults[type], ...(settings[type] || {}) };
 }
 
 async function setConfig(telegramId, type, newConfigData) {
     const currentSettings = await databaseService.getUserSettings(telegramId);
+    // Create a deep copy to avoid mutation issues if settings object is reused
     const updatedSettings = JSON.parse(JSON.stringify(currentSettings));
-    
+
+    // Ensure the config type object exists
     if (!updatedSettings[type]) {
         updatedSettings[type] = {};
     }
+
+    // Merge new data into the specific config type
     Object.assign(updatedSettings[type], newConfigData);
-    
+
     await databaseService.updateUserSettings(telegramId, updatedSettings);
 }
 
@@ -70,6 +77,7 @@ export const setAIConfig = (id, cfg) => setConfig(id, 'ai', cfg);
 
 export const getBuilderConfig = (id) => getConfig(id, 'builder');
 export const setBuilderConfig = (id, cfg) => setConfig(id, 'builder', cfg);
+
 
 // --- Tokens (unchanged, good use for Redis) ---
 const tokenPrefix = `${PREFIX}token:`;
