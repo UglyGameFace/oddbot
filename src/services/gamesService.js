@@ -1,4 +1,4 @@
-// src/services/gamesService.js - UPDATED TO USE MODULAR SERVICES
+// src/services/gamesService.js - UPDATED TO USE MODULAR SERVICES WITH SCHEDULE VALIDATION
 import databaseService from './databaseService.js';
 import oddsService from './oddsService.js';
 import env from '../config/env.js';
@@ -147,6 +147,59 @@ class GamesService {
 
     } catch (error) {
       console.error(`❌ Games fetch failed for ${sportKey}:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Get verified real games for schedule validation (used by AI service)
+   */
+  async getVerifiedRealGames(sportKey, hours = 72) {
+    console.log(`🔍 Getting VERIFIED real games for ${sportKey} from games service...`);
+    
+    try {
+      // Try multiple sources in order of reliability
+      let realGames = [];
+      
+      // 1. Primary: Odds API (most current)
+      try {
+        realGames = await oddsService.getSportOdds(sportKey, { 
+          useCache: false,
+          hoursAhead: hours 
+        });
+        console.log(`✅ Odds API: ${realGames?.length || 0} real games`);
+      } catch (error) {
+        console.warn('❌ Odds API failed for verified games, trying database...');
+      }
+      
+      // 2. Fallback: Database
+      if (!realGames || realGames.length === 0) {
+        try {
+          realGames = await databaseService.getVerifiedRealGames(sportKey, hours);
+          console.log(`✅ Database: ${realGames?.length || 0} verified games`);
+        } catch (error) {
+          console.warn('❌ Database verified games failed');
+        }
+      }
+      
+      // Filter to upcoming games only
+      const now = new Date();
+      const horizon = new Date(now.getTime() + hours * 60 * 60 * 1000);
+      
+      const upcomingGames = (realGames || []).filter(game => {
+        try {
+          const gameTime = new Date(game.commence_time);
+          return gameTime > now && gameTime <= horizon;
+        } catch {
+          return false;
+        }
+      });
+      
+      console.log(`📅 VERIFIED: ${upcomingGames.length} real ${sportKey} games in next ${hours}h`);
+      return upcomingGames;
+      
+    } catch (error) {
+      console.error('❌ Verified real games fetch failed:', error);
       return [];
     }
   }
