@@ -1,10 +1,8 @@
-// src/services/aiService.js - FIXED VERSION
-
+// src/services/aiService.js - COMPLETE WITH SCHEDULE VALIDATION
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
 import axios from 'axios';
 import env from '../config/env.js';
 import { getSportTitle } from './sportsService.js';
-// Internal services for Live/DB modes only
 import oddsService from './oddsService.js';
 import gamesService from './gamesService.js';
 import databaseService from './databaseService.js';
@@ -14,7 +12,7 @@ import quantitativeService from './quantitativeService.js';
 
 // ---------- ENHANCED Constants ----------
 const TZ = env.TIMEZONE || 'America/New_York';
-const WEB_TIMEOUT_MS = 90000; // 90 seconds for thorough research
+const WEB_TIMEOUT_MS = 90000;
 const MAX_OUTPUT_TOKENS = 8192;
 const WEB_HORIZON_HOURS = 168;
 
@@ -26,51 +24,72 @@ const SAFETY = [
   { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
 ];
 
-// --- FIX: Updated model list to prioritize Gemini 2.0 and match available models ---
 const GEMINI_MODELS = ['gemini-2.0-flash', 'gemini-2.0-pro', 'gemini-pro'];
 const PERPLEXITY_MODELS = ['sonar-pro', 'sonar-small-chat'];
 
-// Enhanced bookmaker coverage
+// VERIFIED SCHEDULE SOURCES - Official league sources
+const VERIFIED_SCHEDULE_SOURCES = {
+  americanfootball_nfl: [
+    'https://www.nfl.com/schedules/',
+    'https://www.espn.com/nfl/schedule'
+  ],
+  americanfootball_ncaaf: [
+    'https://www.espn.com/college-football/schedule'
+  ],
+  basketball_nba: [
+    'https://www.nba.com/schedule',
+    'https://www.espn.com/nba/schedule'
+  ],
+  basketball_wnba: [
+    'https://www.wnba.com/schedule',
+    'https://www.espn.com/wnba/schedule'
+  ],
+  basketball_ncaab: [
+    'https://www.espn.com/mens-college-basketball/schedule'
+  ],
+  baseball_mlb: [
+    'https://www.mlb.com/schedule',
+    'https://www.espn.com/mlb/schedule'
+  ],
+  icehockey_nhl: [
+    'https://www.nhl.com/schedule',
+    'https://www.espn.com/nhl/schedule'
+  ],
+  soccer_england_premier_league: [
+    'https://www.premierleague.com/fixtures',
+    'https://www.espn.com/soccer/schedule'
+  ],
+  soccer_uefa_champions_league: [
+    'https://www.uefa.com/uefachampionsleague/fixtures-results/'
+  ],
+  tennis_atp: [
+    'https://www.atptour.com/en/schedule'
+  ],
+  tennis_wta: [
+    'https://www.wtatennis.com/schedule'
+  ],
+  mma_ufc: [
+    'https://www.ufc.com/schedule'
+  ],
+  golf_pga: [
+    'https://www.pgatour.com/schedule.html'
+  ],
+  formula1: [
+    'https://www.formula1.com/en/racing/2024.html'
+  ]
+};
+
 const REGULATED_BOOKS = [
   'FanDuel', 'DraftKings', 'BetMGM', 'Caesars', 'ESPN BET', 'BetRivers', 
   'PointsBet', 'bet365', 'William Hill', 'Unibet', 'Betway', '888sport'
 ];
 
-// Enhanced sport sources with comprehensive coverage
-const SPORT_SOURCES = {
-  americanfootball_nfl: ['https://www.nfl.com/schedules/', 'https://www.espn.com/nfl/schedule'],
-  americanfootball_ncaaf: ['https://www.espn.com/college-football/schedule'],
-  basketball_nba: ['https://www.nba.com/schedule', 'https://www.espn.com/nba/schedule'],
-  basketball_wnba: ['https://www.wnba.com/schedule', 'https://www.espn.com/wnba/schedule'],
-  basketball_ncaab: ['https://www.espn.com/mens-college-basketball/schedule'],
-  baseball_mlb: ['https://www.mlb.com/schedule', 'https://www.espn.com/mlb/schedule'],
-  icehockey_nhl: ['https://www.nhl.com/schedule', 'https://www.espn.com/nhl/schedule'],
-  soccer_england_premier_league: ['https://www.premierleague.com/fixtures', 'https://www.espn.com/soccer/schedule'],
-  soccer_uefa_champions_league: ['https://www.uefa.com/uefachampionsleague/fixtures-results/'],
-  tennis_atp: ['https://www.atptour.com/en/schedule', 'https://www.espn.com/tennis/schedule'],
-  tennis_wta: ['https://www.wtatennis.com/schedule', 'https://www.espn.com/tennis/schedule'],
-  mma_ufc: ['https://www.ufc.com/schedule'],
-  golf_pga: ['https://www.pgatour.com/schedule.html'],
-  formula1: ['https://www.formula1.com/en/racing/2024.html']
-};
-
-// Enhanced bookmaker tier system
 const BOOK_TIER = {
-  'DraftKings': 0.96,
-  'FanDuel': 0.96,
-  'Caesars': 0.93,
-  'BetMGM': 0.93,
-  'ESPN BET': 0.91,
-  'BetRivers': 0.89,
-  'PointsBet': 0.88,
-  'bet365': 0.95,
-  'William Hill': 0.90,
-  'Unibet': 0.89,
-  'Betway': 0.88,
-  '888sport': 0.87
+  'DraftKings': 0.96, 'FanDuel': 0.96, 'Caesars': 0.93, 'BetMGM': 0.93,
+  'ESPN BET': 0.91, 'BetRivers': 0.89, 'PointsBet': 0.88, 'bet365': 0.95
 };
 
-// ---------- Enhanced Math helpers ----------
+// ---------- Math helpers ----------
 function americanToDecimal(a) {
   const x = Number(a);
   if (!Number.isFinite(x)) return null;
@@ -108,65 +127,25 @@ function parlayDecimal(legs) {
   return (legs || []).reduce((acc, l) => acc * (Number(l.best_quote?.decimal) || 1), 1);
 }
 
-// ---------- ENHANCED Robust JSON Parsing/validation ----------
+// ---------- JSON Parsing ----------
 function extractJSON(text = '') {
-  if (!text || typeof text !== 'string') {
-    console.warn('⚠️ extractJSON: Empty or invalid text input');
-    return null;
-  }
+  if (!text || typeof text !== 'string') return null;
   
-  console.log('🔧 Attempting JSON extraction from:', text.substring(0, 200) + '...');
-  
-  // Multiple extraction strategies
   const strategies = [
-    // Strategy 1: Code fence extraction
     () => {
       const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
       if (fenceMatch) {
-        console.log('✅ Found JSON in code fence');
-        try { 
-          return JSON.parse(fenceMatch[1]); 
-        } catch (error) {
-          console.warn('❌ Code fence JSON parse failed:', error.message);
-        }
+        try { return JSON.parse(fenceMatch[1]); } catch (error) { return null; }
       }
       return null;
     },
-    // Strategy 2: Find first { to last } with enhanced cleaning
     () => {
       const start = text.indexOf('{');
       const end = text.lastIndexOf('}');
       if (start !== -1 && end !== -1 && end > start) {
         const candidate = text.substring(start, end + 1);
-        console.log('✅ Found JSON candidate with braces');
-        try { 
-          return JSON.parse(candidate); 
-        } catch (error) {
-          console.warn('❌ Brace-based JSON parse failed:', error.message);
-          // Try to fix common JSON issues
+        try { return JSON.parse(candidate); } catch (error) {
           return attemptJSONRepair(candidate);
-        }
-      }
-      return null;
-    },
-    // Strategy 3: Direct parse
-    () => {
-      try { 
-        return JSON.parse(text); 
-      } catch (error) {
-        console.warn('❌ Direct JSON parse failed:', error.message);
-        return null;
-      }
-    },
-    // Strategy 4: Aggressive cleaning and retry
-    () => {
-      const cleaned = cleanJSONString(text);
-      if (cleaned !== text) {
-        console.log('🔄 Attempting with cleaned JSON string');
-        try {
-          return JSON.parse(cleaned);
-        } catch (error) {
-          console.warn('❌ Cleaned JSON parse failed:', error.message);
         }
       }
       return null;
@@ -175,88 +154,45 @@ function extractJSON(text = '') {
   
   for (const strategy of strategies) {
     const result = strategy();
-    if (result) {
-      console.log('✅ JSON extraction successful');
-      return result;
-    }
+    if (result) return result;
   }
   
-  console.error('❌ All JSON extraction strategies failed');
   return null;
 }
 
-// ENHANCED: JSON repair function with COMPREHENSIVE fixes
 function attemptJSONRepair(jsonString) {
   if (!jsonString || typeof jsonString !== 'string') return null;
   
-  console.log('🔄 Attempting JSON repair...');
-  
   try {
     let repaired = jsonString;
-    
-    // CRITICAL FIX: Handle ALL positive American odds with + signs
     repaired = repaired.replace(/"american":\s*\+(\d+)/g, '"american": $1');
     repaired = repaired.replace(/"opponent_american":\s*\+(\d+)/g, '"opponent_american": $1');
     repaired = repaired.replace(/"odds_american":\s*\+(\d+)/g, '"odds_american": $1');
-    
-    // ENHANCED: Fix missing quotes around any word before colon
     repaired = repaired.replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)(\s*:)/g, '$1"$2"$3');
-    
-    // Remove trailing commas
     repaired = repaired.replace(/,\s*([}\]])/g, '$1');
-    
-    // Fix single quotes to double quotes
     repaired = repaired.replace(/'/g, '"');
     
-    // Remove comments
-    repaired = repaired.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
-    
-    // Fix unescaped quotes in strings
-    repaired = repaired.replace(/"([^"\\]*(\\.[^"\\]*)*)"?/g, (match) => {
-      if (match.endsWith('"') && !match.endsWith('\\"')) {
-        return match;
-      }
-      return match;
-    });
-    
-    console.log('🔧 Repaired JSON sample:', repaired.substring(0, 200) + '...');
-    
-    const parsed = JSON.parse(repaired);
-    console.log('✅ JSON repair successful');
-    return parsed;
+    return JSON.parse(repaired);
   } catch (repairError) {
-    console.warn('❌ JSON repair failed:', repairError.message);
     return null;
   }
 }
 
-// ENHANCED: JSON string cleaning with positive odds handling
 function cleanJSONString(text) {
   if (!text || typeof text !== 'string') return text;
   
   let cleaned = text.trim();
-  
-  // Remove common non-JSON prefixes/suffixes
   cleaned = cleaned.replace(/^[^{[]*/, '').replace(/[^}\]]*$/, '');
-  
-  // Remove markdown formatting
   cleaned = cleaned.replace(/```json/g, '').replace(/```/g, '');
-  
-  // Fix positive American odds before other processing
   cleaned = cleaned.replace(/"american":\s*\+(\d+)/g, '"american": $1');
   cleaned = cleaned.replace(/"opponent_american":\s*\+(\d+)/g, '"opponent_american": $1');
-  
-  // Remove extra whitespace but preserve structure
   cleaned = cleaned.replace(/\s+/g, ' ').trim();
   
-  // Ensure it starts with { or [
   if (!cleaned.startsWith('{') && !cleaned.startsWith('[')) {
     const braceIndex = cleaned.indexOf('{');
     const bracketIndex = cleaned.indexOf('[');
     const startIndex = Math.max(braceIndex, bracketIndex);
-    if (startIndex !== -1) {
-      cleaned = cleaned.substring(startIndex);
-    }
+    if (startIndex !== -1) cleaned = cleaned.substring(startIndex);
   }
   
   return cleaned;
@@ -276,13 +212,11 @@ function coerceQuote(q) {
     const url = String(q.source_url || q.url || '').trim();
     const fetched_at = String(q.fetched_at || q.timestamp || new Date().toISOString()).trim();
     
-    // Enhanced validation
     if (!book || book === 'Unknown' || (!american && !decimal)) return null;
     
     return { book, line, american, decimal, opponent_american: oppA, source_url: url, fetched_at };
   } catch (error) {
     console.warn('Quote coercion failed:', error.message);
-    sentryService.captureError(error, { component: 'ai_service', operation: 'coerceQuote' });
     return null;
   }
 }
@@ -324,7 +258,6 @@ function normalizeLeg(raw) {
     const fair_prob = clamp01(raw.fair_prob);
     const best = raw.best_quote ? coerceQuote(raw.best_quote) : bestQuoteEV(quotes, fair_prob, market, null);
 
-    // Enhanced date handling with validation
     let utcISO = null;
     let local = null;
     
@@ -362,10 +295,10 @@ function normalizeLeg(raw) {
       justification: String(raw.justification || 'Analysis based on current odds and matchups').trim(),
       confidence: typeof raw.confidence === 'number' ? clamp01(raw.confidence) : 0.65,
       ev: (best && fair_prob != null && Number.isFinite(best.decimal)) ? (fair_prob * best.decimal - 1) : null,
-      data_quality: 'ai_generated'
+      data_quality: 'ai_generated',
+      real_game_validated: raw.real_game_validated || false
     };
 
-    // Enhanced validation
     if (!leg.game || !leg.pick || !leg.market || leg.game === 'Unknown' || leg.pick === 'Unknown') {
       console.warn('Leg missing required fields:', { game: leg.game, pick: leg.pick, market: leg.market });
       return null;
@@ -374,7 +307,6 @@ function normalizeLeg(raw) {
     return leg;
   } catch (error) {
     console.error('Leg normalization failed:', error.message);
-    sentryService.captureError(error, { component: 'ai_service', operation: 'normalizeLeg' });
     return null;
   }
 }
@@ -384,35 +316,178 @@ function filterUpcoming(legs, hours = WEB_HORIZON_HOURS) {
   const horizon = now + hours * 3600_000;
   
   return (legs || []).filter(l => {
-    if (!l.game_date_utc) return true; // Allow legs without dates
-    
+    if (!l.game_date_utc) return true;
     try {
       const t = Date.parse(l.game_date_utc);
       return Number.isFinite(t) && t >= now && t <= horizon;
     } catch {
-      return true; // Be permissive with date parsing errors
+      return true;
     }
   });
 }
 
+// ---------- CRITICAL: REAL SCHEDULE VALIDATION ----------
+async function getVerifiedRealGames(sportKey, hours = 72) {
+  console.log(`🔍 Getting VERIFIED real games for ${sportKey}...`);
+  
+  try {
+    // Try multiple reliable sources in order
+    let realGames = [];
+    
+    // 1. Primary: The Odds API (most reliable)
+    try {
+      realGames = await oddsService.getSportOdds(sportKey, { useCache: false });
+      console.log(`✅ Odds API: ${realGames?.length || 0} games`);
+    } catch (error) {
+      console.warn('❌ Odds API failed, trying games service...');
+    }
+    
+    // 2. Fallback: Games Service
+    if (!realGames || realGames.length === 0) {
+      try {
+        realGames = await gamesService.getGamesForSport(sportKey, { useCache: false });
+        console.log(`✅ Games Service: ${realGames?.length || 0} games`);
+      } catch (error) {
+        console.warn('❌ Games service failed, trying database...');
+      }
+    }
+    
+    // 3. Final Fallback: Database
+    if (!realGames || realGames.length === 0) {
+      try {
+        realGames = await databaseService.getUpcomingGames(sportKey, hours);
+        console.log(`✅ Database: ${realGames?.length || 0} games`);
+      } catch (error) {
+        console.warn('❌ All schedule sources failed');
+        return [];
+      }
+    }
+    
+    // Filter to upcoming games only
+    const now = Date.now();
+    const horizon = now + (hours * 3600 * 1000);
+    
+    const upcomingGames = (realGames || []).filter(game => {
+      try {
+        const gameTime = new Date(game.commence_time).getTime();
+        return gameTime > now && gameTime <= horizon;
+      } catch {
+        return false;
+      }
+    });
+    
+    console.log(`📅 VERIFIED: ${upcomingGames.length} real ${sportKey} games in next ${hours}h`);
+    return upcomingGames;
+    
+  } catch (error) {
+    console.error('❌ Failed to get verified real games:', error);
+    return [];
+  }
+}
+
+async function validateAndFilterRealGames(sportKey, proposedLegs, hours = 72) {
+  console.log(`🔍 VALIDATING ${proposedLegs.length} proposed legs against REAL schedule...`);
+  
+  try {
+    const realGames = await getVerifiedRealGames(sportKey, hours);
+    
+    if (realGames.length === 0) {
+      console.warn('❌ NO REAL GAMES AVAILABLE for validation');
+      return [];
+    }
+    
+    // Create lookup map of real games
+    const realGameMap = new Map();
+    realGames.forEach(game => {
+      const key = `${game.away_team} @ ${game.home_team}`.toLowerCase().trim();
+      realGameMap.set(key, {
+        event_id: game.event_id,
+        commence_time: game.commence_time,
+        away_team: game.away_team,
+        home_team: game.home_team,
+        real: true
+      });
+    });
+    
+    // Validate each proposed leg
+    const validLegs = proposedLegs.filter(leg => {
+      const gameKey = leg.game.toLowerCase().trim();
+      const realGame = realGameMap.get(gameKey);
+      
+      if (!realGame) {
+        console.warn(`❌ REJECTED: "${leg.game}" not in real schedule`);
+        return false;
+      }
+      
+      // Update leg with real game data
+      leg.event_id = realGame.event_id;
+      leg.game_date_utc = realGame.commence_time;
+      leg.real_game_validated = true;
+      
+      console.log(`✅ VALIDATED: "${leg.game}"`);
+      return true;
+    });
+    
+    const rejectionRate = ((proposedLegs.length - validLegs.length) / proposedLegs.length * 100).toFixed(1);
+    console.log(`🎯 VALIDATION: ${validLegs.length}/${proposedLegs.length} legs real (${rejectionRate}% rejected)`);
+    
+    return validLegs;
+    
+  } catch (error) {
+    console.error('❌ Schedule validation failed:', error);
+    return [];
+  }
+}
+
+async function buildRealScheduleContext(sportKey, hours) {
+  try {
+    const realGames = await getVerifiedRealGames(sportKey, hours);
+    
+    if (realGames.length === 0) {
+      return `\n\n🚨 CRITICAL SCHEDULE ALERT: There are NO VERIFIED ${sportKey.toUpperCase()} games in the next ${hours} hours according to official league schedules and sports data APIs. DO NOT CREATE ANY LEGS. Return an empty parlay_legs array.`;
+    }
+    
+    // Build game list for AI context
+    const gameList = realGames.slice(0, 20).map((game, index) => {
+      const date = new Date(game.commence_time);
+      const timeStr = date.toLocaleString('en-US', { 
+        timeZone: TZ, 
+        month: 'short', 
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+      return `${index + 1}. ${game.away_team} @ ${game.home_team} - ${timeStr}`;
+    }).join('\n');
+    
+    const verifiedSources = VERIFIED_SCHEDULE_SOURCES[sportKey] || ['Official League Schedule'];
+    
+    return `\n\n📅 VERIFIED REAL SCHEDULE FOR ${sportKey.toUpperCase()} (Next ${hours} hours):
+${gameList}
+
+🔒 SCHEDULE SOURCES: ${verifiedSources.join(', ')}
+
+🚫 STRICT REQUIREMENT: You MUST use ONLY games from this verified schedule. 
+❌ DO NOT CREATE, HALLUCINATE, OR INVENT games not on this list.
+✅ ONLY analyze and pick from these real, scheduled matchups.
+📊 If no games match your analysis criteria, return fewer legs or an empty array.`;
+    
+  } catch (error) {
+    return `\n\n⚠️ SCHEDULE UNAVAILABLE: Real schedule data is temporarily unavailable. Be extremely careful to only use real, current ${sportKey} matchups that you can verify exist in official league schedules.`;
+  }
+}
+
 // ---------- Enhanced Model discovery ----------
 async function pickSupportedModel(apiKey, candidates = GEMINI_MODELS) {
-  if (!apiKey) {
-    console.warn('No Gemini API key provided, using default model');
-    return candidates[0];
-  }
+  if (!apiKey) return candidates[0];
   
   try {
     const url = `https://generativelanguage.googleapis.com/v1/models?key=${apiKey}`;
     const { data } = await axios.get(url, { timeout: 10000 });
     
-    if (!data?.models) {
-      console.warn('No models found in API response');
-      return candidates[0];
-    }
+    if (!data?.models) return candidates[0];
     
     const availableModels = new Set(data.models.map(m => (m.name || '').replace(/^models\//, '')));
-    console.log('Available Gemini models:', Array.from(availableModels));
     
     for (const candidate of candidates) {
       if (availableModels.has(candidate)) {
@@ -421,55 +496,57 @@ async function pickSupportedModel(apiKey, candidates = GEMINI_MODELS) {
       }
     }
     
-    console.warn('No preferred models available, using first candidate');
     return candidates[0];
   } catch (error) {
-    console.warn('Model discovery failed, using default:', error.message);
-    sentryService.captureError(error, { component: 'ai_service', operation: 'pickSupportedModel' });
+    console.warn('Model discovery failed:', error.message);
     return candidates[0];
   }
 }
 
 function createAnalystPrompt({ sportKey, numLegs, betType, hours, includeProps = false, quantitativeMode = 'conservative' }) {
     const sportName = sportKey.replace(/_/g, ' ').toUpperCase();
-    const sources = SPORT_SOURCES[sportKey] ? `Use these URLs for current schedules: ${SPORT_SOURCES[sportKey].join(', ')}` : '';
+    const verifiedSources = VERIFIED_SCHEDULE_SOURCES[sportKey] || ['Official League Schedule'];
     
     let betTypeInstruction = '';
     if (betType === 'props') {
-        betTypeInstruction = 'CRITICAL: The parlay must consist ONLY of player prop bets (e.g., player_points, player_assists, player_rebounds). Do NOT include moneyline, spreads, or totals.';
+        betTypeInstruction = 'CRITICAL: The parlay must consist ONLY of player prop bets. Do NOT include moneyline, spreads, or totals.';
     } else if (betType === 'moneyline') {
-        betTypeInstruction = 'The parlay should focus on moneyline (h2h) bets. Include 1-2 player props only if they are exceptional values.';
+        betTypeInstruction = 'The parlay should focus on moneyline (h2h) bets.';
     } else if (betType === 'spreads') {
-        betTypeInstruction = 'The parlay should focus on spreads and totals bets. Include 1 player prop only if it provides strong value.';
+        betTypeInstruction = 'The parlay should focus on spreads and totals bets.';
     } else if (betType === 'mixed') {
         if (includeProps) {
-            betTypeInstruction = 'CRITICAL: The parlay should include a VARIETY of bet types (moneyline, spreads, totals, AND player props). MUST include at least 1-2 player props mixed with other bet types for diversity.';
+            betTypeInstruction = 'The parlay should include a variety of bet types including player props.';
         } else {
-            betTypeInstruction = 'The parlay should include a variety of bet types (moneyline, spreads, totals) but NO player props.';
+            betTypeInstruction = 'The parlay should include a variety of bet types but NO player props.';
         }
     }
 
     let calibrationInstruction = '';
     if (quantitativeMode === 'conservative') {
-        calibrationInstruction = `QUANTITATIVE CALIBRATION: Apply realistic probability estimates accounting for overconfidence, correlation, and market factors.`;
+        calibrationInstruction = `Apply realistic probability estimates accounting for overconfidence and correlation.`;
     } else {
-        calibrationInstruction = `QUANTITATIVE MODE: Use your raw probability estimates without calibration.`;
+        calibrationInstruction = `Use raw probability estimates without calibration.`;
     }
 
-    return `You are a world-class sports betting analyst. Your task is to conduct **thorough, deep research** to construct a high-value ${numLegs}-leg parlay for ${sportName}. Prioritize accuracy and verifiable data over speed.
+    return `You are a world-class sports betting analyst. Your task is to construct a high-value ${numLegs}-leg parlay for ${sportName}.
 
-**Your Process:**
-1.  **Data Gathering:** Scour the web for the most up-to-date information regarding games in the next ${hours} hours. Use official league sites, reputable sports news outlets (like ESPN, The Athletic), and advanced statistical sources.
-2.  **Deep Analysis:** For each potential leg, analyze matchups, recent performance trends (last 5-10 games), player injuries, historical head-to-head data, and any relevant news.
-3.  **Quantitative Justification:** In the 'justification' field for each leg, you MUST include specific stats, data points, or trends that support your pick. Do not use vague statements. For example, instead of "Team A is better," write "Team A averages 28.5 PPG and has the #3 ranked defense, while Team B has lost 3 straight games, giving up an average of 32 PPG."
-4.  **Source Citation:** You MUST populate the main 'sources' array with the top 2-3 URLs you used for your analysis.
+**CRITICAL REQUIREMENTS:**
+1. **REAL GAMES ONLY**: You MUST use ONLY real games from the verified schedule provided separately.
+2. **NO HALLUCINATION**: Do not create, invent, or imagine games that don't exist.
+3. **SCHEDULE COMPLIANCE**: All picks must be from actual scheduled matchups.
 
-**Parlay Requirements:**
-* **Time Constraint:** Games must start in the next ${hours} hours from now (${new Date().toUTCString()}). ${sources}
-* **Bet Type Strategy:** ${betTypeInstruction}
-* **Quantitative Analysis:** ${calibrationInstruction}
+**Analysis Process:**
+1. Use the provided verified schedule to select real games
+2. Analyze matchups, recent performance, injuries, and trends
+3. Provide data-driven justifications with specific stats
+4. Use real odds from regulated US sportsbooks like ${REGULATED_BOOKS.join(', ')}
 
-**Output Format:** Return ONLY valid JSON in this exact structure:
+**Bet Type Strategy:** ${betTypeInstruction}
+**Quantitative Approach:** ${calibrationInstruction}
+**Verified Sources:** ${verifiedSources.join(', ')}
+
+**Output Format:** Return ONLY valid JSON:
 
 {
     "parlay_legs": [
@@ -478,35 +555,34 @@ function createAnalystPrompt({ sportKey, numLegs, betType, hours, includeProps =
         "market": "h2h",
         "pick": "Team A",
         "fair_prob": 0.65,
-        "justification": "**Data-Driven Analysis:** Team A has a 5-1 record in their last 6 games and ranks 2nd in offensive efficiency. Team B's star player is questionable with an injury, and their defense is ranked 28th in the league.",
+        "justification": "Specific data-driven analysis...",
         "confidence": 0.75,
-        "game_date_utc": "${new Date(Date.now() + 3 * 3600 * 1000).toISOString()}",
+        "game_date_utc": "2024-10-05T19:00:00Z",
         "quotes": [
             { "book": "DraftKings", "american": -150, "decimal": 1.67, "opponent_american": 130 }
         ]
         }
     ],
     "confidence_score": 0.80,
-    "sources": ["https://www.espn.com/nfl/matchup?gameId=...", "https://www.theathletic.com/team/team-a/"],
+    "sources": ["https://official-source.com/game"],
     "market_variety_score": 0.85
 }
 
-**STRICT REQUIREMENTS:**
-1.  **Thorough Research is Paramount:** Do not rush. The quality of the justification and the data behind it is the most critical part of this task.
-2.  **Cite Your Sources:** The 'sources' array at the root of the JSON object must not be empty.
-3.  **Real Data Only:** Use REAL teams, accurate odds from regulated US sportsbooks like ${REGULATED_BOOKS.join(', ')}.
-4.  **JSON Only:** The final response MUST be PURE JSON. No explanations, no markdown, no text before or after the JSON.
-5.  **American Odds Format:** Use numbers only (e.g., -150 or 125). DO NOT include "+" signs.`;
+**STRICT RULES:**
+- Use ONLY real games from provided schedule
+- No markdown, no explanations - ONLY JSON
+- American odds without + signs (e.g., 125 not +125)
+- All games must be verifiably real`;
 }
 
-// ---------- Enhanced Perplexity with better error handling ----------
+// ---------- Enhanced Perplexity with schedule validation ----------
 async function callPerplexity(prompt) {
   const { PERPLEXITY_API_KEY } = env;
   if (!PERPLEXITY_API_KEY) {
-    throw new Error('Perplexity API key missing - check environment configuration');
+    throw new Error('Perplexity API key missing');
   }
   
-  console.log('🔄 Calling Perplexity Sonar Pro (90s timeout)...');
+  console.log('🔄 Calling Perplexity with schedule validation...');
   
   try {
     const response = await axios.post(
@@ -516,7 +592,7 @@ async function callPerplexity(prompt) {
         messages: [
           { 
             role: 'system', 
-            content: 'You are a professional sports data research expert. Return ONLY valid JSON with current game schedules, real odds from regulated books, and data-driven analysis. No markdown, no explanations, no additional text. Validate all information is current and accurate. For American odds, use numbers without + signs (e.g., 125 instead of +125).' 
+            content: 'You are a professional sports data research expert. Return ONLY valid JSON with picks from REAL scheduled games. No markdown, no explanations, no additional text. Validate all games are real using provided schedules. For American odds, use numbers without + signs.' 
           },
           { role: 'user', content: prompt }
         ],
@@ -528,8 +604,7 @@ async function callPerplexity(prompt) {
       { 
         headers: { 
           Authorization: `Bearer ${PERPLEXITY_API_KEY}`,
-          'Content-Type': 'application/json',
-          'User-Agent': 'ParlayBot-AI-Service/1.0'
+          'Content-Type': 'application/json'
         }, 
         timeout: WEB_TIMEOUT_MS
       }
@@ -538,36 +613,25 @@ async function callPerplexity(prompt) {
     const content = response?.data?.choices?.[0]?.message?.content || '';
     
     if (!content) {
-      throw new Error('Empty response from Perplexity - no content received');
+      throw new Error('Empty response from Perplexity');
     }
     
-    console.log('✅ Perplexity response received successfully');
+    console.log('✅ Perplexity response received');
     return content;
   } catch (error) {
     console.error('❌ Perplexity API error:', error.message);
     
-    // Enhanced error categorization
     if (error.code === 'ECONNABORTED') {
-      throw new Error('Perplexity request timed out after 90 seconds - service may be overloaded');
+      throw new Error('Perplexity request timed out');
     }
     
     if (error.response?.status === 401) {
-      throw new Error('Perplexity API key invalid or expired');
+      throw new Error('Perplexity API key invalid');
     }
     
     if (error.response?.status === 429) {
-      throw new Error('Perplexity rate limit exceeded - try again later');
+      throw new Error('Perplexity rate limit exceeded');
     }
-    
-    if (error.response?.status >= 500) {
-      throw new Error('Perplexity service temporarily unavailable');
-    }
-    
-    sentryService.captureError(error, { 
-      component: 'ai_service', 
-      operation: 'callPerplexity',
-      status: error.response?.status 
-    });
     
     throw new Error(`Perplexity research failed: ${error.message}`);
   }
@@ -576,7 +640,7 @@ async function callPerplexity(prompt) {
 async function callGemini(prompt) {
   const { GOOGLE_GEMINI_API_KEY } = env;
   if (!GOOGLE_GEMINI_API_KEY) {
-    throw new Error('Gemini API key missing - check environment configuration');
+    throw new Error('Gemini API key missing');
   }
   
   console.log('🔄 Calling Gemini...');
@@ -587,7 +651,6 @@ async function callGemini(prompt) {
     
     const genAI = new GoogleGenerativeAI(GOOGLE_GEMINI_API_KEY);
     
-    // FIXED: Renamed variable to avoid duplicate declaration
     const aiModel = genAI.getGenerativeModel({ 
       model: modelId,
       generationConfig: {
@@ -604,47 +667,36 @@ async function callGemini(prompt) {
     const text = response.text();
     
     if (!text) {
-      throw new Error('Empty response from Gemini - no text generated');
+      throw new Error('Empty response from Gemini');
     }
     
-    console.log('✅ Gemini response received successfully');
+    console.log('✅ Gemini response received');
     return text;
 
   } catch (error) {
     console.error('❌ Gemini API error:', error.message);
     
-    // Enhanced error handling is now correctly inside the catch block
-    if (error.message.includes('404') || error.message.includes('not found')) {
-      throw new Error(`Gemini model not available: ${error.message}`);
+    if (error.message.includes('404')) {
+      throw new Error('Gemini model not available');
     }
     
-    if (error.message.includes('quota') || error.message.includes('limit')) {
-      throw new Error('Gemini API quota exceeded - check usage limits');
+    if (error.message.includes('quota')) {
+      throw new Error('Gemini API quota exceeded');
     }
     
-    if (error.message.includes('403') || error.message.includes('permission')) {
-      throw new Error('Gemini API key invalid or permissions insufficient');
+    if (error.message.includes('403')) {
+      throw new Error('Gemini API key invalid');
     }
-    
-    if (error.message.includes('500') || error.message.includes('503')) {
-      throw new Error('Gemini service temporarily unavailable');
-    }
-    
-    sentryService.captureError(error, { 
-      component: 'ai_service', 
-      operation: 'callGemini' 
-    });
     
     throw new Error(`Gemini API call failed: ${error.message}`);
   }
 }
 
-// ---------- ENHANCED provider calling with better JSON validation ----------
 async function callProvider(aiModel, prompt) {
   console.log(`🔍 Researching with ${aiModel}...`);
   
   const maxAttempts = 2;
-  const retryDelay = 2000; // 2 seconds between retries
+  const retryDelay = 2000;
   
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     console.log(`🔄 ${aiModel} attempt ${attempt}/${maxAttempts}...`);
@@ -665,53 +717,31 @@ async function callProvider(aiModel, prompt) {
       }
       
       console.warn(`⚠️ ${aiModel} attempt ${attempt} returned invalid JSON`);
-      console.log('📄 Raw response sample:', text.substring(0, 500));
       
-      // Enhanced retry logic with better prompt for JSON formatting
       if (attempt < maxAttempts && text) {
-        const retryPrompt = `${prompt}\n\nCRITICAL: Previous response was invalid JSON. You must return ONLY the JSON object with no additional text, markdown, or code fences. Ensure:\n- All strings use double quotes\n- No trailing commas in arrays or objects\n- All brackets and braces are properly closed\n- For American odds, use numbers without + signs (e.g., 125 instead of +125)\n- The JSON structure matches exactly the required format`;
+        const retryPrompt = `${prompt}\n\nCRITICAL: Previous response was invalid JSON. Return ONLY the JSON object with no additional text. Ensure proper JSON formatting.`;
         console.log(`🔄 Retrying ${aiModel} with stricter JSON requirements...`);
         await new Promise(resolve => setTimeout(resolve, retryDelay));
         continue;
       }
       
-      throw new Error('Could not extract valid JSON from AI response after multiple attempts');
+      throw new Error('Could not extract valid JSON from AI response');
       
     } catch (error) {
       console.error(`❌ ${aiModel} attempt ${attempt} failed:`, error.message);
       
-      // Enhanced fatal error detection
       const fatalErrors = [
-        'API key missing',
-        'API key invalid', 
-        'quota exceeded',
-        'rate limit exceeded',
-        'model not available',
-        'service temporarily unavailable'
+        'API key missing', 'API key invalid', 'quota exceeded', 'rate limit exceeded'
       ];
       
       if (fatalErrors.some(fatal => error.message.includes(fatal))) {
-        sentryService.captureError(error, { 
-          component: 'ai_service', 
-          operation: 'callProvider',
-          provider: aiModel,
-          attempt 
-        });
         throw error;
       }
       
       if (attempt === maxAttempts) {
-        const finalError = new Error(`${aiModel} failed after ${maxAttempts} attempts: ${error.message}`);
-        sentryService.captureError(finalError, { 
-          component: 'ai_service', 
-          operation: 'callProvider_final',
-          provider: aiModel 
-        });
-        throw finalError;
+        throw new Error(`${aiModel} failed after ${maxAttempts} attempts: ${error.message}`);
       }
       
-      // Wait before retry
-      console.log(`⏳ Waiting ${retryDelay}ms before retry...`);
       await new Promise(resolve => setTimeout(resolve, retryDelay));
     }
   }
@@ -736,7 +766,6 @@ class AIService {
       
       try {
         let result;
-        // Pass the proQuantMode option to the generation methods
         const proQuantMode = options.proQuantMode || false;
   
         if (mode === 'web') {
@@ -793,7 +822,10 @@ class AIService {
     const includeProps = options.includeProps || false;
     const quantitativeMode = options.proQuantMode ? 'conservative' : (options.quantitativeMode || 'aggressive');
     
-    const prompt = createAnalystPrompt({ 
+    // CRITICAL: Get real schedule context first
+    const scheduleContext = await buildRealScheduleContext(sportKey, hours);
+    
+    const basePrompt = createAnalystPrompt({ 
       sportKey, 
       numLegs, 
       betType, 
@@ -802,18 +834,38 @@ class AIService {
       quantitativeMode 
     });
     
-    console.log(`📝 Sending enhanced quantitative prompt (${quantitativeMode} mode)...`);
+    // COMBINE: Base prompt + real schedule context
+    const prompt = basePrompt + scheduleContext;
+    
+    console.log(`📝 Sending REAL-SCHEDULE validated prompt (${quantitativeMode} mode)...`);
     const obj = await callProvider(aiModel, prompt);
     
     if (!obj || !Array.isArray(obj.parlay_legs)) {
       throw new Error('AI returned invalid JSON structure - missing parlay_legs array');
     }
     
-    console.log(`🔄 Processing ${obj.parlay_legs.length} potential legs...`);
-    const legs = obj.parlay_legs.map(normalizeLeg).filter(Boolean).slice(0, numLegs);
+    console.log(`🔄 Processing ${obj.parlay_legs.length} proposed legs...`);
+    
+    // CRITICAL: VALIDATE ALL GAMES AGAINST REAL SCHEDULE
+    const validatedLegs = await validateAndFilterRealGames(sportKey, obj.parlay_legs, hours);
+    
+    if (validatedLegs.length === 0) {
+      const realGames = await getVerifiedRealGames(sportKey, hours);
+      if (realGames.length === 0) {
+        throw new Error(`NO REAL GAMES: There are no ${sportKey} games in the next ${hours} hours according to verified schedules.`);
+      } else {
+        throw new Error(`SCHEDULE MISMATCH: AI proposed ${obj.parlay_legs.length} games but NONE match the actual ${sportKey} schedule. All games were rejected.`);
+      }
+    }
+    
+    if (validatedLegs.length < numLegs) {
+      console.warn(`⚠️ Only ${validatedLegs.length} real games validated (requested ${numLegs})`);
+    }
+    
+    const legs = validatedLegs.map(normalizeLeg).filter(Boolean).slice(0, numLegs);
     
     if (legs.length === 0) {
-      throw new Error(`No valid ${sportKey} legs could be processed`);
+      throw new Error(`No valid ${sportKey} legs could be processed after real-game validation`);
     }
     
     // Calculate parlay odds
@@ -847,35 +899,27 @@ class AIService {
         ai_model: aiModel,
         include_props: includeProps,
         bet_type: betType,
-        quantitative_mode: quantitativeMode
+        quantitative_mode: quantitativeMode,
+        real_games_validated: true,
+        schedule_verified: true
       }
     };
   }
 
-  // Enhanced Live/DB modes with better data integration
+  // Enhanced Live/DB modes with REAL schedule data
   async generateContextBasedParlay(sportKey, numLegs, betType, options = {}) {
-    console.log(`🔄 Using enhanced internal APIs for ${sportKey}...`);
+    console.log(`🔄 Using VERIFIED internal APIs for ${sportKey}...`);
     
     try {
-      // Enhanced data fetching with fallbacks
-      let games = await oddsService.getSportOdds(sportKey, { useCache: true });
-      if (!games || games.length === 0) {
-        console.log(`🔄 Fallback to games service for ${sportKey}...`);
-        games = await gamesService.getGamesForSport(sportKey, { useCache: true });
-      }
+      // Use verified real games
+      const realGames = await getVerifiedRealGames(sportKey, options.horizonHours || 72);
       
-      if (!games || games.length === 0) {
-        // Final fallback to database
-        console.log(`🔄 Final fallback to database for ${sportKey}...`);
-        games = await databaseService.getUpcomingGames(sportKey, 72);
-      }
-      
-      if (!games || games.length < numLegs) {
-        throw new Error(`Insufficient ${sportKey} games available. Found ${games?.length || 0}, need ${numLegs}`);
+      if (!realGames || realGames.length < numLegs) {
+        throw new Error(`Insufficient REAL ${sportKey} games available. Found ${realGames?.length || 0}, need ${numLegs}`);
       }
 
       // Enhanced game selection with diversity
-      const selected = this._selectDiverseGames(games, numLegs);
+      const selected = this._selectDiverseGames(realGames, numLegs);
       const legs = selected.map((game, index) => {
         const bookmakers = game.bookmakers || game.market_data?.bookmakers || [];
         const market = this._selectAppropriateMarket(bookmakers, betType);
@@ -891,16 +935,17 @@ class AIService {
             book: bookmakers[0]?.title || 'DraftKings',
             american, 
             decimal,
-            source_url: `internal:${sportKey}_${game.event_id}`
+            source_url: `verified:${sportKey}_${game.event_id}`
           },
           odds_american: american,
           odds_decimal: decimal,
           game_date_utc: game.commence_time,
           game_date_local: this.toLocal(game.commence_time, TZ),
-          justification: `Selected from verified ${sportKey} data with ${bookmakers.length} bookmakers`,
-          confidence: 0.65 - (index * 0.05), // Slightly decreasing confidence
+          justification: `Selected from VERIFIED ${sportKey} schedule with ${bookmakers.length} bookmakers`,
+          confidence: 0.65 - (index * 0.05),
           fair_prob: 0.55,
-          data_quality: 'internal_api'
+          data_quality: 'verified_internal',
+          real_game_validated: true
         };
       });
 
@@ -912,24 +957,26 @@ class AIService {
         confidence_score: 0.70,
         parlay_odds_decimal: parlayDec,
         parlay_odds_american: parlayAm,
-        source: 'enhanced_internal_api',
+        source: 'verified_internal_api',
         data_quality: this._assessParlayDataQuality(legs),
         research_metadata: {
           sport: sportKey,
           legs_requested: numLegs,
           legs_delivered: legs.length,
           generated_at: new Date().toISOString(),
-          data_source: gamesService.constructor.name,
-          game_variety: new Set(legs.map(l => l.game)).size
+          data_source: 'verified_schedule',
+          game_variety: new Set(legs.map(l => l.game)).size,
+          real_games_validated: true,
+          schedule_verified: true
         }
       };
     } catch (error) {
-      console.error('Enhanced context-based parlay generation failed:', error.message);
-      throw new Error(`Internal data service error: ${error.message}`);
+      console.error('Verified context-based parlay generation failed:', error.message);
+      throw new Error(`Verified schedule error: ${error.message}`);
     }
   }
 
-  // Enhanced generic chat method for analytics
+  // Enhanced generic chat method
   async genericChat(model, messages, options = {}) {
     const chatId = `chat_${Date.now()}`;
     console.log(`💬 Processing generic chat request (${chatId})...`);
@@ -946,17 +993,11 @@ class AIService {
 
     } catch (error) {
       console.error(`❌ Generic chat failed (${chatId}):`, error.message);
-      sentryService.captureError(error, { 
-        component: 'ai_service', 
-        operation: 'genericChat',
-        model,
-        chatId 
-      });
       throw error;
     }
   }
 
-  // Enhanced validation for analytics
+  // Enhanced validation
   async validateOdds(oddsData) {
     try {
       if (!oddsData || !Array.isArray(oddsData)) {
@@ -997,7 +1038,6 @@ class AIService {
     console.log(`🔄 Handling fallback to ${mode} mode for ${sportKey}...`);
     
     try {
-      // Enhanced fallback logic
       switch (mode) {
         case 'live':
           return await this.generateContextBasedParlay(sportKey, numLegs, betType, { useLiveData: true });
@@ -1012,7 +1052,7 @@ class AIService {
     }
   }
 
-_assessMarketVariety(legs, betType, includeProps) {
+  _assessMarketVariety(legs, betType, includeProps) {
     if (!legs || legs.length === 0) {
         return { score: 0, meetsRequirements: false };
     }
@@ -1023,7 +1063,6 @@ _assessMarketVariety(legs, betType, includeProps) {
     let varietyScore = 0;
     const requirements = [];
     
-    // Base score for market diversity
     if (uniqueMarkets.size >= 2) {
         varietyScore += 0.4;
         requirements.push('multiple_markets');
@@ -1034,7 +1073,6 @@ _assessMarketVariety(legs, betType, includeProps) {
         requirements.push('high_diversity');
     }
     
-    // Bet type specific requirements
     if (betType === 'mixed' && includeProps) {
         const hasPlayerProps = markets.some(m => m.includes('player_'));
         const hasOtherMarkets = markets.some(m => !m.includes('player_'));
@@ -1044,7 +1082,7 @@ _assessMarketVariety(legs, betType, includeProps) {
             requirements.push('mixed_with_props');
         } else if (!hasPlayerProps) {
             requirements.push('missing_player_props');
-            varietyScore -= 0.2; // Penalty for missing props when requested
+            varietyScore -= 0.2;
         }
     }
     
@@ -1052,7 +1090,7 @@ _assessMarketVariety(legs, betType, includeProps) {
         const allPlayerProps = markets.every(m => m.includes('player_'));
         if (!allPlayerProps) {
             requirements.push('non_prop_included');
-            varietyScore -= 0.3; // Penalty for non-prop in props-only
+            varietyScore -= 0.3;
         }
     }
     
@@ -1070,9 +1108,9 @@ _assessMarketVariety(legs, betType, includeProps) {
             hasTotals: markets.some(m => m === 'totals')
         }
     };
-}
+  }
   
-  // ========== PRIVATE ENHANCED METHODS ==========
+  // ========== PRIVATE METHODS ==========
 
   async _executeWithTimeout(promise, timeoutMs, operation) {
     return Promise.race([
@@ -1090,7 +1128,6 @@ _assessMarketVariety(legs, betType, includeProps) {
       this.generationStats.failedRequests++;
     }
 
-    // Update rolling average processing time
     if (this.generationStats.averageProcessingTime === 0) {
       this.generationStats.averageProcessingTime = processingTime;
     } else {
@@ -1108,18 +1145,21 @@ _assessMarketVariety(legs, betType, includeProps) {
     let score = 0;
     const factors = [];
 
-    // Leg count quality
     if (legs.length >= 3) {
       score += 20;
       factors.push('good_leg_count');
     }
 
-    // Data source quality
-    const aiGeneratedLegs = legs.filter(l => l.data_quality === 'ai_generated').length;
-    const internalLegs = legs.filter(l => l.data_quality === 'internal_api').length;
+    const verifiedLegs = legs.filter(l => l.real_game_validated).length;
+    const aiLegs = legs.filter(l => l.data_quality === 'ai_generated').length;
+    const internalLegs = legs.filter(l => l.data_quality === 'verified_internal').length;
     
-    if (aiGeneratedLegs > 0) {
-      score += 30;
+    if (verifiedLegs > 0) {
+      score += 40;
+      factors.push('verified_real_games');
+    }
+    if (aiLegs > 0) {
+      score += 20;
       factors.push('ai_enhanced_data');
     }
     if (internalLegs > 0) {
@@ -1127,25 +1167,10 @@ _assessMarketVariety(legs, betType, includeProps) {
       factors.push('verified_internal_data');
     }
 
-    // Odds quality
     const legsWithOdds = legs.filter(l => l.odds_american !== null).length;
     if (legsWithOdds === legs.length) {
       score += 20;
       factors.push('complete_odds_coverage');
-    }
-
-    // Date quality
-    const legsWithDates = legs.filter(l => l.game_date_utc).length;
-    if (legsWithDates === legs.length) {
-      score += 15;
-      factors.push('complete_date_coverage');
-    }
-
-    // Justification quality
-    const goodJustifications = legs.filter(l => l.justification && l.justification.length > 30).length;
-    if (goodJustifications === legs.length) {
-      score += 15;
-      factors.push('detailed_justifications');
     }
 
     return {
@@ -1154,11 +1179,10 @@ _assessMarketVariety(legs, betType, includeProps) {
       factors,
       breakdown: {
         total_legs: legs.length,
-        ai_enhanced: aiGeneratedLegs,
+        verified_games: verifiedLegs,
+        ai_enhanced: aiLegs,
         internal_data: internalLegs,
-        with_odds: legsWithOdds,
-        with_dates: legsWithDates,
-        with_justifications: goodJustifications
+        with_odds: legsWithOdds
       }
     };
   }
@@ -1168,7 +1192,6 @@ _assessMarketVariety(legs, betType, includeProps) {
       return games || [];
     }
 
-    // Enhanced diversity selection
     const selected = [];
     const usedTeams = new Set();
     
@@ -1178,7 +1201,6 @@ _assessMarketVariety(legs, betType, includeProps) {
       const homeTeam = game.home_team;
       const awayTeam = game.away_team;
       
-      // Prefer games with teams we haven't used yet
       if (!usedTeams.has(homeTeam) && !usedTeams.has(awayTeam)) {
         selected.push(game);
         usedTeams.add(homeTeam);
@@ -1186,7 +1208,6 @@ _assessMarketVariety(legs, betType, includeProps) {
       }
     }
 
-    // If we still need more games, fill with any available
     if (selected.length < numLegs) {
       for (const game of games) {
         if (selected.length >= numLegs) break;
@@ -1202,7 +1223,6 @@ _assessMarketVariety(legs, betType, includeProps) {
   _selectAppropriateMarket(bookmakers, betType) {
     if (!bookmakers || bookmakers.length === 0) return null;
 
-    // Enhanced market selection based on bet type
     const markets = bookmakers.flatMap(b => b.markets || []);
     
     if (betType === 'props') {
@@ -1212,7 +1232,6 @@ _assessMarketVariety(legs, betType, includeProps) {
     } else if (betType === 'moneyline') {
       return markets.find(m => m.key === 'h2h') || markets[0];
     } else {
-      // Mixed - prefer spreads and totals for variety
       return markets.find(m => m.key === 'spreads') || 
              markets.find(m => m.key === 'totals') || 
              markets.find(m => m.key === 'h2h') || 
@@ -1238,7 +1257,6 @@ _assessMarketVariety(legs, betType, includeProps) {
     }
   }
 
-  // Enhanced service status method
   async getServiceStatus() {
     const status = {
       service: 'AIService',
@@ -1248,7 +1266,8 @@ _assessMarketVariety(legs, betType, includeProps) {
         web_research: true,
         context_based: true,
         generic_chat: true,
-        odds_validation: true
+        odds_validation: true,
+        real_schedule_validation: true
       },
       statistics: this.generationStats,
       providers: {
@@ -1263,7 +1282,6 @@ _assessMarketVariety(legs, betType, includeProps) {
       }
     };
 
-    // Test AI provider connectivity
     try {
       if (env.GOOGLE_GEMINI_API_KEY) {
         await pickSupportedModel(env.GOOGLE_GEMINI_API_KEY);
@@ -1275,8 +1293,6 @@ _assessMarketVariety(legs, betType, includeProps) {
       status.providers.gemini.status = 'error';
       status.status = 'degraded';
     }
-
-    // Note: Perplexity connectivity is tested during actual calls
 
     return status;
   }
