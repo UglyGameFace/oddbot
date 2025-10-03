@@ -1,3 +1,6 @@
+PopularSports,
+  searchSports
+};
 // src/services/sportsService.js
 import { 
   COMPREHENSIVE_SPORTS, 
