@@ -498,6 +498,7 @@ function createAnalystPrompt({ sportKey, numLegs, betType, hours, includeProps =
 4.  **JSON Only:** The final response MUST be PURE JSON. No explanations, no markdown, no text before or after the JSON.
 5.  **American Odds Format:** Use numbers only (e.g., -150 or 125). DO NOT include "+" signs.`;
 }
+
 // ---------- Enhanced Perplexity with better error handling ----------
 async function callPerplexity(prompt) {
   const { PERPLEXITY_API_KEY } = env;
