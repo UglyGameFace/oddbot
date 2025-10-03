@@ -1,3 +1,5 @@
+etParlaySlip(chatId, slip);
+}
 // src/bot/handlers/custom.js
 
 import env from '../../config/env.js';
@@ -15,6 +17,7 @@ import {
   toAmerican as toAmericanFromDecimal,
   impliedProbability,
 } from '../../utils/enterpriseUtilities.js';
+import { safeEditMessage } from '../../bot.js'; // ✅ ADDED MISSING IMPORT
 
 const tz = env.TIMEZONE || 'America/New_York';
 
@@ -169,7 +172,7 @@ async function sendCustomSportSelection(bot, chatId, messageId = null) {
 
   const text = '✍️ *Manual Parlay Builder*\n\nSelect sports (toggle), then proceed:';
   const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } };
-  if (messageId) return bot.editMessageText(text, { ...opts, chat_id: chatId, message_id: messageId });
+  if (messageId) return safeEditMessage(chatId, messageId, text, opts);
   return bot.sendMessage(chatId, text, opts);
 }
 
@@ -182,7 +185,7 @@ async function sendCustomGamesFromSelected(bot, chatId, messageId) {
   const pooled = applyFilters(perSport.flat(), { cutoffHours: b.cutoffHours, excludedTeams: b.excludedTeams });
 
   if (!pooled.length) {
-    return bot.editMessageText('No upcoming games found for your selections/filters.', { chat_id: chatId, message_id: messageId });
+    return safeEditMessage(chatId, messageId, 'No upcoming games found for your selections/filters.');
   }
 
   const rows = pooled.slice(0, 10).map((g) => [{
@@ -191,14 +194,14 @@ async function sendCustomGamesFromSelected(bot, chatId, messageId) {
   }]);
   rows.push([{ text: '« Back to Sports', callback_data: 'cback_sports' }]);
 
-  await bot.editMessageText('Select a game:', { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: rows } });
+  await safeEditMessage(chatId, messageId, 'Select a game:', { reply_markup: { inline_keyboard: rows } });
 }
 
 async function sendMarketSelection(bot, chatId, eventId, messageId) {
   const g = await gamesService.getGameDetails(eventId);
   const bks = getBookmakers(g);
   if (!bks?.length) {
-    return bot.editMessageText('Could not find market data.', { chat_id: chatId, message_id: messageId });
+    return safeEditMessage(chatId, messageId, 'Could not find market data.');
   }
   const keys = (bks[0]?.markets || []).map((m) => m.key);
   const row = [];
@@ -207,9 +210,11 @@ async function sendMarketSelection(bot, chatId, eventId, messageId) {
   if (keys.includes('totals')) row.push({ text: 'Totals', callback_data: `cm_${g.event_id}_totals` });
 
   const rows = [row, [{ text: '« Back to Games', callback_data: 'custom_sports_proceed' }]];
-  await bot.editMessageText(
+  await safeEditMessage(
+    chatId,
+    messageId,
     `*${g.away_team} @ ${g.home_team}*\n${formatGameTimeTZ(g.commence_time)}\n\nSelect a market:`,
-    { parse_mode: 'Markdown', chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: rows } }
+    { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } }
   );
 }
 
@@ -218,7 +223,7 @@ async function sendPickSelection(bot, chatId, eventId, marketKey, messageId) {
   const bks = getBookmakers(g);
   const m = bks?.[0]?.markets?.find((x) => x.key === marketKey);
   if (!m) {
-    return bot.editMessageText('Market not available.', { chat_id: chatId, message_id: messageId });
+    return safeEditMessage(chatId, messageId, 'Market not available.');
   }
 
   const rows = [];
@@ -233,8 +238,8 @@ async function sendPickSelection(bot, chatId, eventId, marketKey, messageId) {
   }
   rows.push([{ text: '« Back to Markets', callback_data: `cg_${g.event_id}` }]);
 
-  await bot.editMessageText(`Select your pick for *${marketKey}*:`, {
-    parse_mode: 'Markdown', chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: rows }
+  await safeEditMessage(chatId, messageId, `Select your pick for *${marketKey}*:`, {
+    parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows }
   });
 }
 
@@ -312,6 +317,6 @@ async function renderParlaySlip(bot, chatId) {
     [{ text: `💵 Stake: $${Number(slip.stake || 0).toFixed(2)}`, callback_data: 'cslip_stake' }],
   ];
 
-  await bot.editMessageText(text, { parse_mode: 'Markdown', chat_id: chatId, message_id: slip.messageId, reply_markup: { inline_keyboard: rows } });
+  await safeEditMessage(chatId, slip.messageId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } });
   await setParlaySlip(chatId, slip);
 }
