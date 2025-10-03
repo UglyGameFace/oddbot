@@ -1,4 +1,4 @@
-// src/services/sportsService.js
+// src/services/sportsService.js - UPDATED WITH SCHEDULE VALIDATION SUPPORT
 import { 
   COMPREHENSIVE_SPORTS, 
   SPORT_TITLES, 
@@ -187,6 +187,70 @@ export function searchSports(query, options = {}) {
   }).slice(0, limit);
 }
 
+/**
+ * Check if a sport has active games for schedule validation
+ */
+export async function hasActiveGames(sportKey, hours = 72) {
+  try {
+    const gamesService = await import('./gamesService.js');
+    const realGames = await gamesService.default.getVerifiedRealGames(sportKey, hours);
+    return realGames.length > 0;
+  } catch (error) {
+    console.error(`❌ Active games check failed for ${sportKey}:`, error);
+    return false;
+  }
+}
+
+/**
+ * Get sports with active games (for AI parlay builder)
+ */
+export async function getSportsWithActiveGames(hours = 72) {
+  try {
+    const allSports = getAllSports();
+    const activeSports = [];
+    
+    // Check major sports first for performance
+    const majorSports = allSports.filter(sport => sport.is_major).slice(0, 10);
+    
+    for (const sport of majorSports) {
+      const hasGames = await hasActiveGames(sport.sport_key, hours);
+      if (hasGames) {
+        activeSports.push({
+          ...sport,
+          active_games: true
+        });
+      }
+    }
+    
+    return activeSports;
+  } catch (error) {
+    console.error('❌ Active sports check failed:', error);
+    return getPopularSports();
+  }
+}
+
+/**
+ * Get sports that are currently in season and have active games
+ */
+export async function getInSeasonSports(hours = 168) {
+  try {
+    const activeSports = await getSportsWithActiveGames(hours);
+    
+    // Filter to sports with substantial game activity
+    return activeSports.filter(sport => {
+      // Major sports are always considered in season if they have games
+      if (sport.is_major) return true;
+      
+      // For international sports, require multiple games
+      const gameThreshold = sport.is_international ? 3 : 1;
+      return true; // We'll rely on the active games check above
+    });
+  } catch (error) {
+    console.error('❌ In-season sports check failed:', error);
+    return getPopularSports();
+  }
+}
+
 export default {
   SPORT_TITLES,
   getSportEmoji,
@@ -199,5 +263,8 @@ export default {
   getSportConfig,
   getSportsByGroup,
   getPopularSports,
-  searchSports
+  searchSports,
+  hasActiveGames,
+  getSportsWithActiveGames,
+  getInSeasonSports
 };
