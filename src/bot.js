@@ -1,4 +1,4 @@
-// src/bot.js - CORRECTED AND ALIGNED VERSION
+// src/bot.js - FIXED COMMAND REGISTRATION
 import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
@@ -12,7 +12,7 @@ import { registerAnalytics } from './bot/handlers/analytics.js';
 import { registerModel } from './bot/handlers/model.js';
 import { registerCacheHandler } from './bot/handlers/cache.js';
 import { registerCustom } from './bot/handlers/custom.js';
-import { registerAI } from './bot/handlers/ai.js'; // ✅ ADDED MISSING IMPORT
+import { registerAI } from './bot/handlers/ai.js';
 import { registerQuant } from './bot/handlers/quant.js';
 import { registerPlayer } from './bot/handlers/player.js';
 import { registerSettings } from './bot/handlers/settings.js';
@@ -226,6 +226,61 @@ server = app.listen(PORT, HOST, () => {
   console.log(`✅ Server listening on ${HOST}:${PORT}. Health checks are live.`);
 });
 
+// Enhanced command registration function
+async function registerAllCommands() {
+  console.log('🔧 Starting comprehensive command registration...');
+  
+  try {
+    // Register all command handlers
+    console.log('📝 Registering AI commands...');
+    registerAI(bot);
+    
+    console.log('📝 Registering Analytics commands...');
+    registerAnalytics(bot);
+    
+    console.log('📝 Registering Model commands...');
+    registerModel(bot);
+    
+    console.log('📝 Registering Cache commands...');
+    registerCacheHandler(bot);
+    
+    console.log('📝 Registering Custom commands...');
+    registerCustom(bot);
+    
+    console.log('📝 Registering Quant commands...');
+    registerQuant(bot);
+    
+    console.log('📝 Registering Player commands...');
+    registerPlayer(bot);
+    
+    console.log('📝 Registering Settings commands...');
+    registerSettings(bot);
+    
+    console.log('📝 Registering System commands...');
+    registerSystem(bot);
+    
+    console.log('📝 Registering Tools commands...');
+    registerTools(bot);
+    
+    console.log('📝 Registering Chat commands...');
+    registerChat(bot);
+    
+    console.log('✅ All command handlers registered successfully');
+    
+    // Test command registration
+    bot.on('message', (msg) => {
+      if (msg.text && msg.text.startsWith('/')) {
+        console.log(`📨 Received command: ${msg.text} from ${msg.chat.id}`);
+      }
+    });
+    
+    return true;
+  } catch (error) {
+    console.error('❌ Command registration failed:', error);
+    throw error;
+  }
+}
+
 // Main async function to initialize bot and services
 async function initializeBot() {
   // Prevent multiple concurrent initializations
@@ -243,24 +298,17 @@ async function initializeBot() {
       // Initialize bot with appropriate mode
       const botOptions = {
         polling: !USE_WEBHOOK,
+        request: {
+          timeout: 60000
+        }
       };
       
       bot = new TelegramBot(TOKEN, botOptions);
+      console.log('✅ Telegram Bot instance created');
 
-      // Register handlers
-      console.log('🔧 Registering command handlers...');
-      registerAnalytics(bot); 
-      registerModel(bot); 
-      registerCacheHandler(bot);
-      registerCustom(bot); 
-      registerAI(bot); // ✅ NOW THIS WILL WORK
-      registerQuant(bot);
-      registerPlayer(bot); 
-      registerSettings(bot); 
-      registerSystem(bot); 
-      registerTools(bot); 
-      registerChat(bot);
-      console.log('✅ Command handlers registered.');
+      // Register ALL command handlers BEFORE any webhook/polling setup
+      console.log('🔧 Registering all command handlers...');
+      await registerAllCommands();
       
       // Register all callback query handlers
       console.log('🔧 Registering callback handlers...');
@@ -278,7 +326,14 @@ async function initializeBot() {
 
         try {
           const currentWebhook = await bot.getWebHookInfo();
+          console.log('📋 Current webhook info:', {
+            url: currentWebhook.url ? `${currentWebhook.url.substring(0, 50)}...` : 'None',
+            has_custom_certificate: currentWebhook.has_custom_certificate,
+            pending_update_count: currentWebhook.pending_update_count
+          });
+
           if (currentWebhook.url !== targetWebhookUrl) {
+            console.log(`🔄 Setting webhook to: ${targetWebhookUrl}`);
             await bot.setWebHook(targetWebhookUrl, {
               secret_token: WEBHOOK_SECRET || undefined,
             });
@@ -300,6 +355,7 @@ async function initializeBot() {
               next();
             },
             (req, res) => {
+              console.log('📨 Webhook received update');
               bot.processUpdate(req.body);
               res.sendStatus(200);
             }
@@ -310,6 +366,13 @@ async function initializeBot() {
         }
       } else {
         console.log('🔍 Using polling mode...');
+        // Start polling explicitly
+        bot.startPolling().then(() => {
+          console.log('✅ Bot polling started successfully');
+        }).catch(pollError => {
+          console.error('❌ Bot polling failed:', pollError);
+          throw pollError;
+        });
       }
 
       sentryService.attachExpressPostRoutes?.(app);
@@ -318,7 +381,7 @@ async function initializeBot() {
       isServiceReady = true;
       console.log('🎯 Service marked as ready for health checks');
 
-      // Telegram commands
+      // Set Telegram bot commands for menu
       const commands = [
         { command: 'ai', description: 'Launch the AI Parlay Builder' },
         { command: 'chat', description: 'Ask questions (compact chatbot)' },
@@ -333,11 +396,24 @@ async function initializeBot() {
       try {
         await bot.setMyCommands(commands);
         const me = await bot.getMe();
-        console.log(`✅ Bot @${me.username} fully initialized.`);
+        console.log(`✅ Bot @${me.username} fully initialized with ${commands.length} commands.`);
+        
+        // Test that bot is responsive
+        console.log('🧪 Testing bot responsiveness...');
+        const testCommands = await bot.getMyCommands();
+        console.log(`✅ Bot commands verified: ${testCommands.length} commands loaded`);
+        
       } catch (botError) {
         console.error('❌ Bot initialization failed:', botError.message);
         throw botError;
       }
+
+      // Enhanced logging for received messages
+      bot.on('message', (msg) => {
+        if (msg.text && msg.text.startsWith('/')) {
+          console.log(`🎯 Command received: "${msg.text}" from user ${msg.from.id} in chat ${msg.chat.id}`);
+        }
+      });
 
       // Liveness heartbeat (less frequent to reduce logs)
       keepAliveInterval = setInterval(() => {
@@ -346,12 +422,13 @@ async function initializeBot() {
         }
       }, 600000); // 10 minutes
 
-      console.log('🎉 Application startup complete!');
+      console.log('🎉 Application startup complete! Bot should now respond to commands.');
       return true;
     } catch (error) {
       isServiceReady = false;
       initializationPromise = null;
       console.error('💥 Initialization failed:', error.message);
+      console.error('Stack trace:', error.stack);
       throw error;
     }
   })();
