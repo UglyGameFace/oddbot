@@ -1,5 +1,3 @@
-etParlaySlip(chatId, slip);
-}
 // src/bot/handlers/custom.js
 
 import env from '../../config/env.js';
