@@ -1,4 +1,4 @@
-// src/services/quantitativeService.js - ENHANCED MODULAR VERSION
+// src/services/quantitativeService.js - ENHANCED MODULAR VERSION WITH REAL GAME VALIDATION
 
 /**
  * @typedef {Object} Leg
@@ -10,6 +10,7 @@
  * @property {number} [odds_decimal]     // Leg decimal odds if available
  * @property {{ decimal?: number }} [best_quote] // Fallback decimal quote
  * @property {number} [no_vig_prob]      // Optional no-vig implied prob if precomputed
+ * @property {boolean} [real_game_validated] // Whether leg was validated against real schedule
  */
 
 /**
@@ -30,6 +31,7 @@
  * @property {{bestCombination:any, allCombinations:any[], recommendation:string}} optimalStructure
  * @property {{breakevenProbability:number, safetyMargin:number}} breakeven
  * @property {{kellyFraction:number, kellyFractionHalf:number}} staking
+ * @property {{real_games_validated:number, total_legs:number, validation_rate:number, data_quality:string, recommendation:string}} validation
  */
 
 // Probability calculation utilities
@@ -106,11 +108,30 @@ class LegProbabilityResolver {
 
 // Risk assessment engine
 class RiskAssessmentEngine {
-  static assessRisks(legs, calibrated) {
+  static assessRisks(legs, calibrated, validationMetrics = null) {
     const risks = [];
     const markets = legs.map((leg) => leg.market);
     const uniqueGames = new Set(legs.map((leg) => leg.game));
     const numLegs = legs.length;
+
+    // Add validation risks if available
+    if (validationMetrics) {
+      if (validationMetrics.validation_rate < 0.5) {
+        risks.push({
+          type: 'VALIDATION',
+          severity: 'HIGH',
+          message: 'Low real game validation rate',
+          impact: 'Many legs may be based on non-existent games'
+        });
+      } else if (validationMetrics.validation_rate < 0.8) {
+        risks.push({
+          type: 'VALIDATION',
+          severity: 'MEDIUM',
+          message: 'Moderate real game validation rate',
+          impact: 'Some legs may not be verified'
+        });
+      }
+    }
 
     // Correlation risk (same games)
     const sameGameRatio = uniqueGames.size / numLegs;
@@ -193,7 +214,7 @@ class CalibrationEngine {
     this.factors = calibrationFactors;
   }
 
-  applyComprehensiveCalibration(rawProbabilities, rawJointProb, bookmakerJointProb, legs) {
+  applyComprehensiveCalibration(rawProbabilities, rawJointProb, bookmakerJointProb, legs, validationMetrics = null) {
     // 1) Shrink individual probabilities toward 0.5 to reduce overconfidence
     const shrunkProbabilities = rawProbabilities.map((p) => {
       const s = p.raw * (1 - this.factors.overconfidenceShrinkage)
@@ -215,9 +236,16 @@ class CalibrationEngine {
     // 5) Line movement risk per leg
     const finalProbability = vigAdjustedProb * Math.pow(1 - this.factors.lineMovementRisk, legs.length);
 
+    // 6) Apply validation penalty if low validation rate
+    let validationAdjustedProb = finalProbability;
+    if (validationMetrics && validationMetrics.validation_rate < 0.8) {
+      const validationPenalty = 1 - (validationMetrics.validation_rate * 0.5); // Up to 50% penalty for poor validation
+      validationAdjustedProb = finalProbability * (1 - validationPenalty);
+    }
+
     // Ensure not below 80% of bookmaker implied probability
     const realisticProbability = Math.max(
-      finalProbability,
+      validationAdjustedProb,
       bookmakerJointProb * 0.8
     );
 
@@ -228,7 +256,8 @@ class CalibrationEngine {
         shrinkage: this.factors.overconfidenceShrinkage,
         correlationPenalty,
         vigAdjustment: this.factors.vigAdjustment,
-        lineMovementRisk: this.factors.lineMovementRisk
+        lineMovementRisk: this.factors.lineMovementRisk,
+        validationPenalty: validationMetrics ? (1 - validationMetrics.validation_rate) * 0.5 : 0
       }
     };
   }
@@ -263,8 +292,29 @@ class CalibrationEngine {
 
 // Recommendation engine
 class RecommendationEngine {
-  static generateRecommendations(calibrated, rawEV, calibratedEV, numLegs, riskAssessment) {
+  static generateRecommendations(calibrated, rawEV, calibratedEV, numLegs, riskAssessment, validationMetrics = null) {
     const recommendations = [];
+
+    // Validation-based recommendations
+    if (validationMetrics) {
+      if (validationMetrics.validation_rate < 0.5) {
+        recommendations.push({
+          type: 'VALIDATION_ISSUE',
+          priority: 'HIGH',
+          message: 'Low real game validation - many legs may be based on non-existent games',
+          action: 'Use verified schedule data or try Live mode',
+          confidence: 'high'
+        });
+      } else if (validationMetrics.validation_rate < 0.8) {
+        recommendations.push({
+          type: 'VALIDATION_WARNING',
+          priority: 'MEDIUM',
+          message: 'Moderate real game validation - some legs may not be verified',
+          action: 'Consider using Live mode for better verification',
+          confidence: 'medium'
+        });
+      }
+    }
 
     // EV-based recommendations
     if (calibratedEV > 10) {
@@ -431,9 +481,22 @@ class QuantitativeService {
         market: leg.market,
         player: leg.pick,
         game: leg.game,
-        odds
+        odds,
+        validated: leg.real_game_validated || false
       };
     });
+
+    // Calculate validation metrics
+    const validatedLegs = legs.filter(leg => leg.real_game_validated).length;
+    const validationRate = validatedLegs / legs.length;
+    const validationMetrics = {
+      real_games_validated: validatedLegs,
+      total_legs: legs.length,
+      validation_rate: validationRate,
+      data_quality: validationRate > 0.8 ? 'HIGH' : validationRate > 0.5 ? 'MEDIUM' : 'LOW',
+      recommendation: validationRate < 0.5 ? 
+        'Consider using verified schedule data' : 'Good real game coverage'
+    };
 
     // If parlay odds not provided, approximate by multiplying leg odds
     const computedParlayOdds = rawProbabilities.reduce(
@@ -451,29 +514,32 @@ class QuantitativeService {
     this.logger.info?.('🔬 QUANTITATIVE ANALYSIS');
     this.logger.info?.(`- Raw Joint Probability: ${(rawJointProbability * 100).toFixed(2)}%`);
     this.logger.info?.(`- Bookmaker Implied: ${(bookmakerJointProbability * 100).toFixed(2)}%`);
+    this.logger.info?.(`- Real Game Validation: ${validatedLegs}/${legs.length} legs (${(validationRate * 100).toFixed(1)}%)`);
 
-    // Apply comprehensive calibration
+    // Apply comprehensive calibration with validation metrics
     const calibrated = this.calibrationEngine.applyComprehensiveCalibration(
       rawProbabilities,
       rawJointProbability,
       bookmakerJointProbability,
-      legs
+      legs,
+      validationMetrics
     );
 
     // EVs (percentage terms)
     const rawEV = ProbabilityCalculator.calculateEV(decimalOdds, rawJointProbability);
     const calibratedEV = ProbabilityCalculator.calculateEV(decimalOdds, calibrated.jointProbability);
 
-    // Risk assessment
-    const riskAssessment = RiskAssessmentEngine.assessRisks(legs, calibrated);
+    // Risk assessment with validation metrics
+    const riskAssessment = RiskAssessmentEngine.assessRisks(legs, calibrated, validationMetrics);
 
-    // Recommendations
+    // Recommendations with validation metrics
     const recommendations = RecommendationEngine.generateRecommendations(
       calibrated,
       rawEV,
       calibratedEV,
       legs.length,
-      riskAssessment
+      riskAssessment,
+      validationMetrics
     );
 
     // Optimal structure suggestion
@@ -503,6 +569,7 @@ class QuantitativeService {
       riskAssessment,
       recommendations,
       optimalStructure,
+      validation: validationMetrics,
       breakeven: {
         breakevenProbability,
         safetyMargin
@@ -510,9 +577,41 @@ class QuantitativeService {
       staking: {
         kellyFraction,
         kellyFractionHalf,
-        recommendedStake: this.calculateRecommendedStake(kellyFractionHalf, riskAssessment.overallRisk)
+        recommendedStake: this.calculateRecommendedStake(kellyFractionHalf, riskAssessment.overallRisk, validationRate)
       },
-      summary: this.generateSummary(calibratedEV, riskAssessment, recommendations)
+      summary: this.generateSummary(calibratedEV, riskAssessment, recommendations, validationMetrics)
+    };
+  }
+
+  /**
+   * Enhanced evaluation with real game validation
+   */
+  async evaluateParlayWithValidation(legs, parlayDecimalOdds, sportKey) {
+    if (!Array.isArray(legs) || legs.length === 0) {
+      return { error: 'No legs provided for evaluation' };
+    }
+
+    // Check if legs are validated against real games
+    const validatedLegs = legs.filter(leg => leg.real_game_validated);
+    const validationRate = validatedLegs.length / legs.length;
+    
+    if (validationRate < 0.5) {
+      console.warn(`⚠️ Low real game validation: ${validatedLegs.length}/${legs.length} legs validated`);
+    }
+
+    const baseEvaluation = await this.evaluateParlay(legs, parlayDecimalOdds);
+    
+    // Add validation metrics to the evaluation
+    return {
+      ...baseEvaluation,
+      validation: {
+        real_games_validated: validatedLegs.length,
+        total_legs: legs.length,
+        validation_rate: validationRate,
+        data_quality: validationRate > 0.8 ? 'HIGH' : validationRate > 0.5 ? 'MEDIUM' : 'LOW',
+        recommendation: validationRate < 0.5 ? 
+          'Consider using verified schedule data' : 'Good real game coverage'
+      }
     };
   }
 
@@ -571,21 +670,35 @@ class QuantitativeService {
 
   // ========== PRIVATE METHODS ==========
 
-  calculateRecommendedStake(kellyFraction, riskLevel) {
+  calculateRecommendedStake(kellyFraction, riskLevel, validationRate = 1.0) {
     const riskMultipliers = { LOW: 1.0, MODERATE: 0.7, ELEVATED: 0.4, HIGH: 0.2 };
     const multiplier = riskMultipliers[riskLevel] || 0.5;
-    return Math.min(0.1, kellyFraction * multiplier); // Cap at 10% of bankroll
+    
+    // Apply validation rate penalty
+    const validationMultiplier = Math.min(1.0, validationRate * 1.2); // Up to 20% boost for full validation
+    
+    return Math.min(0.1, kellyFraction * multiplier * validationMultiplier); // Cap at 10% of bankroll
   }
 
-  generateSummary(calibratedEV, riskAssessment, recommendations) {
+  generateSummary(calibratedEV, riskAssessment, recommendations, validationMetrics = null) {
     const primaryRec = recommendations[0];
     
+    let verdict = calibratedEV > 0 ? 'CONSIDER_BET' : 'AVOID_BET';
+    let confidence = riskAssessment.overallRisk === 'LOW' ? 'HIGH' : 'MEDIUM';
+    
+    // Adjust based on validation
+    if (validationMetrics && validationMetrics.validation_rate < 0.5) {
+      verdict = 'AVOID_BET';
+      confidence = 'LOW';
+    }
+    
     return {
-      verdict: calibratedEV > 0 ? 'CONSIDER_BET' : 'AVOID_BET',
-      confidence: riskAssessment.overallRisk === 'LOW' ? 'HIGH' : 'MEDIUM',
+      verdict,
+      confidence,
       keyMetric: `Calibrated EV: ${calibratedEV.toFixed(2)}%`,
       primaryRecommendation: primaryRec?.action || 'No specific recommendation',
-      riskLevel: riskAssessment.overallRisk
+      riskLevel: riskAssessment.overallRisk,
+      validationStatus: validationMetrics?.data_quality || 'UNKNOWN'
     };
   }
 
