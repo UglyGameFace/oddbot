@@ -1,4 +1,4 @@
-// src/bot/state.js
+// src/bot/state.js - UPDATED WITH VALIDATION PREFERENCES
 import env from '../config/env.js';
 import { sentryService } from '../services/sentryService.js';
 import redisClient from '../services/redisService.js';
@@ -54,14 +54,20 @@ async function getConfig(telegramId, type) {
             horizonHours: 72,
             quantitativeMode: 'conservative',
             includeProps: false,
-            proQuantMode: false
+            proQuantMode: false,
+            // NEW: Validation preferences
+            enforceRealGames: true,
+            maxValidationTime: 10000,
+            fallbackOnNoGames: true
         },
         builder: { 
             minOdds: -200, 
             maxOdds: 500, 
             avoidSameGame: true, 
             cutoffHours: 48,
-            excludedTeams: []
+            excludedTeams: [],
+            // NEW: Validation preferences  
+            requireVerifiedGames: true
         },
     };
     // Return the specific config type, merged with defaults
@@ -89,6 +95,22 @@ export const setAIConfig = (id, cfg) => setConfig(id, 'ai', cfg);
 
 export const getBuilderConfig = (id) => getConfig(id, 'builder');
 export const setBuilderConfig = (id, cfg) => setConfig(id, 'builder', cfg);
+
+// --- Validation-specific state management ---
+export async function setValidationState(chatId, sportKey, validationData) {
+  const state = await getUserState(chatId);
+  state.validation = {
+    sportKey,
+    lastValidation: new Date().toISOString(),
+    ...validationData
+  };
+  await setUserState(chatId, state);
+}
+
+export async function getValidationState(chatId) {
+  const state = await getUserState(chatId);
+  return state.validation || null;
+}
 
 // --- Tokens (unchanged, good use for Redis) ---
 const tokenPrefix = `${PREFIX}token:`;
