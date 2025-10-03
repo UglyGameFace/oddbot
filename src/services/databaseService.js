@@ -1,4 +1,4 @@
-// src/services/databaseService.js - COMPLETE UPDATE
+// src/services/databaseService.js - COMPLETE UPDATE WITH SCHEDULE VALIDATION
 import { createClient } from '@supabase/supabase-js';
 import env from '../config/env.js';
 import { sentryService } from './sentryService.js';
@@ -167,6 +167,48 @@ class DatabaseService {
 
     } catch (error) {
       console.error(`❌ Supabase getUpcomingGames error for ${sportKey}:`, error.message);
+      return [];
+    }
+  }
+
+  /**
+   * Enhanced method to get verified real games for schedule validation
+   */
+  async getVerifiedRealGames(sportKey, hours = 72) {
+    if (!this.client) return [];
+    
+    try {
+      console.log(`🔍 Getting VERIFIED real games for ${sportKey} from database...`);
+      
+      const startTime = new Date().toISOString();
+      const endTime = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+
+      const { data, error } = await this.client
+        .from('games')
+        .select('*')
+        .eq('sport_key', sportKey)
+        .gte('commence_time', startTime)
+        .lte('commence_time', endTime)
+        .order('commence_time', { ascending: true });
+
+      if (error) throw error;
+
+      const verifiedGames = (data || []).map(game => ({
+        event_id: game.event_id,
+        commence_time: game.commence_time,
+        away_team: game.away_team,
+        home_team: game.home_team,
+        sport_key: game.sport_key,
+        sport_title: game.sport_title,
+        real: true,
+        source: 'database_verified'
+      }));
+
+      console.log(`✅ Database: ${verifiedGames.length} verified real games for ${sportKey}`);
+      return verifiedGames;
+
+    } catch (error) {
+      console.error(`❌ Database verified games fetch failed for ${sportKey}:`, error.message);
       return [];
     }
   }
