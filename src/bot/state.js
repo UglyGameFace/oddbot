@@ -19,8 +19,6 @@ const setWithTTL = async (c, k, v, ttl) => {
   if (!ttl) return c.set(k, v);
   // Use 'EX' flag in a flat list instead of an options object
   return c.set(k, v, 'EX', ttl);
-
-
 };
 
 // --- Conversational state (remains in Redis for speed) ---
@@ -49,8 +47,22 @@ export async function setParlaySlip(chatId, slip) {
 async function getConfig(telegramId, type) {
     const settings = await databaseService.getUserSettings(telegramId);
     const defaults = {
-        ai: { mode: 'web', model: 'perplexity', betType: 'mixed', horizonHours: 72 },
-        builder: { minOdds: -200, maxOdds: 500, avoidSameGame: true, cutoffHours: 48 },
+        ai: { 
+            mode: 'web', 
+            model: 'perplexity', 
+            betType: 'mixed', 
+            horizonHours: 72,
+            quantitativeMode: 'conservative',
+            includeProps: false,
+            proQuantMode: false
+        },
+        builder: { 
+            minOdds: -200, 
+            maxOdds: 500, 
+            avoidSameGame: true, 
+            cutoffHours: 48,
+            excludedTeams: []
+        },
     };
     // Return the specific config type, merged with defaults
     return { ...defaults[type], ...(settings[type] || {}) };
@@ -77,7 +89,6 @@ export const setAIConfig = (id, cfg) => setConfig(id, 'ai', cfg);
 
 export const getBuilderConfig = (id) => getConfig(id, 'builder');
 export const setBuilderConfig = (id, cfg) => setConfig(id, 'builder', cfg);
-
 
 // --- Tokens (unchanged, good use for Redis) ---
 const tokenPrefix = `${PREFIX}token:`;
