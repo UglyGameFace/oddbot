@@ -234,6 +234,9 @@ export function registerAI(bot) {
   bot.onText(/^\/ai_soccer$/, async (msg) => {
     await handleQuickSport(bot, msg.chat.id, 'soccer_england_premier_league');
   });
+
+  // Register AI help command
+  registerAIHelp(bot);
 }
 
 async function handleQuickSport(bot, chatId, sportKey) {
@@ -905,7 +908,6 @@ async function executeAiRequest(bot, chatId, messageId) {
       await setUserState(chatId, {});
     }
 }
-
 
 // --- Help Command ---
 export function registerAIHelp(bot) {
