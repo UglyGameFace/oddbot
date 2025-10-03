@@ -11,13 +11,15 @@ import { registerAllCallbacks } from './bot/handlers/callbackManager.js';
 import { registerAnalytics } from './bot/handlers/analytics.js';
 import { registerModel } from './bot/handlers/model.js';
 import { registerCacheHandler } from './bot/handlers/cache.js';
-import { registerCustom } from './bot/handlers/custom.js'; // FIX: Removed registerCustomCallbacks        // FIX: Removed registerAICallbacks
+import { registerCustom } from './bot/handlers/custom.js';
+import { registerAI } from './bot/handlers/ai.js'; // ✅ ADDED MISSING IMPORT
 import { registerQuant } from './bot/handlers/quant.js';
-import { registerPlayer } from './bot/handlers/player.js'; // FIX: Removed registerPlayerCallbacks
-import { registerSettings } from './bot/handlers/settings.js'; // FIX: Removed registerSettingsCallbacks
-import { registerSystem } from './bot/handlers/system.js'; // FIX: Removed registerSystemCallbacks
-import { registerTools } from './bot/handlers/tools.js';     // FIX: Removed registerCommonCallbacks
+import { registerPlayer } from './bot/handlers/player.js';
+import { registerSettings } from './bot/handlers/settings.js';
+import { registerSystem } from './bot/handlers/system.js';
+import { registerTools } from './bot/handlers/tools.js';
 import { registerChat } from './bot/handlers/chat.js';
+
 // --- Global error hooks ---
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ UNHANDLED REJECTION AT:', promise, 'REASON:', reason);
@@ -251,7 +253,7 @@ async function initializeBot() {
       registerModel(bot); 
       registerCacheHandler(bot);
       registerCustom(bot); 
-      registerAI(bot); 
+      registerAI(bot); // ✅ NOW THIS WILL WORK
       registerQuant(bot);
       registerPlayer(bot); 
       registerSettings(bot); 
@@ -264,7 +266,6 @@ async function initializeBot() {
       console.log('🔧 Registering callback handlers...');
       registerAllCallbacks(bot);
       console.log('✅ All callback handlers registered.');
-
 
       app.use(express.json());
       sentryService.attachExpressPreRoutes?.(app);
@@ -408,7 +409,6 @@ const shutdown = async (signal) => {
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
-
 
 // Kick off the initialization
 initializeBot().catch((error) => {
