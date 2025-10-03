@@ -1,9 +1,10 @@
-// src/utils/enterpriseUtilities.js - COMPLETE ENHANCED VERSION
+// src/utils/enterpriseUtilities.js - COMPLETE ENHANCED VERSION WITH SCHEDULE SUPPORT
 
 import { createHash } from 'crypto';
 import CryptoJS from 'crypto-js';
 import MerkleTree from 'merkletreejs';
 import { getSportEmoji as getEmoji } from '../services/sportsService.js';
+
 // --- ENHANCED TELEGRAM MARKDOWN ESCAPING ---
 /**
  * Escapes characters that have special meaning in Telegram's MarkdownV2.
@@ -34,6 +35,54 @@ export function safeTelegramMessage(text, maxLength = 3800) {
   }
   
   return safeText;
+}
+
+/**
+ * Format schedule context for AI prompts
+ */
+export function formatScheduleContext(realGames, sportKey, hours) {
+  if (!realGames || realGames.length === 0) {
+    return `🚨 CRITICAL: NO VERIFIED ${sportKey.toUpperCase()} GAMES in next ${hours}h`;
+  }
+  
+  const gameList = realGames.slice(0, 15).map((game, index) => {
+    const date = new Date(game.commence_time);
+    const timeStr = date.toLocaleString('en-US', { 
+      timeZone: 'America/New_York', 
+      month: 'short', 
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+    return `${index + 1}. ${game.away_team} @ ${game.home_team} - ${timeStr}`;
+  }).join('\n');
+  
+  return `📅 VERIFIED REAL SCHEDULE (Next ${hours}h, ${realGames.length} games):\n${gameList}`;
+}
+
+/**
+ * Generate validation summary for AI parlays
+ */
+export function generateValidationSummary(parlay, sportKey) {
+  if (!parlay || !parlay.parlay_legs) {
+    return '❌ No parlay data available for validation';
+  }
+
+  const legs = parlay.parlay_legs;
+  const validatedLegs = legs.filter(leg => leg.real_game_validated).length;
+  const validationRate = (validatedLegs / legs.length) * 100;
+
+  let validationStatus = '❌ POOR';
+  if (validationRate >= 80) validationStatus = '✅ EXCELLENT';
+  else if (validationRate >= 60) validationStatus = '⚠️ GOOD';
+  else if (validationRate >= 40) validationStatus = '⚠️ FAIR';
+
+  return `🔍 Validation Summary:
+• Real Games: ${validatedLegs}/${legs.length} legs
+• Validation Rate: ${validationRate.toFixed(1)}%
+• Status: ${validationStatus}
+
+${validationRate < 50 ? '⚠️ Consider using Live mode for better verification' : '✅ Good real game coverage'}`;
 }
 
 // --- CONSOLIDATED ANALYSIS FUNCTIONS ---
@@ -186,4 +235,26 @@ export function generateMerkleTree(data) {
  */
 export function verifyMerkleProof(tree, leaf, proof) {
     return tree.verify(proof, CryptoJS.SHA256(JSON.stringify(leaf)), tree.getRoot());
+}
+
+/**
+ * Check if a parlay has sufficient real game validation
+ */
+export function hasSufficientValidation(parlay, threshold = 0.5) {
+  if (!parlay || !parlay.parlay_legs) return false;
+  
+  const validatedLegs = parlay.parlay_legs.filter(leg => leg.real_game_validated).length;
+  const validationRate = validatedLegs / parlay.parlay_legs.length;
+  
+  return validationRate >= threshold;
+}
+
+/**
+ * Generate validation badge for display
+ */
+export function getValidationBadge(validationRate) {
+  if (validationRate >= 0.8) return '✅';
+  if (validationRate >= 0.6) return '⚠️';
+  if (validationRate >= 0.4) return '🔸';
+  return '❌';
 }
