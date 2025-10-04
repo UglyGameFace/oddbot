@@ -1,4 +1,4 @@
-// src/services/sportsService.js - UPDATED WITH SCHEDULE VALIDATION SUPPORT
+// src/services/sportsService.js - UPDATED WITH VERIFIED SCHEDULE SOURCES
 import { 
   COMPREHENSIVE_SPORTS, 
   SPORT_TITLES, 
@@ -6,34 +6,44 @@ import {
   SPORT_EMOJIS,
   SPORT_GROUPS
 } from '../config/sportDefinitions.js';
+import gamesService from './gamesService.js';
 
-// Priority sorting configuration
+// ✅ ADDED: Centralized list of verified sources for prompt engineering
+const VERIFIED_SCHEDULE_SOURCES = {
+  americanfootball_nfl: ['https://www.nfl.com/schedules/', 'https://www.espn.com/nfl/schedule'],
+  americanfootball_ncaaf: ['https://www.espn.com/college-football/schedule'],
+  basketball_nba: ['https://www.nba.com/schedule', 'https://www.espn.com/nba/schedule'],
+  basketball_wnba: ['https://www.wnba.com/schedule', 'https://www.espn.com/wnba/schedule'],
+  basketball_ncaab: ['https://www.espn.com/mens-college-basketball/schedule'],
+  baseball_mlb: ['https://www.mlb.com/schedule', 'https://www.espn.com/mlb/schedule'],
+  icehockey_nhl: ['https://www.nhl.com/schedule', 'https://www.espn.com/nhl/schedule'],
+  soccer_england_premier_league: ['https://www.premierleague.com/fixtures', 'https://www.espn.com/soccer/schedule'],
+  soccer_uefa_champions_league: ['https://www.uefa.com/uefachampionsleague/fixtures-results/'],
+  tennis_atp: ['https://www.atptour.com/en/schedule'],
+  tennis_wta: ['https://www.wtatennis.com/schedule'],
+  mma_ufc: ['https://www.ufc.com/schedule'],
+  golf_pga: ['https://www.pgatour.com/schedule.html'],
+  formula1: ['https://www.formula1.com/en/racing/2024.html']
+};
+
+export function getVerifiedSources(sportKey) {
+    return VERIFIED_SCHEDULE_SOURCES[sportKey] || [];
+}
+
 const PREFERRED_FIRST = [
   'americanfootball_nfl', 'americanfootball_ncaaf', 
   'basketball_nba', 'baseball_mlb', 'icehockey_nhl',
   'soccer_england_premier_league', 'soccer_uefa_champions_league'
 ];
 
-const DEPRIORITIZE_LAST = ['hockey_nhl', 'icehockey_nhl'];
-
 export function getSportEmoji(key = '') {
   if (!key) return '🏆';
-  const normalizedKey = String(key).toLowerCase();
-  return SPORT_EMOJIS[normalizedKey] || '🏆';
+  return SPORT_EMOJIS[String(key).toLowerCase()] || '🏆';
 }
 
 export function sortSports(sports) {
-  const rank = (k) => {
-    if (PREFERRED_FIRST.includes(k)) return -100;
-    if (DEPRIORITIZE_LAST.includes(k)) return 100;
-    return COMPREHENSIVE_SPORTS[k]?.priority || 100;
-  };
-  
-  return [...(sports || [])].sort((a, b) => {
-    const aKey = a?.sport_key || a?.key || '';
-    const bKey = b?.sport_key || b?.key || '';
-    return rank(aKey) - rank(bKey);
-  });
+  const rank = (k) => PREFERRED_FIRST.includes(k) ? -100 : COMPREHENSIVE_SPORTS[k]?.priority || 100;
+  return [...(sports || [])].sort((a, b) => rank(a?.sport_key || a?.key) - rank(b?.sport_key || b?.key));
 }
 
 export function getSportTitle(key) {
@@ -42,158 +52,30 @@ export function getSportTitle(key) {
 }
 
 export function normalizeSportData(sport) {
-  if (!sport) return null;
-  
-  const sportKey = sport.sport_key || sport.key;
-  const sportTitle = sport.sport_title || sport.title || getSportTitle(sportKey);
-  const sportData = COMPREHENSIVE_SPORTS[sportKey] || {};
-  
-  return {
-    sport_key: sportKey,
-    sport_title: sportTitle,
-    key: sportKey,
-    title: sportTitle,
-    emoji: sportData.emoji || getSportEmoji(sportKey),
-    group: sport.group || sportData.group || inferSportGroup(sportKey),
-    active: sport.active !== false,
-    has_outrights: sport.has_outrights || false,
-    priority: sportData.priority || 100,
-    source: sport.source || 'sports_service',
-    // Additional metadata
-    is_major: (sportData.priority || 100) <= 20,
-    is_international: !['americanfootball_nfl', 'basketball_nba', 'baseball_mlb', 'icehockey_nhl'].includes(sportKey),
-    config: getSportConfig(sportKey)
-  };
+    if (!sport) return null;
+    const sportKey = sport.sport_key || sport.key;
+    const sportData = COMPREHENSIVE_SPORTS[sportKey] || {};
+    return {
+        key: sportKey,
+        title: sport.sport_title || getSportTitle(sportKey),
+        emoji: sportData.emoji || getSportEmoji(sportKey),
+        group: sport.group || sportData.group,
+        active: sport.active !== false,
+        priority: sportData.priority || 100,
+        is_major: (sportData.priority || 100) <= 20,
+        ...sport
+    };
 }
 
 export function getAllSports() {
-  return Object.entries(SPORT_TITLES).map(([sport_key, sport_title]) => 
-    normalizeSportData({ sport_key, sport_title })
+  return Object.entries(SPORT_TITLES).map(([key, title]) => 
+    normalizeSportData({ sport_key: key, sport_title: title })
   );
 }
 
-export function filterSports(sports, options = {}) {
-  const {
-    activeOnly = true,
-    groups = [],
-    searchTerm = '',
-    includeInternational = true,
-    minPriority = 0,
-    maxPriority = 100
-  } = options;
-  
-  let filtered = sports || [];
-  
-  if (activeOnly) {
-    filtered = filtered.filter(sport => sport.active !== false);
-  }
-  
-  if (groups.length > 0) {
-    filtered = filtered.filter(sport => 
-      groups.includes(sport.group)
-    );
-  }
-  
-  if (searchTerm) {
-    const term = searchTerm.toLowerCase();
-    filtered = filtered.filter(sport => 
-      sport.sport_title.toLowerCase().includes(term) ||
-      sport.sport_key.toLowerCase().includes(term) ||
-      sport.group.toLowerCase().includes(term)
-    );
-  }
-  
-  if (!includeInternational) {
-    filtered = filtered.filter(sport => !sport.is_international);
-  }
-  
-  filtered = filtered.filter(sport => 
-    (sport.priority >= minPriority) && (sport.priority <= maxPriority)
-  );
-  
-  return sortSports(filtered);
-}
-
-function inferSportGroup(sportKey) {
-  for (const [group, sports] of Object.entries(SPORT_GROUPS)) {
-    if (sports.includes(sportKey)) {
-      return group;
-    }
-  }
-  
-  const key = String(sportKey).toLowerCase();
-  if (key.includes('americanfootball')) return 'American Football';
-  if (key.includes('basketball')) return 'Basketball';
-  if (key.includes('baseball')) return 'Baseball';
-  if (key.includes('icehockey') || key.includes('hockey')) return 'Hockey';
-  if (key.includes('soccer')) return 'Soccer';
-  if (key.includes('tennis')) return 'Tennis';
-  if (key.includes('mma') || key.includes('ufc') || key.includes('boxing')) return 'Combat Sports';
-  if (key.includes('formula1') || key.includes('nascar') || key.includes('indycar') || key.includes('motogp')) return 'Motorsports';
-  if (key.includes('golf')) return 'Golf';
-  if (key.includes('cricket')) return 'Cricket';
-  if (key.includes('rugby')) return 'Rugby';
-  if (key.includes('aussie_rules')) return 'Aussie Rules';
-  return 'Other Sports';
-}
-
-export function hasPlayerProps(sportKey) {
-  const propsSports = [
-    'basketball_nba', 'basketball_wnba', 'basketball_ncaab',
-    'americanfootball_nfl', 'americanfootball_ncaaf',
-    'baseball_mlb', 'icehockey_nhl'
-  ];
-  return propsSports.includes(sportKey);
-}
-
-export function getSportsByGroup() {
-  const groups = {};
-  
-  Object.entries(SPORT_GROUPS).forEach(([groupName, sportKeys]) => {
-    groups[groupName] = sportKeys.map(sportKey => 
-      normalizeSportData({ sport_key: sportKey })
-    ).filter(sport => sport !== null);
-  });
-  
-  return groups;
-}
-
-export function getPopularSports(limit = 10) {
-  const allSports = getAllSports();
-  return allSports
-    .filter(sport => sport.is_major)
-    .sort((a, b) => a.priority - b.priority)
-    .slice(0, limit);
-}
-
-export function searchSports(query, options = {}) {
-  const {
-    searchInTitles = true,
-    searchInKeys = true,
-    searchInGroups = true,
-    limit = 20
-  } = options;
-  
-  const allSports = getAllSports();
-  const term = query.toLowerCase().trim();
-  
-  if (!term) return allSports.slice(0, limit);
-  
-  return allSports.filter(sport => {
-    if (searchInTitles && sport.sport_title.toLowerCase().includes(term)) return true;
-    if (searchInKeys && sport.sport_key.toLowerCase().includes(term)) return true;
-    if (searchInGroups && sport.group.toLowerCase().includes(term)) return true;
-    return false;
-  }).slice(0, limit);
-}
-
-/**
- * Check if a sport has active games for schedule validation
- */
 export async function hasActiveGames(sportKey, hours = 72) {
   try {
-    const gamesService = await import('./gamesService.js');
-    const realGames = await gamesService.default.getVerifiedRealGames(sportKey, hours);
+    const realGames = await gamesService.getVerifiedRealGames(sportKey, hours);
     return realGames.length > 0;
   } catch (error) {
     console.error(`❌ Active games check failed for ${sportKey}:`, error);
@@ -201,70 +83,12 @@ export async function hasActiveGames(sportKey, hours = 72) {
   }
 }
 
-/**
- * Get sports with active games (for AI parlay builder)
- */
-export async function getSportsWithActiveGames(hours = 72) {
-  try {
-    const allSports = getAllSports();
-    const activeSports = [];
-    
-    // Check major sports first for performance
-    const majorSports = allSports.filter(sport => sport.is_major).slice(0, 10);
-    
-    for (const sport of majorSports) {
-      const hasGames = await hasActiveGames(sport.sport_key, hours);
-      if (hasGames) {
-        activeSports.push({
-          ...sport,
-          active_games: true
-        });
-      }
-    }
-    
-    return activeSports;
-  } catch (error) {
-    console.error('❌ Active sports check failed:', error);
-    return getPopularSports();
-  }
-}
-
-/**
- * Get sports that are currently in season and have active games
- */
-export async function getInSeasonSports(hours = 168) {
-  try {
-    const activeSports = await getSportsWithActiveGames(hours);
-    
-    // Filter to sports with substantial game activity
-    return activeSports.filter(sport => {
-      // Major sports are always considered in season if they have games
-      if (sport.is_major) return true;
-      
-      // For international sports, require multiple games
-      const gameThreshold = sport.is_international ? 3 : 1;
-      return true; // We'll rely on the active games check above
-    });
-  } catch (error) {
-    console.error('❌ In-season sports check failed:', error);
-    return getPopularSports();
-  }
-}
-
 export default {
-  SPORT_TITLES,
   getSportEmoji,
   getSportTitle,
   sortSports,
   normalizeSportData,
   getAllSports,
-  filterSports,
-  hasPlayerProps,
-  getSportConfig,
-  getSportsByGroup,
-  getPopularSports,
-  searchSports,
-  hasActiveGames,
-  getSportsWithActiveGames,
-  getInSeasonSports
+  getVerifiedSources,
+  hasActiveGames
 };
