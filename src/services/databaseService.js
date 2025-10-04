@@ -1,8 +1,9 @@
-// src/services/databaseService.js - COMPLETE UPDATE WITH SCHEDULE VALIDATION
+// src/services/databaseService.js - COMPLETE UPDATE WITH CENTRALIZED ENHANCEMENT
 import { createClient } from '@supabase/supabase-js';
 import env from '../config/env.js';
 import { sentryService } from './sentryService.js';
 import { COMPREHENSIVE_SPORTS } from '../config/sportDefinitions.js';
+import { GameEnhancementService } from './gameEnhancementService.js'; // ✅ IMPORTED FOR CENTRALIZED LOGIC
 
 // Use the single source of truth from sportDefinitions.js
 const COMPREHENSIVE_FALLBACK_SPORTS = Object.entries(COMPREHENSIVE_SPORTS).map(([sport_key, data]) => ({
@@ -163,7 +164,8 @@ class DatabaseService {
       if (error) throw error;
 
       console.log(`✅ Found ${data?.length || 0} upcoming games for ${sportKey}`);
-      return this._enhanceGameData(data || [], sportKey);
+      // ✅ REFACTORED: Use the centralized GameEnhancementService
+      return GameEnhancementService.enhanceGameData(data || [], sportKey, 'database');
 
     } catch (error) {
       console.error(`❌ Supabase getUpcomingGames error for ${sportKey}:`, error.message);
@@ -243,7 +245,8 @@ class DatabaseService {
       
       if (data) {
         console.log(`✅ Found game: ${data.home_team} vs ${data.away_team}`);
-        return this._enhanceSingleGame(data);
+        // ✅ REFACTORED: Use the centralized GameEnhancementService
+        return GameEnhancementService.enhanceSingleGame(data, data.sport_key, 'database');
       }
       
       return null;
@@ -284,7 +287,8 @@ class DatabaseService {
       if (error) throw error;
 
       console.log(`✅ Search found ${data?.length || 0} games for "${query}"`);
-      return this._enhanceGameData(data || [], sportKey || 'mixed');
+      // ✅ REFACTORED: Use the centralized GameEnhancementService
+      return GameEnhancementService.enhanceGameData(data || [], sportKey || 'mixed', 'database_search');
 
     } catch (error) {
       console.error(`❌ Supabase searchGames error for "${query}":`, error.message);
@@ -319,7 +323,8 @@ class DatabaseService {
       if (error) throw error;
 
       console.log(`✅ Found ${data?.length || 0} active games${sportKey ? ` for ${sportKey}` : ''}`);
-      return this._enhanceGameData(data || [], sportKey || 'mixed');
+      // ✅ REFACTORED: Use the centralized GameEnhancementService
+      return GameEnhancementService.enhanceGameData(data || [], sportKey || 'mixed', 'database');
 
     } catch (error) {
       console.error('❌ getActiveGames error:', error.message);
@@ -683,86 +688,8 @@ class DatabaseService {
   }
 
   // ========== PRIVATE UTILITY METHODS ==========
-
-  /**
-   * Enhance game data with additional fields for AI processing
-   */
-  _enhanceGameData(games, sportKey) {
-    if (!games || !Array.isArray(games)) return [];
-    
-    return games.map(game => this._enhanceSingleGame(game, sportKey));
-  }
-
-  _enhanceSingleGame(game, sportKey = null) {
-    const enhanced = { ...game };
-    
-    // Add AI analysis fields
-    enhanced.display_name = `${game.away_team} @ ${game.home_team}`;
-    enhanced.time_until = this._calculateTimeUntil(game.commence_time);
-    enhanced.data_quality = this._assessGameDataQuality(game);
-    enhanced.analysis_ready = this._isGameReadyForAnalysis(game);
-    
-    // Add odds availability info
-    enhanced.odds_available = !!(game.bookmakers && game.bookmakers.length > 0);
-    enhanced.market_variety = this._countMarkets(game);
-    
-    // Add sport-specific enhancements
-    if (sportKey) {
-      enhanced.sport_key = sportKey;
-    }
-    
-    return enhanced;
-  }
-
-  _calculateTimeUntil(commenceTime) {
-    if (!commenceTime) return null;
-    
-    const now = new Date();
-    const gameTime = new Date(commenceTime);
-    const diffMs = gameTime - now;
-    
-    if (diffMs < 0) return 'started';
-    
-    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-    const diffDays = Math.floor(diffHours / 24);
-    
-    if (diffDays > 0) return `${diffDays}d ${diffHours % 24}h`;
-    if (diffHours > 0) return `${diffHours}h`;
-    
-    const diffMinutes = Math.floor(diffMs / (1000 * 60));
-    return `${diffMinutes}m`;
-  }
-
-  _assessGameDataQuality(game) {
-    let score = 0;
-    let factors = [];
-
-    if (game.home_team && game.away_team) {
-      score += 30;
-      factors.push('teams_available');
-    }
-
-    if (game.commence_time) {
-      score += 20;
-      factors.push('start_time_available');
-    }
-
-    if (game.bookmakers && game.bookmakers.length > 0) {
-      score += 30;
-      factors.push(`odds_available_${game.bookmakers.length}_books`);
-    }
-
-    if (game.bookmakers && game.bookmakers.length >= 3) {
-      score += 20;
-      factors.push('multiple_books');
-    }
-
-    return {
-      score: Math.min(100, score),
-      factors,
-      rating: score >= 80 ? 'excellent' : score >= 60 ? 'good' : score >= 40 ? 'fair' : 'poor'
-    };
-  }
+  // ❌ REMOVED: All private enhancement methods (_enhanceGameData, _enhanceSingleGame, _calculateTimeUntil, etc.)
+  // were removed to centralize this logic in GameEnhancementService.
 
   _assessSportDataQuality(sport) {
     const score = Math.min(100, 
@@ -775,27 +702,6 @@ class DatabaseService {
       score,
       rating: score >= 80 ? 'excellent' : score >= 60 ? 'good' : score >= 40 ? 'fair' : 'poor'
     };
-  }
-
-  _isGameReadyForAnalysis(game) {
-    return game.home_team && 
-           game.away_team && 
-           game.commence_time && 
-           game.bookmakers && 
-           game.bookmakers.length >= 2;
-  }
-
-  _countMarkets(game) {
-    if (!game.bookmakers) return 0;
-    
-    const markets = new Set();
-    game.bookmakers.forEach(bookmaker => {
-      bookmaker.markets?.forEach(market => {
-        markets.add(market.key);
-      });
-    });
-    
-    return markets.size;
   }
 
   _generateGameChecksum(game) {
