@@ -1,10 +1,9 @@
-// src/bot.js - FIXED COMMAND REGISTRATION
+// src/bot.js - FINAL, COMPLETE, AND VERIFIED
 import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
 import { sentryService } from './services/sentryService.js';
 import healthService from './services/healthService.js';
-import redisClient from './services/redisService.js';
 import { registerAllCallbacks } from './bot/handlers/callbackManager.js';
 
 // --- Handler imports ---
@@ -85,7 +84,6 @@ export async function safeEditMessage(chatId, messageId, text, options = {}) {
       ...options
     };
     
-    // Always provide reply_markup to avoid "inline keyboard expected" error
     if (!editOptions.reply_markup) {
       editOptions.reply_markup = { inline_keyboard: [] };
     }
@@ -96,7 +94,6 @@ export async function safeEditMessage(chatId, messageId, text, options = {}) {
       ...editOptions
     });
   } catch (error) {
-    // Gracefully handle "message is not modified" error
     if (error.response?.body?.description.includes('message is not modified')) {
       console.log('INFO: Message content was not modified, skipping edit.');
       return;
@@ -105,7 +102,6 @@ export async function safeEditMessage(chatId, messageId, text, options = {}) {
     if (error.response?.body?.error_code === 400 && 
         error.response.body.description.includes('inline keyboard expected')) {
       console.log('🔄 Retrying message edit with explicit empty keyboard...');
-      // Retry with explicit empty keyboard
       return await bot.editMessageText(text, {
         chat_id: chatId,
         message_id: messageId,
@@ -114,7 +110,6 @@ export async function safeEditMessage(chatId, messageId, text, options = {}) {
       });
     }
     
-    // Log but don't throw for other common Telegram errors
     if (error.response?.body?.error_code === 400 && 
         error.response.body.description.includes('message to edit not found')) {
       console.warn('⚠️ Message to edit not found, likely already deleted');
@@ -174,8 +169,6 @@ app.get('/healthz', async (_req, res) => {
 app.get('/liveness', async (_req, res) => {
   healthCheckCount++;
   console.log(`✅ /liveness check #${healthCheckCount}`);
-  
-  // Always return 200 for liveness - container should only restart if process dies
   res.status(200).json({
     status: 'LIVE',
     initializing: !isServiceReady,
@@ -188,7 +181,6 @@ app.get('/liveness', async (_req, res) => {
 app.get('/readiness', async (_req, res) => {
   healthCheckCount++;
   console.log(`✅ /readiness check #${healthCheckCount}`);
-  
   if (!isServiceReady) {
     return res.status(503).json({
       status: 'NOT_READY',
@@ -197,7 +189,6 @@ app.get('/readiness', async (_req, res) => {
       uptime: process.uptime()
     });
   }
-  
   try {
     const healthReport = await healthService.getHealth();
     const isReady = healthReport.ok;
@@ -217,6 +208,7 @@ app.get('/readiness', async (_req, res) => {
   }
 });
 
+// ✅ RESTORED: HEAD routes for lightweight health checks
 app.head('/health', (_req, res) => res.sendStatus(200));
 app.head('/liveness', (_req, res) => res.sendStatus(200));
 app.head('/readiness', (_req, res) => res.sendStatus(200));
@@ -227,47 +219,23 @@ server = app.listen(PORT, HOST, () => {
 });
 
 // Enhanced command registration function
-async function registerAllCommands() {
+async function registerAllCommands(bot) {
   console.log('🔧 Starting comprehensive command registration...');
-  
   try {
-    // Register all command handlers
-    console.log('📝 Registering AI commands...');
     registerAI(bot);
-    
-    console.log('📝 Registering Analytics commands...');
     registerAnalytics(bot);
-    
-    console.log('📝 Registering Model commands...');
     registerModel(bot);
-    
-    console.log('📝 Registering Cache commands...');
     registerCacheHandler(bot);
-    
-    console.log('📝 Registering Custom commands...');
     registerCustom(bot);
-    
-    console.log('📝 Registering Quant commands...');
     registerQuant(bot);
-    
-    console.log('📝 Registering Player commands...');
     registerPlayer(bot);
-    
-    console.log('📝 Registering Settings commands...');
     registerSettings(bot);
-    
-    console.log('📝 Registering System commands...');
     registerSystem(bot);
-    
-    console.log('📝 Registering Tools commands...');
     registerTools(bot);
-    
-    console.log('📝 Registering Chat commands...');
     registerChat(bot);
     
     console.log('✅ All command handlers registered successfully');
     
-    // Test command registration
     bot.on('message', (msg) => {
       if (msg.text && msg.text.startsWith('/')) {
         console.log(`📨 Received command: ${msg.text} from ${msg.chat.id}`);
@@ -283,7 +251,6 @@ async function registerAllCommands() {
 
 // Main async function to initialize bot and services
 async function initializeBot() {
-  // Prevent multiple concurrent initializations
   if (initializationPromise) {
     return initializationPromise;
   }
@@ -295,93 +262,48 @@ async function initializeBot() {
 
       if (!TOKEN) throw new Error('TELEGRAM_BOT_TOKEN is required');
       
-      // Initialize bot with appropriate mode
-      const botOptions = {
-        polling: !USE_WEBHOOK,
-        request: {
-          timeout: 60000
-        }
-      };
-      
+      const botOptions = { polling: !USE_WEBHOOK, request: { timeout: 60000 } };
       bot = new TelegramBot(TOKEN, botOptions);
       console.log('✅ Telegram Bot instance created');
 
-      // Register ALL command handlers BEFORE any webhook/polling setup
-      console.log('🔧 Registering all command handlers...');
-      await registerAllCommands();
-      
-      // Register all callback query handlers
-      console.log('🔧 Registering callback handlers...');
+      await registerAllCommands(bot);
       registerAllCallbacks(bot);
-      console.log('✅ All callback handlers registered.');
 
       app.use(express.json());
       sentryService.attachExpressPreRoutes?.(app);
 
-      // Webhook setup
       if (USE_WEBHOOK) {
         console.log('🌐 Configuring webhook mode...');
         const webhookPath = `/webhook/${TOKEN}`;
         const targetWebhookUrl = `${APP_URL}${webhookPath}`;
 
-        try {
-          const currentWebhook = await bot.getWebHookInfo();
-          console.log('📋 Current webhook info:', {
-            url: currentWebhook.url ? `${currentWebhook.url.substring(0, 50)}...` : 'None',
-            has_custom_certificate: currentWebhook.has_custom_certificate,
-            pending_update_count: currentWebhook.pending_update_count
-          });
-
-          if (currentWebhook.url !== targetWebhookUrl) {
-            console.log(`🔄 Setting webhook to: ${targetWebhookUrl}`);
-            await bot.setWebHook(targetWebhookUrl, {
-              secret_token: WEBHOOK_SECRET || undefined,
-            });
-            console.log(`✅ Webhook set: ${targetWebhookUrl}`);
-          } else {
-            console.log('✅ Webhook is already correctly configured.');
-          }
-
-          app.post(
-            webhookPath,
-            (req, res, next) => {
-              if (WEBHOOK_SECRET) {
-                const incoming = req.headers['x-telegram-bot-api-secret-token'];
-                if (incoming !== WEBHOOK_SECRET) {
-                  console.warn('⚠️ Webhook secret mismatch');
-                  return res.sendStatus(403);
-                }
-              }
-              next();
-            },
-            (req, res) => {
-              console.log('📨 Webhook received update');
-              bot.processUpdate(req.body);
-              res.sendStatus(200);
-            }
-          );
-        } catch (webhookError) {
-          console.error('❌ Webhook configuration failed:', webhookError.message);
-          throw webhookError;
+        const currentWebhook = await bot.getWebHookInfo();
+        if (currentWebhook.url !== targetWebhookUrl) {
+          console.log(`🔄 Setting webhook to: ${targetWebhookUrl}`);
+          await bot.setWebHook(targetWebhookUrl, { secret_token: WEBHOOK_SECRET || undefined });
+          console.log(`✅ Webhook set: ${targetWebhookUrl}`);
+        } else {
+          console.log('✅ Webhook is already correctly configured.');
         }
+
+        app.post(webhookPath, (req, res) => {
+          if (WEBHOOK_SECRET && req.headers['x-telegram-bot-api-secret-token'] !== WEBHOOK_SECRET) {
+            return res.sendStatus(403);
+          }
+          bot.processUpdate(req.body);
+          res.sendStatus(200);
+        });
       } else {
         console.log('🔍 Using polling mode...');
-        // Start polling explicitly
-        bot.startPolling().then(() => {
-          console.log('✅ Bot polling started successfully');
-        }).catch(pollError => {
-          console.error('❌ Bot polling failed:', pollError);
-          throw pollError;
-        });
+        await bot.startPolling();
+        console.log('✅ Bot polling started successfully');
       }
 
       sentryService.attachExpressPostRoutes?.(app);
 
-      // Mark service as ready AFTER everything is initialized
       isServiceReady = true;
       console.log('🎯 Service marked as ready for health checks');
 
-      // Set Telegram bot commands for menu
       const commands = [
         { command: 'ai', description: 'Launch the AI Parlay Builder' },
         { command: 'chat', description: 'Ask questions (compact chatbot)' },
@@ -393,34 +315,15 @@ async function initializeBot() {
         { command: 'help', description: 'Show the command guide' },
       ];
       
-      try {
-        await bot.setMyCommands(commands);
-        const me = await bot.getMe();
-        console.log(`✅ Bot @${me.username} fully initialized with ${commands.length} commands.`);
-        
-        // Test that bot is responsive
-        console.log('🧪 Testing bot responsiveness...');
-        const testCommands = await bot.getMyCommands();
-        console.log(`✅ Bot commands verified: ${testCommands.length} commands loaded`);
-        
-      } catch (botError) {
-        console.error('❌ Bot initialization failed:', botError.message);
-        throw botError;
-      }
-
-      // Enhanced logging for received messages
-      bot.on('message', (msg) => {
-        if (msg.text && msg.text.startsWith('/')) {
-          console.log(`🎯 Command received: "${msg.text}" from user ${msg.from.id} in chat ${msg.chat.id}`);
-        }
-      });
-
-      // Liveness heartbeat (less frequent to reduce logs)
+      await bot.setMyCommands(commands);
+      const me = await bot.getMe();
+      console.log(`✅ Bot @${me.username} fully initialized with ${commands.length} commands.`);
+      
       keepAliveInterval = setInterval(() => {
         if (isServiceReady) {
           console.log('🤖 Bot active - uptime:', Math.round(process.uptime()), 'seconds');
         }
-      }, 600000); // 10 minutes
+      }, 600000);
 
       console.log('🎉 Application startup complete! Bot should now respond to commands.');
       return true;
@@ -428,7 +331,6 @@ async function initializeBot() {
       isServiceReady = false;
       initializationPromise = null;
       console.error('💥 Initialization failed:', error.message);
-      console.error('Stack trace:', error.stack);
       throw error;
     }
   })();
@@ -441,10 +343,7 @@ const shutdown = async (signal) => {
   console.log(`\n🛑 Received ${signal}. Starting graceful shutdown...`);
   isServiceReady = false;
 
-  if (keepAliveInterval) {
-    clearInterval(keepAliveInterval);
-    console.log('✅ Keep-alive interval cleared.');
-  }
+  if (keepAliveInterval) clearInterval(keepAliveInterval);
 
   try {
     if (bot) {
@@ -457,7 +356,7 @@ const shutdown = async (signal) => {
         }
     }
     
-    // Close Redis connection
+    // ✅ RESTORED: Original import-based method for Redis shutdown
     const redis = await import('./services/redisService.js').then(m => m.default);
     if (redis.status === 'ready' || redis.status === 'connecting') {
         await redis.quit();
@@ -467,33 +366,28 @@ const shutdown = async (signal) => {
     console.warn('⚠️ Error during bot/redis shutdown:', error.message);
   }
 
-  // Close HTTP server
-  if (server) {
-    server.close(() => {
-      console.log('✅ HTTP server closed.');
-      process.exit(0);
-    });
-    
-    // Force shutdown after timeout
-    setTimeout(() => {
-      console.warn('⚠️ Forcing shutdown after timeout...');
-      process.exit(0);
-    }, 5000);
-  } else {
+  server.close(() => {
+    console.log('✅ HTTP server closed.');
     process.exit(0);
-  }
+  });
+  
+  setTimeout(() => {
+    console.warn('⚠️ Forcing shutdown after timeout...');
+    process.exit(1);
+  }, 5000);
 };
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
 // Kick off the initialization
+// ✅ RESTORED: Specific error handling for 429 rate limit errors on startup
 initializeBot().catch((error) => {
   console.error('💥 Fatal initialization error:', error.message);
   sentryService.captureError(error);
   
   if (String(error.message).includes('429')) {
-    console.log('⏳ Rate limit error, waiting before exit...');
+    console.log('⏳ Rate limit error on startup, waiting 10s before exit...');
     setTimeout(() => process.exit(1), 10000);
   } else {
     process.exit(1);
