@@ -1,7 +1,7 @@
 // src/bot/handlers/ai.js - COMPLETELY FIXED
 import aiService from '../../services/aiService.js';
 import gamesService from '../../services/gamesService.js';
-import { setUserState, getUserState, getAIConfig } from '../state.js';
+import { setUserState, getUserState } from '../state.js';
 import { getSportEmoji, getSportTitle, sortSports } from '../../services/sportsService.js';
 import { safeEditMessage } from '../../utils/asyncUtils.js';
 
@@ -123,11 +123,11 @@ export function registerAICallbacks(bot) {
         if (!sportKey || !numLegs) return;
         
         try {
-          await safeEditMessage(chatId, messageId, `🔄 Switching to <b>${escapeHTML(selectedMode.toUpperCase())}</b> mode...`, { parse_mode: 'HTML' });
+          await safeEditMessage(bot, chatId, messageId, `🔄 Switching to <b>${escapeHTML(selectedMode.toUpperCase())}</b> mode...`, { parse_mode: 'HTML' });
           const parlay = await aiService.handleFallbackSelection(sportKey, numLegs, selectedMode, betType);
           await sendParlayResult(bot, chatId, parlay, state, selectedMode, messageId);
         } catch (error) {
-          await safeEditMessage(chatId, messageId, `❌ Fallback failed: <code>${escapeHTML(error.message)}</code>`, { parse_mode: 'HTML' });
+          await safeEditMessage(bot, chatId, messageId, `❌ Fallback failed: <code>${escapeHTML(error.message)}</code>`, { parse_mode: 'HTML' });
         } finally {
           await setUserState(chatId, {});
         }
@@ -142,12 +142,12 @@ export function registerAICallbacks(bot) {
         if (to === 'model') return sendAiModelSelection(bot, chatId, messageId);
       }
       if (action === 'quick' && parts[2] === 'retry') {
-        await safeEditMessage(chatId, messageId, '🔄 Retrying with same parameters...', { parse_mode: 'HTML' });
+        await safeEditMessage(bot, chatId, messageId, '🔄 Retrying with same parameters...', { parse_mode: 'HTML' });
         return executeAiRequest(bot, chatId, messageId);
       }
     } catch (error) {
       console.error('❌ Error in AI callback handler:', error);
-      await safeEditMessage(chatId, messageId, `❌ Error: ${escapeHTML(error.message)}`, { parse_mode: 'HTML' });
+      await safeEditMessage(bot, chatId, messageId, `❌ Error: ${escapeHTML(error.message)}`, { parse_mode: 'HTML' });
     }
   });
 }
@@ -159,7 +159,7 @@ async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
         const sports = await getCachedSports();
         if (!sports || sports.length === 0) {
             const text = '⚠️ No sports available right now. Data sources may be temporarily down. Please try again later.';
-            if (messageId) return safeEditMessage(chatId, messageId, text);
+            if (messageId) return safeEditMessage(bot, chatId, messageId, text);
             return bot.sendMessage(chatId, text);
         }
 
@@ -187,7 +187,7 @@ async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
         const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: rows } };
         
         if (messageId) {
-            await safeEditMessage(chatId, messageId, text, opts);
+            await safeEditMessage(bot, chatId, messageId, text, opts);
         } else {
             await bot.sendMessage(chatId, text, opts);
         }
@@ -195,7 +195,7 @@ async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
         console.error('❌ Error sending sport selection:', error);
         const errorText = '❌ Failed to load sports. Please try again.';
         if (messageId) {
-            await safeEditMessage(chatId, messageId, errorText);
+            await safeEditMessage(bot, chatId, messageId, errorText);
         } else {
             await bot.sendMessage(chatId, errorText);
         }
@@ -218,10 +218,10 @@ async function sendLegSelection(bot, chatId, messageId) {
 
     const text = `🤖 <b>AI Parlay Builder</b>\n\n<b>Step 2:</b> How many legs for your ${escapeHTML(sportTitle)} parlay?`;
     const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
-    await safeEditMessage(chatId, messageId, text, opts);
+    await safeEditMessage(bot, chatId, messageId, text, opts);
   } catch (error) {
     console.error('❌ Error sending leg selection:', error);
-    await safeEditMessage(chatId, messageId, '❌ Error loading leg selection. Please try again.');
+    await safeEditMessage(bot, chatId, messageId, '❌ Error loading leg selection. Please try again.');
   }
 }
 
@@ -235,10 +235,10 @@ async function sendModeSelection(bot, chatId, messageId) {
       [{ text: '« Back to Legs', callback_data: 'ai_back_legs' }]
     ];
     const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
-    await safeEditMessage(chatId, messageId, text, opts);
+    await safeEditMessage(bot, chatId, messageId, text, opts);
   } catch (error) {
     console.error('❌ Error sending mode selection:', error);
-    await safeEditMessage(chatId, messageId, '❌ Error loading mode selection. Please try again.');
+    await safeEditMessage(bot, chatId, messageId, '❌ Error loading mode selection. Please try again.');
   }
 }
 
@@ -253,10 +253,10 @@ async function sendBetTypeSelection(bot, chatId, messageId) {
       [{ text: '« Back to Mode', callback_data: 'ai_back_mode' }]
     ];
     const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
-    await safeEditMessage(chatId, messageId, text, opts);
+    await safeEditMessage(bot, chatId, messageId, text, opts);
   } catch (error) {
     console.error('❌ Error sending bet type selection:', error);
-    await safeEditMessage(chatId, messageId, '❌ Error loading bet type selection. Please try again.');
+    await safeEditMessage(bot, chatId, messageId, '❌ Error loading bet type selection. Please try again.');
   }
 }
 
@@ -269,10 +269,10 @@ async function sendAiModelSelection(bot, chatId, messageId) {
       [{ text: '« Back to Bet Type', callback_data: 'ai_back_bettype' }]
     ];
     const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
-    await safeEditMessage(chatId, messageId, text, opts);
+    await safeEditMessage(bot, chatId, messageId, text, opts);
   } catch (error) {
     console.error('❌ Error sending AI model selection:', error);
-    await safeEditMessage(chatId, messageId, '❌ Error loading AI model selection. Please try again.');
+    await safeEditMessage(bot, chatId, messageId, '❌ Error loading AI model selection. Please try again.');
   }
 }
 
@@ -285,10 +285,10 @@ async function sendQuantitativeModeSelection(bot, chatId, messageId) {
           [{ text: '« Back to AI Model', callback_data: 'ai_back_model' }]
         ];
         const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
-        await safeEditMessage(chatId, messageId, text, opts);
+        await safeEditMessage(bot, chatId, messageId, text, opts);
     } catch (error) {
         console.error('❌ Error sending quantitative mode selection:', error);
-        await safeEditMessage(chatId, messageId, '❌ Error loading quantitative mode selection. Please try again.');
+        await safeEditMessage(bot, chatId, messageId, '❌ Error loading quantitative mode selection. Please try again.');
     }
 }
 
@@ -302,7 +302,7 @@ async function sendFallbackOptions(bot, chatId, messageId, error) {
       [{ text: '💾 Use Database Mode', callback_data: 'ai_fallback_db' }],
       [{ text: '🔄 Try Different Sport', callback_data: 'ai_back_sport' }]
     ];
-    await safeEditMessage(chatId, messageId, text, {
+    await safeEditMessage(bot, chatId, messageId, text, {
       parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard }
     });
   } catch (fallbackError) {
@@ -320,7 +320,7 @@ async function sendScheduleValidationError(bot, chatId, messageId, error) {
             [{ text: '🔄 Try Again', callback_data: 'ai_quick_retry' }],
             [{ text: '🎯 Change Sport', callback_data: 'ai_back_sport' }]
         ];
-        await safeEditMessage(chatId, messageId, text, {
+        await safeEditMessage(bot, chatId, messageId, text, {
             parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard }
         });
     } catch (validationError) {
@@ -335,7 +335,7 @@ async function executeAiRequest(bot, chatId, messageId) {
         const { sportKey, numLegs, mode, betType, aiModel, includeProps, quantitativeMode } = state || {};
 
         if (!sportKey || !numLegs || !mode || !betType) {
-            return safeEditMessage(chatId, messageId, '❌ Incomplete selection. Please start over using /ai.');
+            return safeEditMessage(bot, chatId, messageId, '❌ Incomplete selection. Please start over using /ai.');
         }
         
         const sportTitle = getSportEmoji(sportKey) + ' ' + getSportTitle(sportKey);
@@ -344,7 +344,7 @@ async function executeAiRequest(bot, chatId, messageId) {
                      `<b>Sport:</b> ${escapeHTML(sportTitle)}\n` +
                      `<b>Mode:</b> ${escapeHTML(mode.toUpperCase())}\n\n` +
                      `<i>Validating against real schedules and running quantitative checks. Please wait...</i>`;
-        await safeEditMessage(chatId, messageId, text, { parse_mode: 'HTML' });
+        await safeEditMessage(bot, chatId, messageId, text, { parse_mode: 'HTML' });
 
         const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, {
             includeProps,
@@ -361,7 +361,7 @@ async function executeAiRequest(bot, chatId, messageId) {
             await sendScheduleValidationError(bot, chatId, messageId, error);
         } else {
             const errorMessage = `❌ Critical error: <code>${escapeHTML(error.message)}</code>`;
-            await safeEditMessage(chatId, messageId, errorMessage, { parse_mode: 'HTML' });
+            await safeEditMessage(bot, chatId, messageId, errorMessage, { parse_mode: 'HTML' });
         }
     }
 }
@@ -397,7 +397,7 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
         }
 
         const finalKeyboard = [[{ text: '🔄 Build Another', callback_data: 'ai_back_sport' }]];
-        await safeEditMessage(chatId, messageId, response, { 
+        await safeEditMessage(bot, chatId, messageId, response, { 
             parse_mode: 'HTML', 
             reply_markup: { inline_keyboard: finalKeyboard } 
         });
@@ -406,6 +406,6 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
         await setUserState(chatId, {});
     } catch (error) {
         console.error('❌ Error sending parlay result:', error);
-        await safeEditMessage(chatId, messageId, '❌ Error displaying parlay result. Please try again.');
+        await safeEditMessage(bot, chatId, messageId, '❌ Error displaying parlay result. Please try again.');
     }
 }
