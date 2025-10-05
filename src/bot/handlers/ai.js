@@ -3,7 +3,7 @@ import aiService from '../../services/aiService.js';
 import gamesService from '../../services/gamesService.js';
 import { setUserState, getUserState, getAIConfig } from '../state.js';
 import { getSportEmoji, getSportTitle, sortSports } from '../../services/sportsService.js';
-import { safeEditMessage } from '../../bot.js';
+import { safeEditMessage } from '../../utils/asyncUtils.js';
 
 // Helper to escape text for Telegram's HTML parse mode
 const escapeHTML = (text) => {
@@ -334,78 +334,4 @@ async function executeAiRequest(bot, chatId, messageId) {
         const state = await getUserState(chatId);
         const { sportKey, numLegs, mode, betType, aiModel, includeProps, quantitativeMode } = state || {};
 
-        if (!sportKey || !numLegs || !mode || !betType) {
-            return safeEditMessage(chatId, messageId, '❌ Incomplete selection. Please start over using /ai.');
-        }
-        
-        const sportTitle = getSportEmoji(sportKey) + ' ' + getSportTitle(sportKey);
-        const text = `🤖 <b>Analyzing...</b>\n\n` +
-                     `<b>Strategy:</b> ${escapeHTML(numLegs)}-Leg Parlay\n` +
-                     `<b>Sport:</b> ${escapeHTML(sportTitle)}\n` +
-                     `<b>Mode:</b> ${escapeHTML(mode.toUpperCase())}\n\n` +
-                     `<i>Validating against real schedules and running quantitative checks. Please wait...</i>`;
-        await safeEditMessage(chatId, messageId, text, { parse_mode: 'HTML' });
-
-        const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, {
-            includeProps,
-            quantitativeMode,
-            horizonHours: 72
-        });
-        
-        await sendParlayResult(bot, chatId, parlay, state, mode, messageId);
-    } catch (error) {
-        console.error('❌ AI handler execution error:', error.message);
-        if (error.fallbackAvailable) {
-            await sendFallbackOptions(bot, chatId, messageId, error);
-        } else if (error.message.includes('SCHEDULE')) {
-            await sendScheduleValidationError(bot, chatId, messageId, error);
-        } else {
-            const errorMessage = `❌ Critical error: <code>${escapeHTML(error.message)}</code>`;
-            await safeEditMessage(chatId, messageId, errorMessage, { parse_mode: 'HTML' });
-        }
-    }
-}
-
-async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
-    try {
-        const { sportKey } = state;
-        const { legs, parlay_price_american, quantitative_analysis, research_metadata } = parlay;
-        const sportTitle = getSportTitle(sportKey);
-        
-        let response = `🧠 <b>AI-Generated Parlay</b>\n`;
-        response += `<b>Sport:</b> ${escapeHTML(sportTitle)}\n`;
-        if (research_metadata?.real_games_validated) {
-            response += `✅ <b>Verified Real Games</b>\n`;
-        }
-        response += `\n`;
-
-        legs.forEach((leg, index) => {
-            const game = escapeHTML(leg.event || leg.game);
-            const pick = escapeHTML(leg.selection || leg.pick);
-            const odds = leg.price_american > 0 ? `+${leg.price_american}` : leg.price_american;
-            response += `<b>Leg ${index + 1}: ${game}</b>\n`;
-            response += `  <b>Pick:</b> ${pick} (${escapeHTML(odds)})\n\n`;
-        });
-
-        response += `<b>Total Odds:</b> ${parlay_price_american > 0 ? '+' : ''}${escapeHTML(parlay_price_american)}\n`;
-        
-        if (quantitative_analysis) {
-            const { calibrated, riskAssessment } = quantitative_analysis;
-            response += `<b>Calibrated EV:</b> ${escapeHTML(calibrated.evPercentage.toFixed(1))}% ${calibrated.evPercentage > 0 ? '👍' : '👎'}\n`;
-            response += `<b>Win Probability:</b> ${escapeHTML((calibrated.jointProbability * 100).toFixed(1))}%\n`;
-            response += `<b>Risk Level:</b> ${escapeHTML(riskAssessment.overallRisk)}\n`;
-        }
-
-        const finalKeyboard = [[{ text: '🔄 Build Another', callback_data: 'ai_back_sport' }]];
-        await safeEditMessage(chatId, messageId, response, { 
-            parse_mode: 'HTML', 
-            reply_markup: { inline_keyboard: finalKeyboard } 
-        });
-        
-        // Clear state after successful parlay generation
-        await setUserState(chatId, {});
-    } catch (error) {
-        console.error('❌ Error sending parlay result:', error);
-        await safeEditMessage(chatId, messageId, '❌ Error displaying parlay result. Please try again.');
-    }
-}
+        if (!sportKey || !num
