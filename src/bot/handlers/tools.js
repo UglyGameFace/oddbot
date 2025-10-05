@@ -14,8 +14,8 @@ export function registerTools(bot) {
   });
 }
 
-// FIX: This function was incorrectly named. Renaming to registerToolsCallbacks
-// guarantees that the import in callbackManager.js will work correctly.
+// FIX: Renamed this function from registerCommonCallbacks to registerToolsCallbacks.
+// This is the primary cause of the startup crash.
 export function registerToolsCallbacks(bot) {
   bot.on('callback_query', async (cbq) => {
     const { data, message } = cbq || {};
