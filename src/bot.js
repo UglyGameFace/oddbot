@@ -1,4 +1,4 @@
-// src/bot.js - FINAL, COMPLETE, AND VERIFIED
+// src/bot.js - FINAL, COMPLETE, AND FULLY RESTORED
 import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
@@ -50,18 +50,12 @@ let healthCheckCount = 0;
 let initializationPromise = null;
 
 // --- Utility Functions ---
-
-/**
- * Validate required environment variables
- */
 function validateEnvironment() {
   const required = ['TELEGRAM_BOT_TOKEN'];
   const missing = required.filter(key => !env[key]);
-  
   if (missing.length > 0) {
     throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
   }
-
   console.log('🔧 Webhook Configuration:', {
     USE_WEBHOOK: USE_WEBHOOK,
     APP_URL: env.APP_URL ? `${env.APP_URL.substring(0, 20)}...` : 'Not set',
@@ -69,53 +63,23 @@ function validateEnvironment() {
   });
 }
 
-/**
- * Safely edit Telegram messages to avoid inline keyboard errors
- */
 export async function safeEditMessage(chatId, messageId, text, options = {}) {
   if (!bot) {
     console.warn('⚠️ Bot not initialized, cannot edit message');
     return;
   }
-
   try {
-    const editOptions = {
-      parse_mode: 'HTML',
-      ...options
-    };
-    
+    const editOptions = { parse_mode: 'HTML', ...options };
     if (!editOptions.reply_markup) {
       editOptions.reply_markup = { inline_keyboard: [] };
     }
-    
-    return await bot.editMessageText(text, {
-      chat_id: chatId,
-      message_id: messageId,
-      ...editOptions
-    });
+    return await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...editOptions });
   } catch (error) {
-    if (error.response?.body?.description.includes('message is not modified')) {
-      console.log('INFO: Message content was not modified, skipping edit.');
-      return;
+    if (error.response?.body?.description.includes('message is not modified')) { return; }
+    if (error.response?.body?.error_code === 400 && error.response.body.description.includes('inline keyboard expected')) {
+      return await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: options.parse_mode || 'HTML', reply_markup: { inline_keyboard: [] } });
     }
-    
-    if (error.response?.body?.error_code === 400 && 
-        error.response.body.description.includes('inline keyboard expected')) {
-      console.log('🔄 Retrying message edit with explicit empty keyboard...');
-      return await bot.editMessageText(text, {
-        chat_id: chatId,
-        message_id: messageId,
-        parse_mode: options.parse_mode || 'HTML',
-        reply_markup: { inline_keyboard: [] }
-      });
-    }
-    
-    if (error.response?.body?.error_code === 400 && 
-        error.response.body.description.includes('message to edit not found')) {
-      console.warn('⚠️ Message to edit not found, likely already deleted');
-      return;
-    }
-    
+    if (error.response?.body?.error_code === 400 && error.response.body.description.includes('message to edit not found')) { return; }
     console.error('❌ Message edit failed:', error.message);
     throw error;
   }
@@ -141,84 +105,46 @@ app.get('/healthz', async (_req, res) => {
   healthCheckCount++;
   console.log(`✅ /healthz check #${healthCheckCount}`);
   if (!isServiceReady) {
-    return res.status(503).json({
-      status: 'Service Starting',
-      checks: healthCheckCount,
-      uptime: process.uptime()
-    });
+    return res.status(503).json({ status: 'Service Starting', checks: healthCheckCount, uptime: process.uptime() });
   }
   try {
     const healthReport = await healthService.getHealth();
-    res.status(healthReport.ok ? 200 : 503).json({
-      status: healthReport.ok ? 'OK' : 'DEGRADED',
-      ...healthReport,
-      checks: healthCheckCount,
-      timestamp: new Date().toISOString()
-    });
+    res.status(healthReport.ok ? 200 : 503).json({ status: healthReport.ok ? 'OK' : 'DEGRADED', ...healthReport, checks: healthCheckCount, timestamp: new Date().toISOString() });
   } catch (error) {
-    console.error('Health check error:', error);
-    res.status(503).json({
-      status: 'ERROR',
-      error: error.message,
-      checks: healthCheckCount,
-      timestamp: new Date().toISOString()
-    });
+    res.status(503).json({ status: 'ERROR', error: error.message, checks: healthCheckCount, timestamp: new Date().toISOString() });
   }
 });
 
 app.get('/liveness', async (_req, res) => {
   healthCheckCount++;
   console.log(`✅ /liveness check #${healthCheckCount}`);
-  res.status(200).json({
-    status: 'LIVE',
-    initializing: !isServiceReady,
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    checks: healthCheckCount
-  });
+  res.status(200).json({ status: 'LIVE', initializing: !isServiceReady, timestamp: new Date().toISOString(), uptime: process.uptime(), checks: healthCheckCount });
 });
 
 app.get('/readiness', async (_req, res) => {
   healthCheckCount++;
   console.log(`✅ /readiness check #${healthCheckCount}`);
   if (!isServiceReady) {
-    return res.status(503).json({
-      status: 'NOT_READY',
-      initializing: true,
-      checks: healthCheckCount,
-      uptime: process.uptime()
-    });
+    return res.status(503).json({ status: 'NOT_READY', initializing: true, checks: healthCheckCount, uptime: process.uptime() });
   }
   try {
     const healthReport = await healthService.getHealth();
     const isReady = healthReport.ok;
-    res.status(isReady ? 200 : 503).json({
-      status: isReady ? 'READY' : 'NOT_READY',
-      ...healthReport,
-      checks: healthCheckCount,
-      timestamp: new Date().toISOString()
-    });
+    res.status(isReady ? 200 : 503).json({ status: isReady ? 'READY' : 'NOT_READY', ...healthReport, checks: healthCheckCount, timestamp: new Date().toISOString() });
   } catch (error) {
-    res.status(503).json({
-      status: 'NOT_READY',
-      error: error.message,
-      checks: healthCheckCount,
-      timestamp: new Date().toISOString()
-    });
+    res.status(503).json({ status: 'NOT_READY', error: error.message, checks: healthCheckCount, timestamp: new Date().toISOString() });
   }
 });
 
-// ✅ RESTORED: HEAD routes for lightweight health checks
 app.head('/health', (_req, res) => res.sendStatus(200));
 app.head('/liveness', (_req, res) => res.sendStatus(200));
 app.head('/readiness', (_req, res) => res.sendStatus(200));
 
-// Start the server immediately to pass health checks
+// Start the server immediately
 server = app.listen(PORT, HOST, () => {
   console.log(`✅ Server listening on ${HOST}:${PORT}. Health checks are live.`);
 });
 
-// Enhanced command registration function
 async function registerAllCommands(bot) {
   console.log('🔧 Starting comprehensive command registration...');
   try {
@@ -233,15 +159,12 @@ async function registerAllCommands(bot) {
     registerSystem(bot);
     registerTools(bot);
     registerChat(bot);
-    
     console.log('✅ All command handlers registered successfully');
-    
     bot.on('message', (msg) => {
       if (msg.text && msg.text.startsWith('/')) {
         console.log(`📨 Received command: ${msg.text} from ${msg.chat.id}`);
       }
     });
-    
     return true;
   } catch (error) {
     console.error('❌ Command registration failed:', error);
@@ -249,17 +172,12 @@ async function registerAllCommands(bot) {
   }
 }
 
-// Main async function to initialize bot and services
 async function initializeBot() {
-  if (initializationPromise) {
-    return initializationPromise;
-  }
-  
+  if (initializationPromise) { return initializationPromise; }
   initializationPromise = (async () => {
     try {
       console.log('🚀 Starting ParlayBot initialization...');
       validateEnvironment();
-
       if (!TOKEN) throw new Error('TELEGRAM_BOT_TOKEN is required');
       
       const botOptions = { polling: !USE_WEBHOOK, request: { timeout: 60000 } };
@@ -268,7 +186,7 @@ async function initializeBot() {
 
       await registerAllCommands(bot);
       registerAllCallbacks(bot);
-
+      
       app.use(express.json());
       sentryService.attachExpressPreRoutes?.(app);
 
@@ -278,6 +196,8 @@ async function initializeBot() {
         const targetWebhookUrl = `${APP_URL}${webhookPath}`;
 
         const currentWebhook = await bot.getWebHookInfo();
+        console.log('📋 Current webhook info:', { url: currentWebhook.url ? `${currentWebhook.url.substring(0, 50)}...` : 'None', has_custom_certificate: currentWebhook.has_custom_certificate, pending_update_count: currentWebhook.pending_update_count });
+
         if (currentWebhook.url !== targetWebhookUrl) {
           console.log(`🔄 Setting webhook to: ${targetWebhookUrl}`);
           await bot.setWebHook(targetWebhookUrl, { secret_token: WEBHOOK_SECRET || undefined });
@@ -288,8 +208,10 @@ async function initializeBot() {
 
         app.post(webhookPath, (req, res) => {
           if (WEBHOOK_SECRET && req.headers['x-telegram-bot-api-secret-token'] !== WEBHOOK_SECRET) {
+            console.warn('⚠️ Webhook secret mismatch');
             return res.sendStatus(403);
           }
+          console.log('📨 Webhook received update');
           bot.processUpdate(req.body);
           res.sendStatus(200);
         });
@@ -300,7 +222,6 @@ async function initializeBot() {
       }
 
       sentryService.attachExpressPostRoutes?.(app);
-
       isServiceReady = true;
       console.log('🎯 Service marked as ready for health checks');
 
@@ -315,36 +236,48 @@ async function initializeBot() {
         { command: 'help', description: 'Show the command guide' },
       ];
       
-      await bot.setMyCommands(commands);
-      const me = await bot.getMe();
-      console.log(`✅ Bot @${me.username} fully initialized with ${commands.length} commands.`);
+      try {
+        await bot.setMyCommands(commands);
+        const me = await bot.getMe();
+        console.log(`✅ Bot @${me.username} fully initialized with ${commands.length} commands.`);
+        
+        console.log('🧪 Testing bot responsiveness...');
+        const testCommands = await bot.getMyCommands();
+        console.log(`✅ Bot commands verified: ${testCommands.length} commands loaded`);
+      } catch (botError) {
+        console.error('❌ Bot initialization failed:', botError.message);
+        throw botError;
+      }
+      
+      bot.on('message', (msg) => {
+        if (msg.text && msg.text.startsWith('/')) {
+          console.log(`🎯 Command received: "${msg.text}" from user ${msg.from.id} in chat ${msg.chat.id}`);
+        }
+      });
       
       keepAliveInterval = setInterval(() => {
         if (isServiceReady) {
           console.log('🤖 Bot active - uptime:', Math.round(process.uptime()), 'seconds');
         }
       }, 600000);
-
+      
       console.log('🎉 Application startup complete! Bot should now respond to commands.');
       return true;
     } catch (error) {
       isServiceReady = false;
       initializationPromise = null;
       console.error('💥 Initialization failed:', error.message);
+      console.error('Stack trace:', error.stack);
       throw error;
     }
   })();
-  
   return initializationPromise;
 }
 
-// --- Graceful shutdown
 const shutdown = async (signal) => {
   console.log(`\n🛑 Received ${signal}. Starting graceful shutdown...`);
   isServiceReady = false;
-
-  if (keepAliveInterval) clearInterval(keepAliveInterval);
-
+  if (keepAliveInterval) { clearInterval(keepAliveInterval); }
   try {
     if (bot) {
         if (USE_WEBHOOK) {
@@ -355,8 +288,6 @@ const shutdown = async (signal) => {
             console.log('✅ Bot polling stopped.');
         }
     }
-    
-    // ✅ RESTORED: Original import-based method for Redis shutdown
     const redis = await import('./services/redisService.js').then(m => m.default);
     if (redis.status === 'ready' || redis.status === 'connecting') {
         await redis.quit();
@@ -365,12 +296,10 @@ const shutdown = async (signal) => {
   } catch (error) {
     console.warn('⚠️ Error during bot/redis shutdown:', error.message);
   }
-
   server.close(() => {
     console.log('✅ HTTP server closed.');
     process.exit(0);
   });
-  
   setTimeout(() => {
     console.warn('⚠️ Forcing shutdown after timeout...');
     process.exit(1);
@@ -380,14 +309,11 @@ const shutdown = async (signal) => {
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
-// Kick off the initialization
-// ✅ RESTORED: Specific error handling for 429 rate limit errors on startup
 initializeBot().catch((error) => {
   console.error('💥 Fatal initialization error:', error.message);
   sentryService.captureError(error);
-  
   if (String(error.message).includes('429')) {
-    console.log('⏳ Rate limit error on startup, waiting 10s before exit...');
+    console.log('⏳ Rate limit error, waiting before exit...');
     setTimeout(() => process.exit(1), 10000);
   } else {
     process.exit(1);
