@@ -14,7 +14,8 @@ export function registerTools(bot) {
   });
 }
 
-// FIX: Renamed function to match the import in callbackManager.js
+// FIX: This function was incorrectly named. Renaming to registerToolsCallbacks
+// guarantees that the import in callbackManager.js will work correctly.
 export function registerToolsCallbacks(bot) {
   bot.on('callback_query', async (cbq) => {
     const { data, message } = cbq || {};
@@ -42,7 +43,6 @@ export function registerToolsCallbacks(bot) {
     if (action === 'ingest') {
       return handleManualIngest(bot, chatId, messageId);
     }
-    // **NEW:** Handle the odds freshness check
     if (action === 'freshness') {
         return handleOddsFreshness(bot, chatId, messageId);
     }
@@ -55,7 +55,7 @@ async function sendToolsMenu(bot, chatId, messageId = null) {
   const text = '🛠️ *Admin Tools*\n\nSelect a tool to use:';
   const keyboard = [
     [{ text: '🔄 Trigger Odds Ingestion', callback_data: 'tools_ingest' }],
-    [{ text: '📊 Odds Freshness', callback_data: 'tools_freshness' }], // <-- NEW BUTTON
+    [{ text: '📊 Odds Freshness', callback_data: 'tools_freshness' }],
     [{ text: '🧹 Clear Redis Cache', callback_data: 'tools_cache' }],
     [{ text: '📡 Check API Status', callback_data: 'tools_apistatus' }],
     [{ text: '📈 Get Database & Quota Stats', callback_data: 'tools_dbstats' }]
@@ -69,7 +69,6 @@ async function sendToolsMenu(bot, chatId, messageId = null) {
   }
 }
 
-// **NEW:** Handler function for the odds freshness report
 async function handleOddsFreshness(bot, chatId, messageId) {
     await bot.editMessageText('📊 Checking odds data freshness...', { chat_id: chatId, message_id: messageId });
     try {
@@ -111,7 +110,6 @@ async function handleOddsFreshness(bot, chatId, messageId) {
     }
 }
 
-// ... (all your other existing good code remains here)
 async function handleManualIngest(bot, chatId, messageId) {
     try {
         const redis = await redisClient;
