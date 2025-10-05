@@ -18,6 +18,7 @@ import { registerSettings } from './bot/handlers/settings.js';
 import { registerSystem } from './bot/handlers/system.js';
 import { registerTools } from './bot/handlers/tools.js';
 import { registerChat } from './bot/handlers/chat.js';
+import { safeEditMessage } from './utils/asyncUtils.js';
 
 // Global error hooks
 process.on('unhandledRejection', (reason, promise) => {
@@ -63,30 +64,6 @@ function validateEnvironment() {
   console.log('   - USE_WEBHOOK:', USE_WEBHOOK);
   console.log('   - REDIS_URL:', env.REDIS_URL ? '✓ Set' : '✗ Missing');
   console.log('   - WEBHOOK_SECRET:', WEBHOOK_SECRET ? '✓ Set' : '✗ Missing');
-}
-
-// FIX: Removed the `export` keyword. This function is internal to bot.js and
-// exporting it was causing module resolution conflicts during startup.
-async function safeEditMessage(chatId, messageId, text, options = {}) {
-  if (!bot) {
-    console.warn('⚠️ Bot not initialized, cannot edit message');
-    return;
-  }
-  try {
-    const editOptions = { parse_mode: 'HTML', ...options };
-    if (!editOptions.reply_markup) {
-      editOptions.reply_markup = { inline_keyboard: [] };
-    }
-    return await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...editOptions });
-  } catch (error) {
-    if (error.response?.body?.description?.includes('message is not modified')) { return; }
-    if (error.response?.body?.error_code === 400 && error.response.body.description?.includes('inline keyboard expected')) {
-      return await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: options.parse_mode || 'HTML', reply_markup: { inline_keyboard: [] } });
-    }
-    if (error.response?.body?.error_code === 400 && error.response.body.description?.includes('message to edit not found')) { return; }
-    console.error('❌ Message edit failed:', error.message);
-    throw error;
-  }
 }
 
 // Health endpoints
