@@ -1,6 +1,4 @@
-// src/workers/oddsIngestion.js - Manages on-demand ingestion of sports odds via a Redis trigger.
-// FIX: Uses dedicated Redis clients to prevent connection state pollution.
-
+// src/workers/oddsIngestion.js - FINALIZED AND CORRECTED
 import Redis from 'ioredis';
 import DatabaseService from '../services/databaseService.js';
 import OddsService from '../services/oddsService.js';
@@ -25,8 +23,6 @@ class OddsIngestionEngine {
 
   async initialize() {
     try {
-      // FIX: Create dedicated clients for this worker to ensure isolation.
-      // This is the guaranteed fix for the "(P)SUBSCRIBE" context errors.
       this.redisClient = new Redis(env.REDIS_URL, { maxRetriesPerRequest: 3 });
       this.subscriberClient = new Redis(env.REDIS_URL, { maxRetriesPerRequest: 3 });
       console.log('✅ Odds worker created dedicated Redis clients.');
