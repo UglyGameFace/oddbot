@@ -1,4 +1,6 @@
 // src/utils/asyncUtils.js
+import bot from '../bot.js';
+
 export const withTimeout = (promise, ms, label) =>
   Promise.race([
     promise,
@@ -52,8 +54,8 @@ export const batchProcess = async (items, processor, batchSize = 10, delayBetwee
   return results;
 };
 
-export async function safeEditMessage(chatId, messageId, text, options = {}) {
-    if (!bot) {
+export async function safeEditMessage(botInstance, chatId, messageId, text, options = {}) {
+    if (!botInstance) {
       console.warn('⚠️ Bot not initialized, cannot edit message');
       return;
     }
@@ -62,14 +64,14 @@ export async function safeEditMessage(chatId, messageId, text, options = {}) {
       if (!editOptions.reply_markup) {
         editOptions.reply_markup = { inline_keyboard: [] };
       }
-      return await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...editOptions });
+      return await botInstance.editMessageText(text, { chat_id: chatId, message_id: messageId, ...editOptions });
     } catch (error) {
       if (error.response?.body?.description?.includes('message is not modified')) { return; }
       if (error.response?.body?.error_code === 400 && error.response.body.description?.includes('inline keyboard expected')) {
-        return await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: options.parse_mode || 'HTML', reply_markup: { inline_keyboard: [] } });
+        return await botInstance.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: options.parse_mode || 'HTML', reply_markup: { inline_keyboard: [] } });
       }
       if (error.response?.body?.error_code === 400 && error.response.body.description?.includes('message to edit not found')) { return; }
       console.error('❌ Message edit failed:', error.message);
-      throw error;
+      // Do not rethrow the error to prevent crashes on minor edit failures
     }
 }
