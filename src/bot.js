@@ -1,4 +1,4 @@
-// src/bot.js - FINALIZED AND CORRECTED
+// src/bot.js - FINAL, COMPLETE, AND CORRECTED
 import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
@@ -31,44 +31,27 @@ process.on('uncaughtException', (error) => {
   process.exit(1);
 });
 
-// App and bot bootstrap
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = '0.0.0.0';
-
-// Global Config & State
 const TOKEN = env.TELEGRAM_BOT_TOKEN;
 const APP_URL = env.APP_URL || '';
-const WEBHOOK_SECRET = (env.WEBHOOK_SECRET || env.TELEGRAM_WEBHOOK_SECRET || '').trim();
-const USE_WEBHOOK = (env.APP_URL || '').startsWith('https');
+const WEBHOOK_SECRET = (env.TELEGRAM_WEBHOOK_SECRET || env.TG_WEBHOOK_SECRET || '').trim();
+const USE_WEBHOOK = (APP_URL || '').startsWith('https');
 
 let bot;
 let server;
-let keepAliveInterval;
 let isServiceReady = false;
-let healthCheckCount = 0;
-let initializationPromise = null;
 
 function validateEnvironment() {
-  const required = ['TELEGRAM_BOT_TOKEN'];
-  const missing = required.filter(key => !env[key]);
-  if (missing.length > 0) {
-    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+  if (!TOKEN) {
+    throw new Error('TELEGRAM_BOT_TOKEN is required');
   }
 }
 
 // Health endpoints
-app.get('/health', (_req, res) => {
-  healthCheckCount++;
-  res.status(200).json({ status: 'OK', ready: isServiceReady, checks: healthCheckCount });
-});
+app.get('/health', (_req, res) => res.status(200).json({ status: 'OK', ready: isServiceReady }));
 
-app.get('/', (_req, res) => {
-  healthCheckCount++;
-  res.status(200).json({ status: isServiceReady ? 'OK' : 'STARTING', uptime: process.uptime() });
-});
-
-// Start the server immediately
 server = app.listen(PORT, HOST, () => {
   console.log(`✅ Server listening on ${HOST}:${PORT}.`);
 });
@@ -88,13 +71,7 @@ async function registerAllHandlers(botInstance) {
     registerAllCallbacks(botInstance);
 }
 
-
 async function initializeBot() {
-  if (initializationPromise) { 
-    return initializationPromise; 
-  }
-  
-  initializationPromise = (async () => {
     try {
       console.log('🚀 Starting ParlayBot initialization...');
       validateEnvironment();
@@ -117,46 +94,27 @@ async function initializeBot() {
           res.sendStatus(200);
         });
       }
-      
+
       const me = await bot.getMe();
       console.log(`✅ Bot @${me.username} fully initialized.`);
       isServiceReady = true;
-
-      // Keep alive interval
-      keepAliveInterval = setInterval(() => {
-        if (isServiceReady) {
-          console.log('🤖 Bot active - uptime:', Math.round(process.uptime()), 'seconds');
-        }
-      }, 600000);
       
-      console.log('🎉 Application startup complete!');
+      console.log('🎉 Application startup complete! Bot is now responsive.');
       return bot;
     } catch (error) {
-      console.error('💥 Initialization failed:', error.message);
+      console.error('💥 FATAL INITIALIZATION ERROR:', error.message, error.stack);
       process.exit(1);
     }
-  })();
-  
-  return initializationPromise;
 }
 
 const shutdown = async (signal) => {
   console.log(`\n🛑 Received ${signal}. Starting graceful shutdown...`);
   isServiceReady = false;
   
-  if (keepAliveInterval) { 
-    clearInterval(keepAliveInterval); 
-  }
-  
   try {
     if (bot) {
-      if (USE_WEBHOOK) {
-        await bot.deleteWebHook();
-        console.log('✅ Webhook removed.');
-      } else if (bot.isPolling()) {
-        await bot.stopPolling();
-        console.log('✅ Bot polling stopped.');
-      }
+      if (USE_WEBHOOK) await bot.deleteWebHook().catch(e => console.warn('Webhook delete failed', e.message));
+      else if (bot.isPolling()) await bot.stopPolling().catch(e => console.warn('Polling stop failed', e.message));
     }
   } catch (error) {
     console.warn('⚠️ Error during bot shutdown:', error.message);
