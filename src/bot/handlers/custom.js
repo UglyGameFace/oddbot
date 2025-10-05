@@ -125,37 +125,37 @@ async function sendCustomSportSelection(bot, chatId, messageId = null) {
     rows.push([{ text: `▶️ Proceed (${chosen.size} Selected)`, callback_data: 'custom_sports_proceed' }]);
     const text = '✍️ *Manual Parlay Builder*\n\nSelect sports, then proceed:';
     const opts = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } };
-    if (messageId) return safeEditMessage(chatId, messageId, text, opts);
+    if (messageId) return safeEditMessage(bot, chatId, messageId, text, opts);
     return bot.sendMessage(chatId, text, opts);
 }
 
 async function sendCustomGamesFromSelected(bot, chatId, messageId) {
     const selected = await getCustomSelectedSports(chatId);
     if (selected.length === 0) {
-        return safeEditMessage(chatId, messageId, 'You must select at least one sport.', { reply_markup: { inline_keyboard: [[{ text: '« Back', callback_data: 'cback_sports' }]] } });
+        return safeEditMessage(bot, chatId, messageId, 'You must select at least one sport.', { reply_markup: { inline_keyboard: [[{ text: '« Back', callback_data: 'cback_sports' }]] } });
     }
     const config = await getBuilderConfig(chatId);
     const allGames = (await Promise.all(selected.map(k => gamesService.getGamesForSport(k)))).flat();
     const filteredGames = applyFilters(allGames, { cutoffHours: config.cutoffHours });
 
     if (!filteredGames.length) {
-        return safeEditMessage(chatId, messageId, 'No games found for your selected sports/filters.', { reply_markup: { inline_keyboard: [[{ text: '« Back', callback_data: 'cback_sports' }]] } });
+        return safeEditMessage(bot, chatId, messageId, 'No games found for your selected sports/filters.', { reply_markup: { inline_keyboard: [[{ text: '« Back', callback_data: 'cback_sports' }]] } });
     }
     const rows = filteredGames.slice(0, 20).map(g => ([{
         text: `${g.away_team} @ ${g.home_team} | ${formatGameTimeTZ(g.commence_time)}`,
         callback_data: `cg_${g.id || g.event_id}`
     }]));
     rows.push([{ text: '« Back to Sports', callback_data: 'cback_sports' }]);
-    await safeEditMessage(chatId, messageId, 'Select a game:', { reply_markup: { inline_keyboard: rows } });
+    await safeEditMessage(bot, chatId, messageId, 'Select a game:', { reply_markup: { inline_keyboard: rows } });
 }
 
 async function sendMarketSelection(bot, chatId, eventId, messageId) {
     const games = await gamesService.getGamesForSport(null);
     const game = games.find(g => (g.id || g.event_id) === eventId);
-    if (!game) return safeEditMessage(chatId, messageId, 'Game not found.');
+    if (!game) return safeEditMessage(bot, chatId, messageId, 'Game not found.');
 
     const bks = getBookmakers(game);
-    if (!bks?.length) return safeEditMessage(chatId, messageId, 'No market data found for this game.');
+    if (!bks?.length) return safeEditMessage(bot, chatId, messageId, 'No market data found for this game.');
     
     const marketKeys = new Set(bks.flatMap(b => b.markets?.map(m => m.key) || []));
     const keyboard = [];
@@ -165,17 +165,17 @@ async function sendMarketSelection(bot, chatId, eventId, messageId) {
     keyboard.push([{ text: '« Back to Games', callback_data: 'custom_sports_proceed' }]);
 
     const text = `*${game.away_team} @ ${game.home_team}*\nSelect a market:`;
-    await safeEditMessage(chatId, messageId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
+    await safeEditMessage(bot, chatId, messageId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
 }
 
 async function sendPickSelection(bot, chatId, eventId, marketKey, messageId) {
     const games = await gamesService.getGamesForSport(null);
     const game = games.find(g => (g.id || g.event_id) === eventId);
-    if (!game) return safeEditMessage(chatId, messageId, 'Game not found.');
+    if (!game) return safeEditMessage(bot, chatId, messageId, 'Game not found.');
     
     const bks = getBookmakers(game);
     const market = bks[0]?.markets?.find(m => m.key === marketKey);
-    if (!market?.outcomes) return safeEditMessage(chatId, messageId, 'Market outcomes not available.');
+    if (!market?.outcomes) return safeEditMessage(bot, chatId, messageId, 'Market outcomes not available.');
 
     const rows = [];
     for (const o of market.outcomes) {
@@ -189,7 +189,7 @@ async function sendPickSelection(bot, chatId, eventId, marketKey, messageId) {
         rows.push([{ text: `${o.name} ${pointText} (${priceText})`, callback_data: `cp_${token}` }]);
     }
     rows.push([{ text: '« Back to Markets', callback_data: `cg_${eventId}` }]);
-    await safeEditMessage(chatId, messageId, `Select your pick for *${marketKey}*:`, {
+    await safeEditMessage(bot, chatId, messageId, `Select your pick for *${marketKey}*:`, {
         parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows }
     });
 }
