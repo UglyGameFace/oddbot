@@ -71,6 +71,5 @@ export async function safeEditMessage(bot, chatId, messageId, text, options = {}
       }
       if (error.response?.body?.error_code === 400 && error.response.body.description?.includes('message to edit not found')) { return; }
       console.error('❌ Message edit failed:', error.message);
-      // Do not rethrow the error to prevent crashes on minor edit failures
     }
 }
