@@ -11,6 +11,7 @@ import { registerSettingsCallbacks } from './settings.js';
 import { registerPlayerCallbacks } from './player.js';
 import { registerSystemCallbacks } from './system.js';
 import { registerToolsCallbacks } from './tools.js';
+import { registerChatCallbacks } from './chat.js'; // FIX: Added chat callbacks
 
 // Track registered callbacks to prevent duplicates
 const registeredCallbacks = new Set();
@@ -51,6 +52,10 @@ export function registerAllCallbacks(bot) {
     // Register tools and utility callbacks
     registerToolsCallbacks(bot);
     console.log('✅ Tools callbacks registered');
+
+    // FIX: Centralize chat callback registration
+    registerChatCallbacks(bot);
+    console.log('✅ Chat callbacks registered');
 
     // Register global error handler for callbacks
     registerGlobalCallbackErrorHandler(bot);
