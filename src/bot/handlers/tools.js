@@ -14,7 +14,8 @@ export function registerTools(bot) {
   });
 }
 
-export function registerCommonCallbacks(bot) {
+// FIX: Renamed function to match the import in callbackManager.js
+export function registerToolsCallbacks(bot) {
   bot.on('callback_query', async (cbq) => {
     const { data, message } = cbq || {};
     if (!data || !message || !data.startsWith('tools_')) return;
