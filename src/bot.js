@@ -1,4 +1,4 @@
-// src/bot.js - COMPLETELY FIXED
+// src/bot.js - FINALIZED AND CORRECTED
 import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
@@ -65,7 +65,9 @@ function validateEnvironment() {
   console.log('   - WEBHOOK_SECRET:', WEBHOOK_SECRET ? '✓ Set' : '✗ Missing');
 }
 
-export async function safeEditMessage(chatId, messageId, text, options = {}) {
+// FIX: Removed the `export` keyword. This function is internal to bot.js and
+// exporting it was causing module resolution conflicts during startup.
+async function safeEditMessage(chatId, messageId, text, options = {}) {
   if (!bot) {
     console.warn('⚠️ Bot not initialized, cannot edit message');
     return;
