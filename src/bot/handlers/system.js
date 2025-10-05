@@ -1,4 +1,4 @@
-// src/bot/handlers/system.js - COMPLETELY FIXED
+// src/bot/handlers/system.js - FIXED HEALTH CHECK STRUCTURE
 import pidusage from 'pidusage';
 import healthService from '../../services/healthService.js';
 
@@ -11,10 +11,8 @@ const formatUptime = (seconds) => {
 };
 
 export function registerSystem(bot) {
-  bot.onText(/^\/start$/, async (msg) => {
+  bot.onText(/^\/start$/, (msg) => {
     const chatId = msg.chat.id;
-    console.log(`🎯 /start command from ${chatId}`);
-    
     const text = `
 Welcome to the *Institutional AI Parlay Bot*! 🚀
 
@@ -28,18 +26,11 @@ Here are the main commands to get you started:
 
 For a full list of commands, please use \`/help\`.
     `;
-    
-    try {
-      await bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
-    } catch (error) {
-      console.error('❌ Error sending start message:', error);
-    }
+    bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
   });
 
-  bot.onText(/^\/help$/, async (msg) => {
+  bot.onText(/^\/help$/, (msg) => {
     const chatId = msg.chat.id;
-    console.log(`🎯 /help command from ${chatId}`);
-    
     const text = `
 *📖 Bot Command Guide*
 
@@ -55,50 +46,36 @@ For a full list of commands, please use \`/help\`.
 • \`/help\` - Displays this help message.
 • \`/start\` - Shows the welcome message.
     `;
-    
-    try {
-      await bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
-    } catch (error) {
-      console.error('❌ Error sending help message:', error);
-    }
+    bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
   });
   
   bot.onText(/^\/ping$/, async (msg) => {
     const chatId = msg.chat.id;
-    console.log(`🎯 /ping command from ${chatId}`);
-    
-    try {
-      const startTime = Date.now();
-      const sentMsg = await bot.sendMessage(chatId, 'Pinging...');
-      const endTime = Date.now();
-      const latency = endTime - startTime;
-      
-      await bot.editMessageText(`Pong! 🏓\nLatency: ${latency}ms`, {
-        chat_id: chatId,
-        message_id: sentMsg.message_id,
-      });
-    } catch (error) {
-      console.error('❌ Error in ping command:', error);
-      bot.sendMessage(chatId, '❌ Ping failed. Please try again.');
-    }
+    const startTime = Date.now();
+    const sentMsg = await bot.sendMessage(chatId, 'Pinging...');
+    const endTime = Date.now();
+    const latency = endTime - startTime;
+    bot.editMessageText(`Pong! 🏓\nLatency: ${latency}ms`, {
+      chat_id: chatId,
+      message_id: sentMsg.message_id,
+    });
   });
 
   bot.onText(/^\/status$/, async (msg) => {
     const chatId = msg.chat.id;
-    console.log(`🎯 /status command from ${chatId}`);
+    const waitingMsg = await bot.sendMessage(chatId, '📊 Generating system status report...');
     
     try {
-      const waitingMsg = await bot.sendMessage(chatId, '📊 Generating system status report...');
-      
       const [stats, health] = await Promise.all([
-        pidusage(process.pid).catch(() => ({ memory: 0, cpu: 0 })),
-        healthService.getHealth().catch(() => ({ ok: false, database: { ok: false }, redis: { ok: false } }))
+        pidusage(process.pid),
+        healthService.getHealth()
       ]);
       
       const memoryUsage = (stats.memory / 1024 / 1024).toFixed(2); // in MB
       const cpuUsage = stats.cpu.toFixed(2);
       const uptime = formatUptime(process.uptime());
 
+      // FIXED: Use the correct health structure
       const statusText = `
 *🤖 Bot Status Report*
 
@@ -109,8 +86,10 @@ For a full list of commands, please use \`/help\`.
 • *Node.js Version:* ${process.version}
 
 *Services*
-• *Database:* ${health?.database?.ok ? '✅ Connected' : '❌ Disconnected'}
-• *Redis Cache:* ${health?.redis?.ok ? '✅ Connected' : '❌ Disconnected'}
+• *Database:* ${health?.services?.database?.ok ? '✅ Connected' : '❌ Disconnected'}
+• *Redis Cache:* ${health?.services?.redis?.ok ? '✅ Connected' : '❌ Disconnected'}
+• *Odds Service:* ${health?.services?.odds?.ok ? '✅ Connected' : '❌ Disconnected'}
+• *Games Service:* ${health?.services?.games?.ok ? '✅ Connected' : '❌ Disconnected'}
 • *Overall Health:* ${health?.ok ? '✅ Healthy' : '❌ Degraded'}
       `;
 
@@ -120,18 +99,18 @@ For a full list of commands, please use \`/help\`.
         parse_mode: 'Markdown',
       });
     } catch (error) {
-      console.error("❌ Failed to generate status report:", error);
-      bot.sendMessage(chatId, '❌ Failed to generate status report. Please check the logs.');
+      console.error("Failed to generate status report:", error);
+      await bot.editMessageText('❌ Failed to generate status report. Please check the logs.', {
+        chat_id: chatId,
+        message_id: waitingMsg.message_id,
+      });
     }
   });
 }
 
 export function registerSystemCallbacks(bot) {
-  // System callbacks can be added here if needed
   bot.on('callback_query', async (cbq) => {
     const { data, message } = cbq || {};
     if (!data || !message || !data.startsWith('sys_')) return;
-    
-    // Handle system callbacks here if needed
   });
 }
