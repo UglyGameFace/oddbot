@@ -1,9 +1,7 @@
-// src/bot/handlers/system.js
-
+// src/bot/handlers/system.js - CORRECTED
 import pidusage from 'pidusage';
 import healthService from '../../services/healthService.js';
 
-// Helper function to format uptime from seconds into a readable string
 const formatUptime = (seconds) => {
   const d = Math.floor(seconds / (3600 * 24));
   const h = Math.floor(seconds % (3600 * 24) / 3600);
@@ -13,7 +11,6 @@ const formatUptime = (seconds) => {
 };
 
 export function registerSystem(bot) {
-  // --- /start command ---
   bot.onText(/^\/start$/, (msg) => {
     const chatId = msg.chat.id;
     const text = `
@@ -32,7 +29,6 @@ For a full list of commands, please use \`/help\`.
     bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
   });
 
-  // --- /help command ---
   bot.onText(/^\/help$/, (msg) => {
     const chatId = msg.chat.id;
     const text = `
@@ -53,7 +49,6 @@ For a full list of commands, please use \`/help\`.
     bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
   });
   
-  // --- /ping command ---
   bot.onText(/^\/ping$/, async (msg) => {
     const chatId = msg.chat.id;
     const startTime = Date.now();
@@ -66,19 +61,21 @@ For a full list of commands, please use \`/help\`.
     });
   });
 
-  // --- /status command ---
   bot.onText(/^\/status$/, async (msg) => {
     const chatId = msg.chat.id;
     const waitingMsg = await bot.sendMessage(chatId, '📊 Generating system status report...');
     
     try {
-      const stats = await pidusage(process.pid);
-      const health = await healthService.getHealth();
+      const [stats, health] = await Promise.all([
+        pidusage(process.pid),
+        healthService.getHealth()
+      ]);
       
       const memoryUsage = (stats.memory / 1024 / 1024).toFixed(2); // in MB
       const cpuUsage = stats.cpu.toFixed(2);
       const uptime = formatUptime(process.uptime());
 
+      // ✅ FIX: Used optional chaining (?.) to prevent crash on partial health reports.
       const statusText = `
 *🤖 Bot Status Report*
 
@@ -89,9 +86,9 @@ For a full list of commands, please use \`/help\`.
 • *Node.js Version:* ${process.version}
 
 *Services*
-• *Database:* ${health.database.ok ? '✅ Connected' : '❌ Disconnected'}
-• *Redis Cache:* ${health.redis.ok ? '✅ Connected' : '❌ Disconnected'}
-• *Overall Health:* ${health.ok ? '✅ Healthy' : '❌ Degraded'}
+• *Database:* ${health?.database?.ok ? '✅ Connected' : '❌ Disconnected'}
+• *Redis Cache:* ${health?.redis?.ok ? '✅ Connected' : '❌ Disconnected'}
+• *Overall Health:* ${health?.ok ? '✅ Healthy' : '❌ Degraded'}
       `;
 
       await bot.editMessageText(statusText, {
@@ -110,10 +107,8 @@ For a full list of commands, please use \`/help\`.
 }
 
 export function registerSystemCallbacks(bot) {
-  // This handler does not currently use callbacks, but the function is here for future expansion and consistency.
   bot.on('callback_query', async (cbq) => {
     const { data, message } = cbq || {};
     if (!data || !message || !data.startsWith('sys_')) return;
-    // Future callback logic for system commands can go here.
   });
 }
