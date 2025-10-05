@@ -25,7 +25,7 @@ class OddsIngestionEngine {
 
   async initialize() {
     try {
-      // Create dedicated clients for this worker to ensure isolation.
+      // FIX: Create dedicated clients for this worker to ensure isolation.
       // This is the guaranteed fix for the "(P)SUBSCRIBE" context errors.
       this.redisClient = new Redis(env.REDIS_URL, { maxRetriesPerRequest: 3 });
       this.subscriberClient = new Redis(env.REDIS_URL, { maxRetriesPerRequest: 3 });
@@ -50,8 +50,8 @@ class OddsIngestionEngine {
         }
       });
     } catch (error) {
-      console.error('❌ Failed to initialize Redis subscriber for manual triggers:', error);
-      sentryService.captureError(error, { component: 'odds_ingestion_worker_redis_subscriber' });
+        console.error('❌ Failed to initialize Redis subscriber for manual triggers:', error);
+        sentryService.captureError(error, { component: 'odds_ingestion_worker_redis_subscriber' });
     }
   }
 
