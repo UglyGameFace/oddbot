@@ -1,5 +1,4 @@
-// src/bot/handlers/chat.js
-
+// src/bot/handlers/chat.js - COMPLETE AND FINAL SCRIPT
 import { getUserState, setUserState } from '../state.js';
 import rateLimitService from '../../services/rateLimitService.js';
 import env from '../../config/env.js';
@@ -9,7 +8,7 @@ import axios from 'axios';
 // Telegram hard cap ~4096, keep margin for markup/buttons
 const MAX_TELEGRAM = 3800;
 
-// Split long text for Telegram safely (no nested lists, keeps MarkdownV2)
+// Split long text for Telegram safely
 function chunk(text, size = MAX_TELEGRAM) {
   const out = [];
   let i = 0;
@@ -26,18 +25,18 @@ function toCompact(text, limit = 700) {
   return { head: text.slice(0, limit) + '…', tail: text.slice(limit) };
 }
 
-// Minimal context buffer by characters (token-light)
+// Minimal context buffer by characters
 function trimContext(messages, maxChars = 6000) {
   const out = [];
   let total = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
-    const sz = (m.content || '').length + 20;
+    const sz = (m.content || '').length + 20; // Add buffer for role/keys
     if (total + sz > maxChars) break;
-    out.push(m);
+    out.unshift(m); // Add to the beginning to reverse the order
     total += sz;
   }
-  return out.reverse();
+  return out;
 }
 
 // Generic chat completion using aiService if available; Perplexity fallback
@@ -45,7 +44,7 @@ async function completeChat(model, messages) {
   if (typeof aiService.genericChat === 'function') {
     return await aiService.genericChat(model, messages);
   }
-  // Perplexity fallback (concise answers, no markdown fences)
+  // Perplexity fallback
   const resp = await axios.post(
     'https://api.perplexity.ai/chat/completions',
     {
@@ -68,14 +67,18 @@ export function registerChat(bot) {
     const rl = await rateLimitService.checkRateLimit(chatId, 'user', 'chat_open');
     if (!rl.allowed) return bot.sendMessage(chatId, 'Rate limit reached. Try again shortly.');
 
-    const state = await getUserState(chatId);
-    state.chat = {
-      model: 'perplexity',       // default; could be 'gemini' if preferred
-      compact: true,             // default concise
-      history: [],               // [{role, content}]
-      lastMessageId: null,
+    const currentState = await getUserState(chatId);
+    const newState = {
+      ...currentState,
+      chat: {
+        model: 'perplexity',
+        compact: true,
+        history: [],
+        lastMessageId: null,
+        pendingChunks: [],
+      },
     };
-    await setUserState(chatId, state, 1800);
+    await setUserState(chatId, newState, 1800); // 30 min expiry
 
     const starter = (match && match[1]) ? match[1].trim() : '';
     const text = starter
@@ -88,9 +91,12 @@ export function registerChat(bot) {
     ];
 
     const sent = await bot.sendMessage(chatId, text, { reply_markup: { inline_keyboard: keyboard } });
-    const s2 = await getUserState(chatId);
-    s2.chat.lastMessageId = sent.message_id;
-    await setUserState(chatId, s2, 1800);
+    
+    const finalState = await getUserState(chatId);
+    if (finalState.chat) { // Defensive check to prevent crash on race condition
+      finalState.chat.lastMessageId = sent.message_id;
+      await setUserState(chatId, finalState, 1800);
+    }
 
     if (starter) {
       await handleUserChat(bot, chatId, starter);
@@ -114,7 +120,7 @@ export function registerChat(bot) {
     }
     if (data === 'chat_end') {
       state.chat = null;
-      await setUserState(chatId, state, 60);
+      await setUserState(chatId, state, 60); // Keep state for 1 min
       return bot.sendMessage(chatId, 'Chat ended.');
     }
     if (data.startsWith('chat_more_')) {
@@ -123,6 +129,7 @@ export function registerChat(bot) {
       if (!pending) return;
       const chunks = chunk(pending);
       for (const c of chunks) {
+        // Using MarkdownV2 for consistency, ensure pending text is escaped if needed
         await bot.sendMessage(chatId, c, { parse_mode: 'MarkdownV2' });
       }
       return;
@@ -143,43 +150,57 @@ async function handleUserChat(bot, chatId, userText) {
   const rl = await rateLimitService.checkRateLimit(chatId, 'user', 'chat_msg');
   if (!rl.allowed) return bot.sendMessage(chatId, 'Rate limit reached. Try again shortly.');
 
-  const state = await getUserState(chatId);
-  const cfg = state.chat || { model: 'perplexity', compact: true, history: [] };
+  let state = await getUserState(chatId);
+  if (!state.chat) return; // Double-check in case state expired
 
-  cfg.history.push({ role: 'user', content: userText });
-  cfg.history = trimContext(cfg.history, 6000);
-  await setUserState(chatId, { ...state, chat: cfg }, 1800);
+  state.chat.history.push({ role: 'user', content: userText });
+  state.chat.history = trimContext(state.chat.history, 6000);
+  await setUserState(chatId, state, 1800);
 
   try {
-    const reply = await completeChat(cfg.model, [{ role: 'system', content: 'Be concise and factual. Cite stats and dates, but keep answers short by default.' }, ...cfg.history]);
+    const reply = await completeChat(state.chat.model, state.chat.history);
 
-    const { head, tail } = toCompact(reply, cfg.compact ? 700 : 1800);
+    const { head, tail } = toCompact(reply, state.chat.compact ? 700 : 1800);
     const chunks = chunk(head, MAX_TELEGRAM);
 
-    // Track any overflow for “More”
-    const s2 = await getUserState(chatId);
-    s2.chat.pendingChunks = s2.chat.pendingChunks || [];
     let moreButton = null;
     if (tail) {
-      const idx = s2.chat.pendingChunks.push(tail) - 1;
+      if (!Array.isArray(state.chat.pendingChunks)) {
+        state.chat.pendingChunks = [];
+      }
+      const idx = state.chat.pendingChunks.push(tail) - 1;
       moreButton = [{ text: 'More', callback_data: `chat_more_${idx}` }];
     }
-    await setUserState(chatId, s2, 1800);
-
-    // Send main content
+    
+    // Send main content chunks
     for (let i = 0; i < chunks.length; i++) {
-      const extra = (i === chunks.length - 1 && moreButton) ? { reply_markup: { inline_keyboard: [moreButton, [{ text: 'Toggle Compact', callback_data: 'chat_toggle_compact' }, { text: 'End Chat', callback_data: 'chat_end' }]] } } : {};
-      await bot.sendMessage(chatId, chunks[i], { parse_mode: 'MarkdownV2', ...extra });
+      const isLastChunk = i === chunks.length - 1;
+      const keyboard = [
+        [{ text: 'Toggle Compact', callback_data: 'chat_toggle_compact' }, { text: 'End Chat', callback_data: 'chat_end' }]
+      ];
+
+      if (isLastChunk && moreButton) {
+        keyboard.unshift(moreButton);
+      }
+      
+      const options = {
+        parse_mode: 'MarkdownV2', // Assume AI service provides safe MarkdownV2
+        reply_markup: { inline_keyboard: keyboard }
+      };
+
+      await bot.sendMessage(chatId, chunks[i], isLastChunk ? options : { parse_mode: 'MarkdownV2' });
     }
 
     // Save assistant reply into context
-    const st3 = await getUserState(chatId);
-    st3.chat.history.push({ role: 'assistant', content: reply });
-    st3.chat.history = trimContext(st3.chat.history, 6000);
-    await setUserState(chatId, st3, 1800);
+    let finalState = await getUserState(chatId);
+    if(finalState.chat) {
+        finalState.chat.history.push({ role: 'assistant', content: reply });
+        finalState.chat.history = trimContext(finalState.chat.history, 6000);
+        await setUserState(chatId, finalState, 1800);
+    }
 
   } catch (e) {
-    console.error('Chat error:', e?.message || e);
-    await bot.sendMessage(chatId, 'Chat failed. Please try again shortly.');
+    console.error('Chat handler error:', e?.message || e);
+    await bot.sendMessage(chatId, 'An error occurred in chat. Please try again shortly.');
   }
 }
