@@ -1,9 +1,11 @@
 // src/workers/oddsIngestion.js - Manages on-demand ingestion of sports odds via a Redis trigger.
+// FIX: Uses dedicated Redis clients to prevent connection state pollution.
+
+import Redis from 'ioredis';
 import DatabaseService from '../services/databaseService.js';
 import OddsService from '../services/oddsService.js';
 import { sentryService } from '../services/sentryService.js';
-import gamesService from '../services/gamesService.js'; 
-import redisClient from '../services/redisService.js';
+import gamesService from '../services/gamesService.js';
 import env from '../config/env.js';
 
 process.on('unhandledRejection', (reason, promise) => {
@@ -17,36 +19,39 @@ class OddsIngestionEngine {
   constructor() {
     this.isJobRunning = false;
     this.redisClient = null;
+    this.subscriberClient = null;
     this.initialize();
   }
 
   async initialize() {
     try {
-      this.redisClient = await redisClient;
+      // Create dedicated clients for this worker to ensure isolation.
+      // This is the guaranteed fix for the "(P)SUBSCRIBE" context errors.
+      this.redisClient = new Redis(env.REDIS_URL, { maxRetriesPerRequest: 3 });
+      this.subscriberClient = new Redis(env.REDIS_URL, { maxRetriesPerRequest: 3 });
+      console.log('✅ Odds worker created dedicated Redis clients.');
       this.initializeManualTrigger();
     } catch (error) {
-      console.error('❌ Failed to initialize the main Redis client for the worker:', error);
-      sentryService.captureError(error, { component: 'odds_ingestion_worker_main_redis' });
+      console.error('❌ Failed to initialize dedicated Redis clients for the worker:', error);
+      sentryService.captureError(error, { component: 'odds_ingestion_worker_redis_init' });
     }
   }
 
   async initializeManualTrigger() {
-    const subscriber = this.redisClient.duplicate();
     const channel = 'odds_ingestion_trigger';
-    
     try {
-      await subscriber.subscribe(channel);
+      await this.subscriberClient.subscribe(channel);
       console.log(`✅ Worker listening for manual triggers on Redis channel: ${channel}`);
 
-      subscriber.on('message', (ch, message) => {
+      this.subscriberClient.on('message', (ch, message) => {
         if (ch === channel && message === 'run') {
           console.log(' MANUAL TRIGGER RECEIVED! Starting ingestion cycle...');
           this.runIngestionCycle('manual');
         }
       });
     } catch (error) {
-        console.error('❌ Failed to initialize Redis subscriber for manual triggers:', error);
-        sentryService.captureError(error, { component: 'odds_ingestion_worker_redis_subscriber' });
+      console.error('❌ Failed to initialize Redis subscriber for manual triggers:', error);
+      sentryService.captureError(error, { component: 'odds_ingestion_worker_redis_subscriber' });
     }
   }
 
