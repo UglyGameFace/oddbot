@@ -18,7 +18,6 @@ import { registerSettings } from './bot/handlers/settings.js';
 import { registerSystem } from './bot/handlers/system.js';
 import { registerTools } from './bot/handlers/tools.js';
 import { registerChat } from './bot/handlers/chat.js';
-import { safeEditMessage } from './utils/asyncUtils.js';
 
 // Global error hooks
 process.on('unhandledRejection', (reason, promise) => {
@@ -407,4 +406,4 @@ initializeBot().catch((error) => {
   }
 });
 
-export default bot;
+export { bot };
