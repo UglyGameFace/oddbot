@@ -1,6 +1,8 @@
 // src/workers/notificationWorker.js - ENTERPRISE MESSAGE BUS
+// FIX: Uses a dedicated Redis client to prevent connection state pollution.
+
 import TelegramBot from 'node-telegram-bot-api';
-import redis from '../services/redisService.js';
+import Redis from 'ioredis'; // Import ioredis directly
 import env from '../config/env.js';
 import { sentryService } from '../services/sentryService.js';
 
@@ -10,7 +12,7 @@ class EnterpriseNotificationEngine {
   constructor() {
     this.isReady = false;
     this.bot = null;
-    // FIX: Wrap initialization to prevent startup crashes.
+    this.redisClient = null; // Dedicated client instance
     this.initialize().catch(error => {
         console.error('❌ FATAL: Failed to initialize the notification engine.', error);
         sentryService.captureError(error, { component: 'notification_worker_initialization' });
@@ -20,20 +22,22 @@ class EnterpriseNotificationEngine {
   async initialize() {
     if (env.TELEGRAM_BOT_TOKEN) {
         this.bot = new TelegramBot(env.TELEGRAM_BOT_TOKEN);
+        // FIX: Create a dedicated Redis client for this worker's blocking operations.
+        this.redisClient = new Redis(env.REDIS_URL, { maxRetriesPerRequest: 3 });
         this.isReady = true;
-        console.log('✅ Enterprise Notification Engine initialized.');
-        const redisClient = await redis;
-        this.startListening(redisClient);
+        console.log('✅ Notification Engine initialized with dedicated Redis client.');
+        this.startListening();
     } else {
         console.warn('🚨 Notification Engine disabled: TELEGRAM_BOT_TOKEN not set.');
     }
   }
 
-  async startListening(redisClient) {
+  async startListening() {
     console.log('...Notification worker listening for messages on Redis queue...');
     while (true) {
         try {
-            const result = await redisClient.blpop(NOTIFICATION_QUEUE_KEY, 0);
+            // Use the dedicated client instance for the blocking pop command.
+            const result = await this.redisClient.blpop(NOTIFICATION_QUEUE_KEY, 0);
             if (result) {
                 const notification = JSON.parse(result[1]);
                 await this.deliverNotification(notification);
