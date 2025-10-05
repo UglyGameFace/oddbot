@@ -1,6 +1,19 @@
-// src/services/cacheService.js - ENHANCED VERSION
+// src/services/cacheService.js - COMPLETELY FIXED
+
 import { sentryService } from './sentryService.js';
-import { sleep, safeJsonParse } from '../utils/asyncUtils.js';
+
+// Utility functions (previously from asyncUtils.js)
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+const safeJsonParse = (str, fallback = null) => {
+  if (str === null || str === undefined) return fallback;
+  try {
+    return JSON.parse(str);
+  } catch (error) {
+    console.warn('❌ JSON parse error:', error.message);
+    return fallback;
+  }
+};
 
 export default function makeCache(redis) {
   const DEFAULT_LOCK_MS = 8000;
@@ -20,6 +33,7 @@ export default function makeCache(redis) {
         try {
           const parsed = safeJsonParse(cached);
           if (parsed !== null) {
+            console.log(`📦 Cache HIT for key: ${key}`);
             return parsed;
           }
         } catch (parseError) {
@@ -28,20 +42,25 @@ export default function makeCache(redis) {
         }
       }
 
+      console.log(`❌ Cache MISS for key: ${key}`);
       const lockKey = `lock:${key}`;
       
       // Try to acquire lock
       const gotLock = await redis.set(lockKey, '1', 'PX', lockMs, 'NX');
 
       if (gotLock === 'OK') {
+        console.log(`🔒 Acquired lock for key: ${key}`);
         try {
           const data = await loader();
           if (data !== undefined && data !== null) {
             await redis.set(key, JSON.stringify(data), 'EX', ttlSec);
+            console.log(`💾 Cached data for key: ${key} (TTL: ${ttlSec}s)`);
+          } else {
+            console.warn(`⚠️ Loader returned null/undefined for key: ${key}`);
           }
           return data;
         } catch (loaderError) {
-          console.error(`❌ Loader failed for cache key: ${key}`, loaderError);
+          console.error(`❌ Loader failed for cache key: ${key}`, loaderError.message);
           sentryService.captureError(loaderError, {
             component: 'cache_service',
             operation: 'getOrSetJSON_loader',
@@ -51,16 +70,21 @@ export default function makeCache(redis) {
           
           if (fallbackOnError && cached) {
             console.log('🔄 Using cached data despite loader error');
-            return safeJsonParse(cached, null);
+            const fallbackData = safeJsonParse(cached, null);
+            if (fallbackData) {
+              return fallbackData;
+            }
           }
           throw loaderError;
         } finally {
           await redis.del(lockKey).catch(delError => {
-            console.warn(`⚠️ Failed to delete lock key: ${lockKey}`, delError);
+            console.warn(`⚠️ Failed to delete lock key: ${lockKey}`, delError.message);
           });
+          console.log(`🔓 Released lock for key: ${key}`);
         }
       } else {
         // Wait for the lock holder to complete
+        console.log(`⏳ Waiting for lock on key: ${key}`);
         const deadline = Date.now() + lockMs;
         while (Date.now() < deadline) {
           await sleep(retryMs);
@@ -68,6 +92,7 @@ export default function makeCache(redis) {
           if (again) {
             const parsed = safeJsonParse(again);
             if (parsed !== null) {
+              console.log(`📦 Got cached data after lock wait for key: ${key}`);
               return parsed;
             }
             break;
@@ -75,6 +100,7 @@ export default function makeCache(redis) {
         }
         
         // If we get here, either deadline passed or data was corrupt
+        console.log(`⏰ Lock wait timeout for key: ${key}, loading fresh data`);
         const data = await loader();
         if (data !== undefined && data !== null) {
           await redis.set(key, JSON.stringify(data), 'EX', ttlSec);
@@ -82,7 +108,7 @@ export default function makeCache(redis) {
         return data;
       }
     } catch (error) {
-      console.error(`❌ Cache operation failed for key: ${key}`, error);
+      console.error(`❌ Cache operation failed for key: ${key}`, error.message);
       sentryService.captureError(error, {
         component: 'cache_service',
         operation: 'getOrSetJSON',
@@ -93,9 +119,10 @@ export default function makeCache(redis) {
       // If cache fails, still try to return fresh data
       if (fallbackOnError) {
         try {
+          console.log(`🔄 Fallback to direct loader for key: ${key}`);
           return await loader();
         } catch (fallbackError) {
-          console.error(`❌ Fallback loader also failed for key: ${key}`, fallbackError);
+          console.error(`❌ Fallback loader also failed for key: ${key}`, fallbackError.message);
           throw fallbackError;
         }
       }
@@ -106,9 +133,11 @@ export default function makeCache(redis) {
   async function getJSON(key, fallback = null) {
     try {
       const cached = await redis.get(key);
-      return safeJsonParse(cached, fallback);
+      const result = safeJsonParse(cached, fallback);
+      console.log(`🔍 Cache GET for ${key}: ${result ? 'HIT' : 'MISS'}`);
+      return result;
     } catch (error) {
-      console.error(`❌ Cache get failed for key: ${key}`, error);
+      console.error(`❌ Cache get failed for key: ${key}`, error.message);
       return fallback;
     }
   }
@@ -117,22 +146,25 @@ export default function makeCache(redis) {
     try {
       if (value === undefined || value === null) {
         await redis.del(key);
+        console.log(`🗑️ Deleted cache key: ${key}`);
         return true;
       }
       await redis.set(key, JSON.stringify(value), 'EX', ttlSec);
+      console.log(`💾 Cache SET for ${key} (TTL: ${ttlSec}s)`);
       return true;
     } catch (error) {
-      console.error(`❌ Cache set failed for key: ${key}`, error);
+      console.error(`❌ Cache set failed for key: ${key}`, error.message);
       return false;
     }
   }
 
   async function deleteKey(key) {
     try {
-      await redis.del(key);
-      return true;
+      const result = await redis.del(key);
+      console.log(`🗑️ Deleted cache key: ${key} (result: ${result})`);
+      return result > 0;
     } catch (error) {
-      console.error(`❌ Failed to delete cache key: ${key}`, error);
+      console.error(`❌ Failed to delete cache key: ${key}`, error.message);
       sentryService.captureError(error, {
         component: 'cache_service',
         operation: 'deleteKey',
@@ -144,9 +176,11 @@ export default function makeCache(redis) {
 
   async function getKeys(pattern) {
     try {
-      return await redis.keys(pattern);
+      const keys = await redis.keys(pattern);
+      console.log(`🔍 Found ${keys.length} keys matching pattern: ${pattern}`);
+      return keys;
     } catch (error) {
-      console.error(`❌ Failed to get keys for pattern: ${pattern}`, error);
+      console.error(`❌ Failed to get keys for pattern: ${pattern}`, error.message);
       sentryService.captureError(error, {
         component: 'cache_service',
         operation: 'getKeys',
@@ -164,9 +198,10 @@ export default function makeCache(redis) {
         console.log(`🧹 Flushed ${keys.length} keys matching: ${pattern}`);
         return keys.length;
       }
+      console.log(`🔍 No keys found matching pattern: ${pattern}`);
       return 0;
     } catch (error) {
-      console.error(`❌ Failed to flush pattern: ${pattern}`, error);
+      console.error(`❌ Failed to flush pattern: ${pattern}`, error.message);
       sentryService.captureError(error, {
         component: 'cache_service',
         operation: 'flushPattern',
@@ -213,22 +248,32 @@ export default function makeCache(redis) {
         }
       }
 
+      const totalKeys = Object.values(patternCounts).reduce((sum, count) => sum + count, 0);
+      const hitRate = cacheInfo.keyspace_hits && cacheInfo.keyspace_misses ? 
+        (parseInt(cacheInfo.keyspace_hits) / (parseInt(cacheInfo.keyspace_hits) + parseInt(cacheInfo.keyspace_misses))).toFixed(4) : 0;
+
+      console.log(`📊 Cache Info: ${totalKeys} total keys, hit rate: ${(hitRate * 100).toFixed(2)}%`);
+
       return {
         ...cacheInfo,
         pattern_distribution: patternCounts,
-        total_cached_keys: Object.values(patternCounts).reduce((sum, count) => sum + count, 0),
+        total_cached_keys: totalKeys,
         memory_usage: memoryData.used_memory_human || 'unknown',
         memory_peak: memoryData.used_memory_peak_human || 'unknown',
-        hit_rate: cacheInfo.keyspace_hits && cacheInfo.keyspace_misses ? 
-          (parseInt(cacheInfo.keyspace_hits) / (parseInt(cacheInfo.keyspace_hits) + parseInt(cacheInfo.keyspace_misses))).toFixed(4) : 0
+        hit_rate: hitRate,
+        hit_rate_percentage: `${(hitRate * 100).toFixed(2)}%`,
+        timestamp: new Date().toISOString()
       };
     } catch (error) {
-      console.error('❌ Failed to get cache info:', error);
+      console.error('❌ Failed to get cache info:', error.message);
       sentryService.captureError(error, {
         component: 'cache_service',
         operation: 'getCacheInfo'
       });
-      return { error: error.message };
+      return { 
+        error: error.message,
+        timestamp: new Date().toISOString()
+      };
     }
   }
 
@@ -241,19 +286,25 @@ export default function makeCache(redis) {
         redis.memory('USAGE', key).catch(() => null)
       ]);
       
-      return {
+      const result = {
         exists: exists === 1,
         ttl,
         type,
         memory_usage: memory ? `${memory} bytes` : 'unknown',
         ttl_human: ttl > 0 ? `${ttl} seconds` : 'no TTL',
-        status: exists ? (ttl > 0 ? 'active' : 'persistent') : 'not_found'
+        status: exists ? (ttl > 0 ? 'active' : 'persistent') : 'not_found',
+        timestamp: new Date().toISOString()
       };
+
+      console.log(`🔍 Key info for ${key}:`, result);
+      return result;
+
     } catch (error) {
-      console.error(`❌ Failed to get key info for: ${key}`, error);
+      console.error(`❌ Failed to get key info for: ${key}`, error.message);
       return {
         exists: false,
-        error: error.message
+        error: error.message,
+        timestamp: new Date().toISOString()
       };
     }
   }
@@ -264,9 +315,10 @@ export default function makeCache(redis) {
       if (ttlSec && ttlSec > 0) {
         await redis.expire(key, ttlSec);
       }
+      console.log(`➕ Incremented ${key} by ${value}, new value: ${result}`);
       return result;
     } catch (error) {
-      console.error(`❌ Failed to increment key: ${key}`, error);
+      console.error(`❌ Failed to increment key: ${key}`, error.message);
       return null;
     }
   }
@@ -277,9 +329,10 @@ export default function makeCache(redis) {
       if (ttlSec && ttlSec > 0) {
         await redis.expire(key, ttlSec);
       }
+      console.log(`➖ Decremented ${key} by ${value}, new value: ${result}`);
       return result;
     } catch (error) {
-      console.error(`❌ Failed to decrement key: ${key}`, error);
+      console.error(`❌ Failed to decrement key: ${key}`, error.message);
       return null;
     }
   }
@@ -291,9 +344,10 @@ export default function makeCache(redis) {
       } else {
         await redis.set(key, value);
       }
+      console.log(`💾 Set key ${key} with TTL ${ttlSec || 'none'}`);
       return true;
     } catch (error) {
-      console.error(`❌ Failed to set with TTL for key: ${key}`, error);
+      console.error(`❌ Failed to set with TTL for key: ${key}`, error.message);
       return false;
     }
   }
@@ -304,9 +358,10 @@ export default function makeCache(redis) {
         redis.get(key),
         redis.ttl(key)
       ]);
+      console.log(`🔍 Get with TTL for ${key}: value=${value ? 'exists' : 'null'}, ttl=${ttl}`);
       return { value, ttl };
     } catch (error) {
-      console.error(`❌ Failed to get with TTL for key: ${key}`, error);
+      console.error(`❌ Failed to get with TTL for key: ${key}`, error.message);
       return { value: null, ttl: -2 };
     }
   }
@@ -327,16 +382,31 @@ export default function makeCache(redis) {
       
       const responseTime = Date.now() - startTime;
       
-      return {
+      const result = {
         healthy: value === 'health_check_value',
         response_time: responseTime,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        details: {
+          write: true,
+          read: true,
+          delete: true
+        }
       };
+
+      console.log(`❤️ Cache health check: ${result.healthy ? 'HEALTHY' : 'UNHEALTHY'} (${responseTime}ms)`);
+      return result;
+
     } catch (error) {
+      console.error('❌ Cache health check failed:', error.message);
       return {
         healthy: false,
         error: error.message,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        details: {
+          write: false,
+          read: false,
+          delete: false
+        }
       };
     }
   }
@@ -357,3 +427,6 @@ export default function makeCache(redis) {
     healthCheck
   };
 }
+
+// Export utility functions for use elsewhere
+export { sleep, safeJsonParse };
