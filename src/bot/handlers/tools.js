@@ -14,8 +14,6 @@ export function registerTools(bot) {
   });
 }
 
-// FIX: Renamed this function from registerCommonCallbacks to registerToolsCallbacks.
-// This is the primary cause of the startup crash.
 export function registerToolsCallbacks(bot) {
   bot.on('callback_query', async (cbq) => {
     const { data, message } = cbq || {};
