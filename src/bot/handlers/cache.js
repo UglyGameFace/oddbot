@@ -1,10 +1,15 @@
-// src/bot/handlers/cache.js - UPDATED TO MATCH NEW ARCHITECTURE
+// src/bot/handlers/cache.js - COMPLETELY FIXED
 
 import gamesService from '../../services/gamesService.js';
 import oddsService from '../../services/oddsService.js';
 import databaseService from '../../services/databaseService.js';
 import { sentryService } from '../../services/sentryService.js';
-import { escapeMarkdownV2 } from '../../utils/enterpriseUtilities.js';
+
+// Simple escape function for MarkdownV2 (since enterpriseUtilities.js might not exist)
+const escapeMarkdownV2 = (text) => {
+  if (typeof text !== 'string') return '';
+  return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
+};
 
 // Cache refresh configuration
 const CACHE_REFRESH_CONFIG = {
@@ -17,15 +22,6 @@ const CACHE_REFRESH_CONFIG = {
     'soccer_england_premier_league'
   ],
   
-  // Secondary sports for comprehensive coverage
-  SECONDARY_SPORTS: [
-    'basketball_ncaab',
-    'americanfootball_ncaaf',
-    'tennis_atp',
-    'mma_ufc',
-    'golf_pga'
-  ],
-  
   // Refresh timeouts (in milliseconds)
   TIMEOUTS: {
     QUICK_REFRESH: 30000,  // 30 seconds
@@ -35,8 +31,8 @@ const CACHE_REFRESH_CONFIG = {
   
   // Batch sizes for processing
   BATCH_SIZES: {
-    SPORTS: 3,    // Process 3 sports concurrently
-    GAMES: 10     // Process 10 games concurrently
+    SPORTS: 2,    // Process 2 sports concurrently to avoid rate limits
+    GAMES: 5      // Process 5 games concurrently
   }
 };
 
@@ -90,20 +86,14 @@ class CacheHandler {
           try {
             console.log(`🔄 Refreshing cache for ${sportKey}...`);
             
-            // Refresh odds data
-            const odds = await oddsService.getSportOdds(sportKey, { 
-              useCache: false,
-              includeLive: true 
-            });
-            
-            // Refresh games data
+            // Refresh games data first (it includes odds)
             const games = await gamesService.getGamesForSport(sportKey, { 
-              useCache: false 
+              useCache: false,
+              includeOdds: true
             });
 
             const sportResult = {
               sportKey,
-              oddsCount: odds?.length || 0,
               gamesCount: games?.length || 0,
               status: 'success',
               timestamp: new Date().toISOString()
@@ -113,7 +103,7 @@ class CacheHandler {
             results.successful++;
             results.totalProcessed++;
 
-            console.log(`✅ ${sportKey}: ${odds?.length || 0} odds, ${games?.length || 0} games`);
+            console.log(`✅ ${sportKey}: ${games?.length || 0} games`);
             return sportResult;
 
           } catch (error) {
@@ -121,7 +111,6 @@ class CacheHandler {
             
             const sportResult = {
               sportKey,
-              oddsCount: 0,
               gamesCount: 0,
               status: 'failed',
               error: error.message,
@@ -217,7 +206,7 @@ class CacheHandler {
     try {
       // Step 1: Refresh all available sports
       const allSports = await gamesService.getAvailableSports();
-      const sportKeys = allSports.map(sport => sport.sport_key).slice(0, 20); // Limit to first 20 sports
+      const sportKeys = allSports.map(sport => sport.sport_key).slice(0, 15); // Limit to first 15 sports
       
       console.log(`📊 Refreshing ${sportKeys.length} sports...`);
 
@@ -228,15 +217,14 @@ class CacheHandler {
         
         const batchPromises = batch.map(async (sportKey) => {
           try {
-            // Refresh both odds and games data
-            const [odds, games] = await Promise.all([
-              oddsService.getSportOdds(sportKey, { useCache: false }),
-              gamesService.getGamesForSport(sportKey, { useCache: false })
-            ]);
+            // Refresh games data (includes odds)
+            const games = await gamesService.getGamesForSport(sportKey, { 
+              useCache: false,
+              includeOdds: true
+            });
 
             const sportResult = {
               sportKey,
-              oddsCount: odds?.length || 0,
               gamesCount: games?.length || 0,
               status: 'success',
               timestamp: new Date().toISOString()
@@ -253,7 +241,6 @@ class CacheHandler {
             
             const sportResult = {
               sportKey,
-              oddsCount: 0,
               gamesCount: 0,
               status: 'failed',
               error: error.message,
@@ -377,7 +364,6 @@ class CacheHandler {
       type: 'sport',
       sportKey,
       startTime: new Date().toISOString(),
-      odds: null,
       games: null
     };
 
@@ -388,23 +374,13 @@ class CacheHandler {
     });
 
     try {
-      // Refresh odds data
-      this.refreshOperations.get(operationId).progress = 30;
-      const odds = await oddsService.getSportOdds(sportKey, { 
-        useCache: false,
-        includeLive: true 
-      });
-      results.odds = {
-        count: odds?.length || 0,
-        status: 'success',
-        timestamp: new Date().toISOString()
-      };
-
-      // Refresh games data
-      this.refreshOperations.get(operationId).progress = 70;
+      // Refresh games data (includes odds)
+      this.refreshOperations.get(operationId).progress = 50;
       const games = await gamesService.getGamesForSport(sportKey, { 
-        useCache: false 
+        useCache: false,
+        includeOdds: true
       });
+      
       results.games = {
         count: games?.length || 0,
         status: 'success',
@@ -425,7 +401,7 @@ class CacheHandler {
         results
       });
 
-      console.log(`✅ ${sportKey} cache refreshed: ${odds?.length || 0} odds, ${games?.length || 0} games`);
+      console.log(`✅ ${sportKey} cache refreshed: ${games?.length || 0} games`);
       return results;
 
     } catch (error) {
@@ -458,9 +434,9 @@ class CacheHandler {
   async getCacheStatus() {
     try {
       const [oddsStatus, gamesStatus, dbStatus] = await Promise.all([
-        oddsService.getServiceStatus(),
-        gamesService.getServiceStatus(),
-        databaseService.getDatabaseStats()
+        oddsService.getServiceStatus().catch(() => ({ status: 'unknown' })),
+        gamesService.getServiceStatus().catch(() => ({ status: 'unknown' })),
+        databaseService.getDatabaseStats().catch(() => ({ status: 'unknown' }))
       ]);
 
       const activeOperations = Array.from(this.refreshOperations.entries())
@@ -476,19 +452,13 @@ class CacheHandler {
         statistics: this.cacheStats,
         services: {
           odds: {
-            status: oddsStatus.status,
-            cache_enabled: oddsStatus.cache?.enabled,
-            data_quality: oddsStatus.statistics?.data_quality
+            status: oddsStatus.status || 'unknown',
           },
           games: {
-            status: gamesStatus.status,
-            cache_enabled: gamesStatus.cache?.enabled,
-            total_sports: gamesStatus.statistics?.total_sports_supported
+            status: gamesStatus.status || 'unknown',
           },
           database: {
-            status: dbStatus.status,
-            total_games: dbStatus.total_games,
-            total_users: dbStatus.total_users
+            status: dbStatus.status || 'unknown',
           }
         },
         active_operations: activeOperations,
@@ -597,7 +567,7 @@ class CacheHandler {
           message += `*Top Sports:*\n`;
           topSports.forEach(sport => {
             const safeSport = escapeMarkdownV2(sport.sportKey);
-            message += `• ${safeSport}: ${sport.gamesCount} games, ${sport.oddsCount} odds\n`;
+            message += `• ${safeSport}: ${sport.gamesCount} games\n`;
           });
         }
       }
@@ -626,9 +596,10 @@ export function registerCacheHandler(bot) {
   // --- Cache status command ---
   bot.onText(/^\/cache$/, async (msg) => {
     const chatId = msg.chat.id;
+    console.log(`🎯 /cache command from ${chatId}`);
     
     try {
-      await bot.sendMessage(chatId, '🔄 Checking cache status...', { parse_mode: 'Markdown' });
+      const sentMsg = await bot.sendMessage(chatId, '🔄 Checking cache status...', { parse_mode: 'Markdown' });
       
       const status = await cacheHandler.getCacheStatus();
       const activeOps = cacheHandler.getActiveOperations();
@@ -650,7 +621,11 @@ export function registerCacheHandler(bot) {
       
       message += `Use /cache_refresh for quick refresh or /cache_full for comprehensive refresh`;
 
-      await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+      await bot.editMessageText(message, {
+        chat_id: chatId,
+        message_id: sentMsg.message_id,
+        parse_mode: 'Markdown'
+      });
       
     } catch (error) {
       console.error('Cache status command failed:', error);
@@ -666,6 +641,7 @@ export function registerCacheHandler(bot) {
   // --- Quick cache refresh command ---
   bot.onText(/^\/cache_refresh$/, async (msg) => {
     const chatId = msg.chat.id;
+    console.log(`🎯 /cache_refresh command from ${chatId}`);
     
     try {
       const sentMsg = await bot.sendMessage(
@@ -697,6 +673,7 @@ export function registerCacheHandler(bot) {
   // --- Full cache refresh command ---
   bot.onText(/^\/cache_full$/, async (msg) => {
     const chatId = msg.chat.id;
+    console.log(`🎯 /cache_full command from ${chatId}`);
     
     try {
       const sentMsg = await bot.sendMessage(
@@ -729,6 +706,7 @@ export function registerCacheHandler(bot) {
   bot.onText(/^\/cache_sport (.+)$/, async (msg, match) => {
     const chatId = msg.chat.id;
     const sportKey = match[1].trim().toLowerCase();
+    console.log(`🎯 /cache_sport command for ${sportKey} from ${chatId}`);
     
     try {
       const sentMsg = await bot.sendMessage(
@@ -760,6 +738,7 @@ export function registerCacheHandler(bot) {
   // --- Cache operations status ---
   bot.onText(/^\/cache_ops$/, async (msg) => {
     const chatId = msg.chat.id;
+    console.log(`🎯 /cache_ops command from ${chatId}`);
     
     try {
       const activeOps = cacheHandler.getActiveOperations();
