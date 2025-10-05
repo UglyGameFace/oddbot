@@ -42,25 +42,20 @@ function extractJSON(text = '') {
     return null;
 }
 
-// ✅ RESTORED: This function builds the critical context for the AI prompt.
 async function buildRealScheduleContext(sportKey, hours) {
     try {
-        // Step 1: Get the actual list of games from the single source of truth.
         const realGames = await gamesService.getVerifiedRealGames(sportKey, hours);
         if (realGames.length === 0) {
             return `\n\n🚨 CRITICAL SCHEDULE ALERT: There are NO VERIFIED ${sportKey.toUpperCase()} games in the next ${hours} hours according to official data providers. DO NOT CREATE ANY LEGS. Return an empty parlay.`;
         }
 
-        // Step 2: Format the game list for the AI.
         const gameList = realGames.slice(0, 25).map((game, index) => {
             const timeStr = new Date(game.commence_time).toLocaleString('en-US', { timeZone: TZ, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
             return `${index + 1}. ${game.away_team} @ ${game.home_team} - ${timeStr}`;
         }).join('\n');
 
-        // Step 3: Get the list of verifiable source URLs.
         const verifiedSources = getVerifiedSources(sportKey);
 
-        // Step 4: Combine into a powerful prompt directive.
         return `\n\n📅 VERIFIED REAL SCHEDULE FOR ${sportKey.toUpperCase()} (Next ${hours} hours):
 ${gameList}
 
@@ -98,7 +93,6 @@ class AIService {
               return this._generateContextBasedParlay(sportKey, numLegs, mode, options);
           }
 
-          // ✅ CORRECTED: Build the schedule context before creating the main prompt.
           const scheduleContext = await buildRealScheduleContext(sportKey, options.horizonHours || 72);
           const userQuery = `Generate a ${numLegs}-leg parlay for ${getSportTitle(sportKey)}. Focus on ${betType} bets.`;
           const prompt = buildParlayPrompt(userQuery, { sportKey, numLegs }) + scheduleContext;
@@ -171,6 +165,35 @@ class AIService {
 
   async handleFallbackSelection(sportKey, numLegs, mode, betType) {
     return this.generateParlay(sportKey, numLegs, mode, 'gemini', betType, { horizonHours: 72 });
+  }
+
+  /**
+   * Validate odds data (for model.js handler)
+   */
+  async validateOdds(oddsData) {
+    try {
+      if (!oddsData || !Array.isArray(oddsData)) {
+        return { valid: false, error: 'Invalid odds data format' };
+      }
+
+      const validGames = oddsData.filter(game => 
+        game.home_team && 
+        game.away_team && 
+        game.commence_time &&
+        game.bookmakers && 
+        Array.isArray(game.bookmakers)
+      );
+
+      return {
+        valid: validGames.length > 0,
+        totalGames: oddsData.length,
+        validGames: validGames.length,
+        validationRate: validGames.length / oddsData.length
+      };
+    } catch (error) {
+      console.error('Odds validation error:', error);
+      return { valid: false, error: error.message };
+    }
   }
 }
 
