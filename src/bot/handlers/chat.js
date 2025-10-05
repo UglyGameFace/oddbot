@@ -107,7 +107,7 @@ export function registerChat(bot) {
   });
 }
 
-// FIX: Exporting a dedicated callback handler for centralization.
+// FIX: This function MUST be exported to be used by the central callback manager.
 export function registerChatCallbacks(bot) {
     bot.on('callback_query', async (cbq) => {
         const { data, message } = cbq || {};
