@@ -6,7 +6,7 @@ import { registerSettingsCallbacks } from './settings.js';
 import { registerPlayerCallbacks } from './player.js';
 import { registerSystemCallbacks } from './system.js';
 import { registerToolsCallbacks } from './tools.js';
-import { registerChatCallbacks } from './chat.js'; // FIX: Correctly import the new chat callback handler
+import { registerChatCallbacks } from './chat.js';
 
 const registeredCallbacks = new Set();
 
@@ -25,7 +25,7 @@ export function registerAllCallbacks(bot) {
     registerPlayerCallbacks(bot);
     registerSystemCallbacks(bot);
     registerToolsCallbacks(bot);
-    registerChatCallbacks(bot); // FIX: Register the chat handler
+    registerChatCallbacks(bot);
     
     registerGlobalCallbackErrorHandler(bot);
 
