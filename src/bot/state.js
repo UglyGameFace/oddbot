@@ -14,36 +14,33 @@ const DEFAULT_SLIP = { picks: [], stake: 10, totalOdds: 0, messageId: null };
 const safeParse = (s, f) => { try { return JSON.parse(s); } catch (e) { sentryService.captureError(e, { component: 'state', op: 'parse' }); return f; } };
 const withTimeout = (p, ms, label) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error(`Timeout ${ms}ms: ${label}`)), ms))]);
 
-// --- VERIFIED FIX: Use older, more compatible Redis syntax for SET with TTL ---
 const setWithTTL = async (c, k, v, ttl) => {
   if (!ttl) return c.set(k, v);
-  // Use 'EX' flag in a flat list instead of an options object
   return c.set(k, v, 'EX', ttl);
 };
 
-// --- Conversational state (remains in Redis for speed) ---
 export async function setUserState(chatId, state, ttl = 3600) {
   const redis = await redisClient;
   await withTimeout(setWithTTL(redis, `${STATE_PREFIX}${chatId}`, JSON.stringify(state), ttl), 3000, 'setUserState');
 }
+
 export async function getUserState(chatId) {
   const redis = await redisClient;
   const data = await withTimeout(redis.get(`${STATE_PREFIX}${chatId}`), 3000, 'getUserState');
   return data ? safeParse(data, {}) : {};
 }
 
-// --- Parlay slips (remains in Redis as it's temporary) ---
 export async function getParlaySlip(chatId) {
   const redis = await redisClient;
   const data = await withTimeout(redis.get(`${SLIP_PREFIX}${chatId}`), 3000, 'getParlaySlip');
   return data ? safeParse(data, { ...DEFAULT_SLIP }) : { ...DEFAULT_SLIP };
 }
+
 export async function setParlaySlip(chatId, slip) {
   const redis = await redisClient;
   await withTimeout(setWithTTL(redis, `${SLIP_PREFIX}${chatId}`, JSON.stringify(slip), 86400), 3000, 'setParlaySlip');
 }
 
-// --- User Configs (MOVED TO DATABASE) ---
 async function getConfig(telegramId, type) {
     const settings = await databaseService.getUserSettings(telegramId);
     const defaults = {
@@ -55,7 +52,6 @@ async function getConfig(telegramId, type) {
             quantitativeMode: 'conservative',
             includeProps: false,
             proQuantMode: false,
-            // NEW: Validation preferences
             enforceRealGames: true,
             maxValidationTime: 10000,
             fallbackOnNoGames: true
@@ -66,25 +62,20 @@ async function getConfig(telegramId, type) {
             avoidSameGame: true, 
             cutoffHours: 48,
             excludedTeams: [],
-            // NEW: Validation preferences  
             requireVerifiedGames: true
         },
     };
-    // Return the specific config type, merged with defaults
     return { ...defaults[type], ...(settings[type] || {}) };
 }
 
 async function setConfig(telegramId, type, newConfigData) {
     const currentSettings = await databaseService.getUserSettings(telegramId);
-    // Create a deep copy to avoid mutation issues if settings object is reused
     const updatedSettings = JSON.parse(JSON.stringify(currentSettings));
 
-    // Ensure the config type object exists
     if (!updatedSettings[type]) {
         updatedSettings[type] = {};
     }
 
-    // Merge new data into the specific config type
     Object.assign(updatedSettings[type], newConfigData);
 
     await databaseService.updateUserSettings(telegramId, updatedSettings);
@@ -96,7 +87,6 @@ export const setAIConfig = (id, cfg) => setConfig(id, 'ai', cfg);
 export const getBuilderConfig = (id) => getConfig(id, 'builder');
 export const setBuilderConfig = (id, cfg) => setConfig(id, 'builder', cfg);
 
-// --- Validation-specific state management ---
 export async function setValidationState(chatId, sportKey, validationData) {
   const state = await getUserState(chatId);
   state.validation = {
@@ -112,7 +102,6 @@ export async function getValidationState(chatId) {
   return state.validation || null;
 }
 
-// --- Tokens (unchanged, good use for Redis) ---
 const tokenPrefix = `${PREFIX}token:`;
 export async function saveToken(type, payload, ttl = 600) {
   const redis = await redisClient;
@@ -120,6 +109,7 @@ export async function saveToken(type, payload, ttl = 600) {
   await withTimeout(setWithTTL(redis, `${tokenPrefix}${tok}`, JSON.stringify(payload), ttl), 3000, 'saveToken');
   return tok;
 }
+
 export async function loadToken(type, tok) {
   const redis = await redisClient;
   if (!tok?.startsWith(`${type}_`)) return null;
@@ -127,4 +117,79 @@ export async function loadToken(type, tok) {
   const data = await withTimeout(redis.get(key), 3000, 'loadToken.get');
   await withTimeout(redis.del(key), 3000, 'loadToken.del');
   return data ? safeParse(data, null) : null;
+}
+
+/**
+ * Clear all state for a user (useful for testing/reset)
+ */
+export async function clearUserState(chatId) {
+  try {
+    const redis = await redisClient;
+    await Promise.all([
+      redis.del(`${STATE_PREFIX}${chatId}`),
+      redis.del(`${SLIP_PREFIX}${chatId}`)
+    ]);
+    return true;
+  } catch (error) {
+    console.error('Error clearing user state:', error);
+    return false;
+  }
+}
+
+/**
+ * Get user activity statistics
+ */
+export async function getUserActivityStats(telegramId) {
+  try {
+    const user = await databaseService.findOrCreateUser(telegramId);
+    const state = await getUserState(telegramId);
+    
+    return {
+      user_id: telegramId,
+      preferences: user?.preferences || {},
+      active_state: Boolean(state && Object.keys(state).length > 0),
+      last_active: user?.preferences?.last_active,
+      parlay_count: user?.preferences?.parlay_count || 0,
+      state_keys: state ? Object.keys(state) : []
+    };
+  } catch (error) {
+    console.error('Error getting user activity stats:', error);
+    return null;
+  }
+}
+
+/**
+ * Check if user has active AI session
+ */
+export async function hasActiveAISession(chatId) {
+  const state = await getUserState(chatId);
+  return !!(state?.sportKey && state?.numLegs);
+}
+
+/**
+ * Get all users with active states (for admin)
+ */
+export async function getAllActiveSessions() {
+  try {
+    const redis = await redisClient;
+    const keys = await redis.keys(`${STATE_PREFIX}*`);
+    
+    const sessions = [];
+    for (const key of keys) {
+      const chatId = key.replace(STATE_PREFIX, '');
+      const state = await getUserState(chatId);
+      if (state && Object.keys(state).length > 0) {
+        sessions.push({
+          chatId,
+          state,
+          keyCount: Object.keys(state).length
+        });
+      }
+    }
+    
+    return sessions;
+  } catch (error) {
+    console.error('Error getting active sessions:', error);
+    return [];
+  }
 }
