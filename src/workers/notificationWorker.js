@@ -1,8 +1,6 @@
-// src/workers/notificationWorker.js - ENTERPRISE MESSAGE BUS
-// FIX: Uses a dedicated Redis client to prevent connection state pollution.
-
+// src/workers/notificationWorker.js - FINALIZED AND CORRECTED
 import TelegramBot from 'node-telegram-bot-api';
-import Redis from 'ioredis'; // Import ioredis directly
+import Redis from 'ioredis';
 import env from '../config/env.js';
 import { sentryService } from '../services/sentryService.js';
 
@@ -12,7 +10,7 @@ class EnterpriseNotificationEngine {
   constructor() {
     this.isReady = false;
     this.bot = null;
-    this.redisClient = null; // Dedicated client instance
+    this.redisClient = null;
     this.initialize().catch(error => {
         console.error('❌ FATAL: Failed to initialize the notification engine.', error);
         sentryService.captureError(error, { component: 'notification_worker_initialization' });
@@ -22,7 +20,6 @@ class EnterpriseNotificationEngine {
   async initialize() {
     if (env.TELEGRAM_BOT_TOKEN) {
         this.bot = new TelegramBot(env.TELEGRAM_BOT_TOKEN);
-        // FIX: Create a dedicated Redis client for this worker's blocking operations.
         this.redisClient = new Redis(env.REDIS_URL, { maxRetriesPerRequest: 3 });
         this.isReady = true;
         console.log('✅ Notification Engine initialized with dedicated Redis client.');
@@ -36,7 +33,6 @@ class EnterpriseNotificationEngine {
     console.log('...Notification worker listening for messages on Redis queue...');
     while (true) {
         try {
-            // Use the dedicated client instance for the blocking pop command.
             const result = await this.redisClient.blpop(NOTIFICATION_QUEUE_KEY, 0);
             if (result) {
                 const notification = JSON.parse(result[1]);
