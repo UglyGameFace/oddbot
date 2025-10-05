@@ -3,9 +3,8 @@ import { createClient } from '@supabase/supabase-js';
 import env from '../config/env.js';
 import { sentryService } from './sentryService.js';
 import { COMPREHENSIVE_SPORTS } from '../config/sportDefinitions.js';
-import { GameEnhancementService } from './gameEnhancementService.js'; // ✅ IMPORTED FOR CENTRALIZED LOGIC
+import { GameEnhancementService } from './gameEnhancementService.js';
 
-// Use the single source of truth from sportDefinitions.js
 const COMPREHENSIVE_FALLBACK_SPORTS = Object.entries(COMPREHENSIVE_SPORTS).map(([sport_key, data]) => ({
   sport_key,
   sport_title: data.title
@@ -70,7 +69,6 @@ class DatabaseService {
 
       if (error) throw error;
 
-      // Enhanced sports aggregation with game counts and recent activity
       const sportsMap = new Map();
       const now = new Date();
       
@@ -87,17 +85,14 @@ class DatabaseService {
           
           existing.game_count++;
           
-          // Count upcoming games
           if (game.commence_time && new Date(game.commence_time) > now) {
             existing.upcoming_games++;
           }
           
-          // Track last game time
           if (game.commence_time && (!existing.last_game_time || new Date(game.commence_time) > new Date(existing.last_game_time))) {
             existing.last_game_time = game.commence_time;
           }
           
-          // Track unique teams
           if (game.home_team) existing.teams.add(game.home_team);
           if (game.away_team) existing.teams.add(game.away_team);
           
@@ -105,7 +100,6 @@ class DatabaseService {
         }
       });
 
-      // Convert to array and enhance with additional data
       const sports = Array.from(sportsMap.values()).map(sport => ({
         sport_key: sport.sport_key,
         sport_title: sport.sport_title,
@@ -118,7 +112,6 @@ class DatabaseService {
         source: 'database'
       }));
 
-      // Sort by game count (most active first)
       sports.sort((a, b) => b.game_count - a.game_count);
 
       console.log(`✅ Found ${sports.length} sports with ${data?.length || 0} total games`);
@@ -164,7 +157,6 @@ class DatabaseService {
       if (error) throw error;
 
       console.log(`✅ Found ${data?.length || 0} upcoming games for ${sportKey}`);
-      // ✅ REFACTORED: Use the centralized GameEnhancementService
       return GameEnhancementService.enhanceGameData(data || [], sportKey, 'database');
 
     } catch (error) {
@@ -219,7 +211,33 @@ class DatabaseService {
    * Get games by sport (backward compatibility)
    */
   async getGamesBySport(sportKey) {
-    return this.getUpcomingGames(sportKey, 168); // 1 week for backward compatibility
+    return this.getUpcomingGames(sportKey, 168);
+  }
+
+  /**
+   * Simple method to check if database has games for a sport
+   */
+  async hasGamesForSport(sportKey, hoursAhead = 72) {
+    try {
+      const games = await this.getUpcomingGames(sportKey, hoursAhead);
+      return games.length > 0;
+    } catch (error) {
+      console.error(`Error checking games for ${sportKey}:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Get the count of upcoming games for a sport
+   */
+  async getUpcomingGameCount(sportKey, hoursAhead = 72) {
+    try {
+      const games = await this.getUpcomingGames(sportKey, hoursAhead);
+      return games.length;
+    } catch (error) {
+      console.error(`Error counting games for ${sportKey}:`, error);
+      return 0;
+    }
   }
 
   // ========== ENHANCED GAME METHODS ==========
@@ -245,7 +263,6 @@ class DatabaseService {
       
       if (data) {
         console.log(`✅ Found game: ${data.home_team} vs ${data.away_team}`);
-        // ✅ REFACTORED: Use the centralized GameEnhancementService
         return GameEnhancementService.enhanceSingleGame(data, data.sport_key, 'database');
       }
       
@@ -287,7 +304,6 @@ class DatabaseService {
       if (error) throw error;
 
       console.log(`✅ Search found ${data?.length || 0} games for "${query}"`);
-      // ✅ REFACTORED: Use the centralized GameEnhancementService
       return GameEnhancementService.enhanceGameData(data || [], sportKey || 'mixed', 'database_search');
 
     } catch (error) {
@@ -307,7 +323,7 @@ class DatabaseService {
         .from('games')
         .select('*')
         .in('status', ['scheduled', 'live', 'inprogress'])
-        .gte('commence_time', new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()) // Include games from last 2 hours
+        .gte('commence_time', new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString())
         .order('commence_time', { ascending: true });
 
       if (sportKey) {
@@ -323,7 +339,6 @@ class DatabaseService {
       if (error) throw error;
 
       console.log(`✅ Found ${data?.length || 0} active games${sportKey ? ` for ${sportKey}` : ''}`);
-      // ✅ REFACTORED: Use the centralized GameEnhancementService
       return GameEnhancementService.enhanceGameData(data || [], sportKey || 'mixed', 'database');
 
     } catch (error) {
@@ -384,7 +399,6 @@ class DatabaseService {
     try {
       console.log(`🔄 Upserting ${gamesData.length} games...`);
       
-      // Enhanced conflict resolution
       const gamesWithMetadata = gamesData.map(game => ({
         ...game,
         last_updated: new Date().toISOString(),
@@ -468,7 +482,7 @@ class DatabaseService {
       const { data, error } = await this.client
         .from('games')
         .select('sport_key, sport_title, commence_time, status')
-        .gte('commence_time', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()); // Last 7 days
+        .gte('commence_time', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString());
 
       if (error) throw error;
 
@@ -513,7 +527,7 @@ class DatabaseService {
     }
   }
 
-    // ========== USER MANAGEMENT METHODS ==========
+  // ========== USER MANAGEMENT METHODS ==========
 
   /**
    * Enhanced user management with better preferences
@@ -529,7 +543,6 @@ class DatabaseService {
         .single();
 
       if (error && error.code === 'PGRST116') {
-        // User doesn't exist, create with enhanced preferences
         const initialPreferences = {
             favorite_sports: [],
             bet_preferences: {
@@ -565,7 +578,6 @@ class DatabaseService {
       } else if (error) {
         throw error;
       } else {
-        // Update last active timestamp for existing user
         const updatedPreferences = {
             ...(user.preferences || {}),
             last_active: new Date().toISOString()
@@ -620,6 +632,7 @@ class DatabaseService {
       return null;
     }
   }
+
   // ========== SERVICE MANAGEMENT METHODS ==========
 
   /**
@@ -688,8 +701,6 @@ class DatabaseService {
   }
 
   // ========== PRIVATE UTILITY METHODS ==========
-  // ❌ REMOVED: All private enhancement methods (_enhanceGameData, _enhanceSingleGame, _calculateTimeUntil, etc.)
-  // were removed to centralize this logic in GameEnhancementService.
 
   _assessSportDataQuality(sport) {
     const score = Math.min(100, 
@@ -705,13 +716,12 @@ class DatabaseService {
   }
 
   _generateGameChecksum(game) {
-    // Simple checksum for change detection
     const str = `${game.event_id}|${game.home_team}|${game.away_team}|${game.commence_time}`;
     let hash = 0;
     for (let i = 0; i < str.length; i++) {
       const char = str.charCodeAt(i);
       hash = ((hash << 5) - hash) + char;
-      hash = hash & hash; // Convert to 32bit integer
+      hash = hash & hash;
     }
     return hash.toString(36);
   }
