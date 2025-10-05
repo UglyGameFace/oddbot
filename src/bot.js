@@ -1,4 +1,4 @@
-// src/bot.js - CORRECTED VERSION
+// src/bot.js - COMPLETELY FIXED
 import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
@@ -40,7 +40,7 @@ const HOST = '0.0.0.0';
 const TOKEN = env.TELEGRAM_BOT_TOKEN;
 const APP_URL = env.APP_URL || '';
 const WEBHOOK_SECRET = (env.WEBHOOK_SECRET || env.TELEGRAM_WEBHOOK_SECRET || env.TG_WEBHOOK_SECRET || '').trim();
-const USE_WEBHOOK = (env.USE_WEBHOOK === true) || (env.APP_URL || '').startsWith('https');
+const USE_WEBHOOK = (env.USE_WEBHOOK === 'true') || (env.APP_URL || '').startsWith('https');
 
 let bot;
 let server;
@@ -62,6 +62,7 @@ function validateEnvironment() {
   console.log('   - APP_URL:', env.APP_URL || 'Not set');
   console.log('   - USE_WEBHOOK:', USE_WEBHOOK);
   console.log('   - REDIS_URL:', env.REDIS_URL ? '✓ Set' : '✗ Missing');
+  console.log('   - WEBHOOK_SECRET:', WEBHOOK_SECRET ? '✓ Set' : '✗ Missing');
 }
 
 export async function safeEditMessage(chatId, messageId, text, options = {}) {
@@ -76,18 +77,29 @@ export async function safeEditMessage(chatId, messageId, text, options = {}) {
     }
     return await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...editOptions });
   } catch (error) {
-    if (error.response?.body?.description.includes('message is not modified')) { return; }
-    if (error.response?.body?.error_code === 400 && error.response.body.description.includes('inline keyboard expected')) {
+    if (error.response?.body?.description?.includes('message is not modified')) { return; }
+    if (error.response?.body?.error_code === 400 && error.response.body.description?.includes('inline keyboard expected')) {
       return await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: options.parse_mode || 'HTML', reply_markup: { inline_keyboard: [] } });
     }
-    if (error.response?.body?.error_code === 400 && error.response.body.description.includes('message to edit not found')) { return; }
+    if (error.response?.body?.error_code === 400 && error.response.body.description?.includes('message to edit not found')) { return; }
     console.error('❌ Message edit failed:', error.message);
     throw error;
   }
 }
 
-// Health endpoints (keep as is)
-app.get('/health', (_req, res) => res.sendStatus(200));
+// Health endpoints
+app.get('/health', (_req, res) => {
+  healthCheckCount++;
+  console.log(`✅ /health check #${healthCheckCount}`);
+  res.status(200).json({ 
+    status: 'OK', 
+    service: 'ParlayBot',
+    timestamp: new Date().toISOString(),
+    ready: isServiceReady,
+    checks: healthCheckCount 
+  });
+});
+
 app.get('/', (_req, res) => {
   healthCheckCount++;
   console.log(`✅ Root health check #${healthCheckCount}`);
@@ -109,30 +121,61 @@ app.get('/healthz', async (_req, res) => {
   }
   try {
     const healthReport = await healthService.getHealth();
-    res.status(healthReport.ok ? 200 : 503).json({ status: healthReport.ok ? 'OK' : 'DEGRADED', ...healthReport, checks: healthCheckCount, timestamp: new Date().toISOString() });
+    res.status(healthReport.ok ? 200 : 503).json({ 
+      status: healthReport.ok ? 'OK' : 'DEGRADED', 
+      ...healthReport, 
+      checks: healthCheckCount, 
+      timestamp: new Date().toISOString() 
+    });
   } catch (error) {
-    res.status(503).json({ status: 'ERROR', error: error.message, checks: healthCheckCount, timestamp: new Date().toISOString() });
+    res.status(503).json({ 
+      status: 'ERROR', 
+      error: error.message, 
+      checks: healthCheckCount, 
+      timestamp: new Date().toISOString() 
+    });
   }
 });
 
-app.get('/liveness', async (_req, res) => {
+app.get('/liveness', (_req, res) => {
   healthCheckCount++;
   console.log(`✅ /liveness check #${healthCheckCount}`);
-  res.status(200).json({ status: 'LIVE', initializing: !isServiceReady, timestamp: new Date().toISOString(), uptime: process.uptime(), checks: healthCheckCount });
+  res.status(200).json({ 
+    status: 'LIVE', 
+    initializing: !isServiceReady, 
+    timestamp: new Date().toISOString(), 
+    uptime: process.uptime(), 
+    checks: healthCheckCount 
+  });
 });
 
 app.get('/readiness', async (_req, res) => {
   healthCheckCount++;
   console.log(`✅ /readiness check #${healthCheckCount}`);
   if (!isServiceReady) {
-    return res.status(503).json({ status: 'NOT_READY', initializing: true, checks: healthCheckCount, uptime: process.uptime() });
+    return res.status(503).json({ 
+      status: 'NOT_READY', 
+      initializing: true, 
+      checks: healthCheckCount, 
+      uptime: process.uptime() 
+    });
   }
   try {
     const healthReport = await healthService.getHealth();
     const isReady = healthReport.ok;
-    res.status(isReady ? 200 : 503).json({ status: isReady ? 'READY' : 'NOT_READY', ...healthReport, checks: healthCheckCount, timestamp: new Date().toISOString() });
+    res.status(isReady ? 200 : 503).json({ 
+      status: isReady ? 'READY' : 'NOT_READY', 
+      ...healthReport, 
+      checks: healthCheckCount, 
+      timestamp: new Date().toISOString() 
+    });
   } catch (error) {
-    res.status(503).json({ status: 'NOT_READY', error: error.message, checks: healthCheckCount, timestamp: new Date().toISOString() });
+    res.status(503).json({ 
+      status: 'NOT_READY', 
+      error: error.message, 
+      checks: healthCheckCount, 
+      timestamp: new Date().toISOString() 
+    });
   }
 });
 
@@ -148,37 +191,22 @@ server = app.listen(PORT, HOST, () => {
 async function registerAllCommands(bot) {
   console.log('🔧 Starting comprehensive command registration...');
   try {
-    // Register all command handlers with error handling
-    const handlers = [
-      { name: 'AI', func: registerAI },
-      { name: 'Analytics', func: registerAnalytics },
-      { name: 'Model', func: registerModel },
-      { name: 'Cache', func: registerCacheHandler },
-      { name: 'Custom', func: registerCustom },
-      { name: 'Quant', func: registerQuant },
-      { name: 'Player', func: registerPlayer },
-      { name: 'Settings', func: registerSettings },
-      { name: 'System', func: registerSystem },
-      { name: 'Tools', func: registerTools },
-      { name: 'Chat', func: registerChat }
-    ];
-
-    for (const handler of handlers) {
-      try {
-        if (typeof handler.func === 'function') {
-          handler.func(bot);
-          console.log(`✅ ${handler.name} handler registered`);
-        } else {
-          console.warn(`⚠️ ${handler.name} handler is not a function`);
-        }
-      } catch (err) {
-        console.error(`❌ Failed to register ${handler.name} handler:`, err.message);
-      }
-    }
+    // Register all command handlers
+    registerAI(bot);
+    registerAnalytics(bot);
+    registerModel(bot);
+    registerCacheHandler(bot);
+    registerCustom(bot);
+    registerQuant(bot);
+    registerPlayer(bot);
+    registerSettings(bot);
+    registerSystem(bot);
+    registerTools(bot);
+    registerChat(bot);
     
-    console.log('✅ All command handlers processed');
+    console.log('✅ All command handlers registered successfully');
     
-    // Basic command logging
+    // Add basic message logging
     bot.on('message', (msg) => {
       if (msg.text && msg.text.startsWith('/')) {
         console.log(`📨 Received command: ${msg.text} from ${msg.chat.id}`);
@@ -193,78 +221,107 @@ async function registerAllCommands(bot) {
 }
 
 async function initializeBot() {
-  if (initializationPromise) { return initializationPromise; }
+  if (initializationPromise) { 
+    return initializationPromise; 
+  }
+  
   initializationPromise = (async () => {
     try {
       console.log('🚀 Starting ParlayBot initialization...');
       validateEnvironment();
-      if (!TOKEN) throw new Error('TELEGRAM_BOT_TOKEN is required');
       
-      const botOptions = { polling: !USE_WEBHOOK, request: { timeout: 60000 } };
+      if (!TOKEN) {
+        throw new Error('TELEGRAM_BOT_TOKEN is required');
+      }
+      
+      const botOptions = { 
+        polling: !USE_WEBHOOK, 
+        request: { 
+          timeout: 30000,
+          agent: null
+        } 
+      };
+      
       bot = new TelegramBot(TOKEN, botOptions);
       console.log('✅ Telegram Bot instance created');
 
-      // DEBUG: Add raw message logging
-      bot.on('message', (msg) => {
-        console.log('🔍 RAW MESSAGE RECEIVED:', {
-          text: msg.text,
-          chatId: msg.chat.id,
-          from: msg.from?.id,
-          type: 'message'
-        });
-      });
-
-      bot.on('callback_query', (cbq) => {
-        console.log('🔍 RAW CALLBACK RECEIVED:', {
-          data: cbq.data,
-          chatId: cbq.message?.chat.id,
-          from: cbq.from?.id,
-          type: 'callback'
-        });
-      });
-
-      // Register callbacks FIRST, then commands
+      // Register callbacks FIRST
       registerAllCallbacks(bot);
+      
+      // Register commands
       await registerAllCommands(bot);
       
-      app.use(express.json());
-      sentryService.attachExpressPreRoutes?.(app);
+      // Configure express middleware
+      app.use(express.json({ limit: '10mb' }));
+      app.use(express.urlencoded({ extended: true }));
+      
+      if (sentryService.attachExpressPreRoutes) {
+        sentryService.attachExpressPreRoutes(app);
+      }
 
       if (USE_WEBHOOK) {
         console.log('🌐 Configuring webhook mode...');
         const webhookPath = `/webhook/${TOKEN}`;
         const targetWebhookUrl = `${APP_URL}${webhookPath}`;
 
-        const currentWebhook = await bot.getWebHookInfo();
-        console.log('📋 Current webhook info:', { url: currentWebhook.url ? `${currentWebhook.url.substring(0, 50)}...` : 'None', has_custom_certificate: currentWebhook.has_custom_certificate, pending_update_count: currentWebhook.pending_update_count });
+        try {
+          const currentWebhook = await bot.getWebHookInfo();
+          console.log('📋 Current webhook info:', { 
+            url: currentWebhook.url ? `${currentWebhook.url.substring(0, 50)}...` : 'None', 
+            has_custom_certificate: currentWebhook.has_custom_certificate, 
+            pending_update_count: currentWebhook.pending_update_count 
+          });
 
-        if (currentWebhook.url !== targetWebhookUrl) {
           console.log(`🔄 Setting webhook to: ${targetWebhookUrl}`);
-          await bot.setWebHook(targetWebhookUrl, { secret_token: WEBHOOK_SECRET || undefined });
-          console.log(`✅ Webhook set: ${targetWebhookUrl}`);
-        } else {
-          console.log('✅ Webhook is already correctly configured.');
+          const webhookOptions = WEBHOOK_SECRET ? { secret_token: WEBHOOK_SECRET } : {};
+          await bot.setWebHook(targetWebhookUrl, webhookOptions);
+          console.log(`✅ Webhook set successfully`);
+          
+          // Verify webhook was set
+          const updatedWebhook = await bot.getWebHookInfo();
+          console.log('✅ Webhook verification:', {
+            url_set: !!updatedWebhook.url,
+            pending_updates: updatedWebhook.pending_update_count
+          });
+        } catch (webhookError) {
+          console.error('❌ Webhook configuration failed:', webhookError.message);
+          throw webhookError;
         }
 
+        // Webhook endpoint
         app.post(webhookPath, (req, res) => {
           if (WEBHOOK_SECRET && req.headers['x-telegram-bot-api-secret-token'] !== WEBHOOK_SECRET) {
-            console.warn('⚠️ Webhook secret mismatch');
+            console.warn('⚠️ Webhook secret mismatch - received:', req.headers['x-telegram-bot-api-secret-token']);
             return res.sendStatus(403);
           }
+          
           console.log('📨 Webhook received update');
-          bot.processUpdate(req.body);
-          res.sendStatus(200);
+          try {
+            bot.processUpdate(req.body);
+            res.sendStatus(200);
+          } catch (processError) {
+            console.error('❌ Error processing webhook update:', processError);
+            res.sendStatus(200); // Still return 200 to prevent retries
+          }
         });
+        
+        console.log('✅ Webhook endpoint configured at:', webhookPath);
       } else {
         console.log('🔍 Using polling mode...');
-        await bot.startPolling();
-        console.log('✅ Bot polling started successfully');
+        try {
+          await bot.startPolling();
+          console.log('✅ Bot polling started successfully');
+        } catch (pollError) {
+          console.error('❌ Polling start failed:', pollError.message);
+          throw pollError;
+        }
       }
 
-      sentryService.attachExpressPostRoutes?.(app);
-      isServiceReady = true;
-      console.log('🎯 Service marked as ready for health checks');
+      if (sentryService.attachExpressPostRoutes) {
+        sentryService.attachExpressPostRoutes(app);
+      }
 
+      // Set bot commands
       const commands = [
         { command: 'ai', description: 'Launch the AI Parlay Builder' },
         { command: 'chat', description: 'Ask questions (compact chatbot)' },
@@ -281,14 +338,19 @@ async function initializeBot() {
         const me = await bot.getMe();
         console.log(`✅ Bot @${me.username} fully initialized with ${commands.length} commands.`);
         
-        console.log('🧪 Testing bot responsiveness...');
+        // Test bot responsiveness
         const testCommands = await bot.getMyCommands();
         console.log(`✅ Bot commands verified: ${testCommands.length} commands loaded`);
       } catch (botError) {
-        console.error('❌ Bot initialization failed:', botError.message);
+        console.error('❌ Bot command setup failed:', botError.message);
         throw botError;
       }
       
+      // Mark service as ready
+      isServiceReady = true;
+      console.log('🎯 Service marked as READY for health checks');
+
+      // Keep alive interval
       keepAliveInterval = setInterval(() => {
         if (isServiceReady) {
           console.log('🤖 Bot active - uptime:', Math.round(process.uptime()), 'seconds');
@@ -305,47 +367,59 @@ async function initializeBot() {
       throw error;
     }
   })();
+  
   return initializationPromise;
 }
 
 const shutdown = async (signal) => {
   console.log(`\n🛑 Received ${signal}. Starting graceful shutdown...`);
   isServiceReady = false;
-  if (keepAliveInterval) { clearInterval(keepAliveInterval); }
+  
+  if (keepAliveInterval) { 
+    clearInterval(keepAliveInterval); 
+  }
+  
   try {
     if (bot) {
-        if (USE_WEBHOOK) {
-            await bot.deleteWebHook();
-            console.log('✅ Webhook removed.');
-        } else if (bot.isPolling()) {
-            await bot.stopPolling({ cancel: true, reason: 'Graceful shutdown' });
-            console.log('✅ Bot polling stopped.');
-        }
+      if (USE_WEBHOOK) {
+        await bot.deleteWebHook();
+        console.log('✅ Webhook removed.');
+      } else if (bot.isPolling && bot.isPolling()) {
+        await bot.stopPolling();
+        console.log('✅ Bot polling stopped.');
+      }
     }
+    
     const redis = await import('./services/redisService.js').then(m => m.default);
-    if (redis.status === 'ready' || redis.status === 'connecting') {
-        await redis.quit();
-        console.log('✅ Redis connection closed.');
+    if (redis && (redis.status === 'ready' || redis.status === 'connecting')) {
+      await redis.quit();
+      console.log('✅ Redis connection closed.');
     }
   } catch (error) {
     console.warn('⚠️ Error during bot/redis shutdown:', error.message);
   }
+  
   server.close(() => {
     console.log('✅ HTTP server closed.');
     process.exit(0);
   });
+  
   setTimeout(() => {
     console.warn('⚠️ Forcing shutdown after timeout...');
     process.exit(1);
-  }, 5000);
+  }, 10000);
 };
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
+// Initialize bot
 initializeBot().catch((error) => {
   console.error('💥 Fatal initialization error:', error.message);
-  sentryService.captureError(error);
+  if (sentryService.captureError) {
+    sentryService.captureError(error);
+  }
+  
   if (String(error.message).includes('429')) {
     console.log('⏳ Rate limit error, waiting before exit...');
     setTimeout(() => process.exit(1), 10000);
@@ -353,3 +427,5 @@ initializeBot().catch((error) => {
     process.exit(1);
   }
 });
+
+export default bot;
