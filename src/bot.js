@@ -1,4 +1,4 @@
-// src/bot.js - FINAL, COMPLETE, AND FULLY RESTORED
+// src/bot.js - CORRECTED VERSION
 import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
@@ -6,12 +6,12 @@ import { sentryService } from './services/sentryService.js';
 import healthService from './services/healthService.js';
 import { registerAllCallbacks } from './bot/handlers/callbackManager.js';
 
-// --- Handler imports ---
+// Handler imports
+import { registerAI } from './bot/handlers/ai.js';
 import { registerAnalytics } from './bot/handlers/analytics.js';
 import { registerModel } from './bot/handlers/model.js';
 import { registerCacheHandler } from './bot/handlers/cache.js';
 import { registerCustom } from './bot/handlers/custom.js';
-import { registerAI } from './bot/handlers/ai.js';
 import { registerQuant } from './bot/handlers/quant.js';
 import { registerPlayer } from './bot/handlers/player.js';
 import { registerSettings } from './bot/handlers/settings.js';
@@ -19,7 +19,7 @@ import { registerSystem } from './bot/handlers/system.js';
 import { registerTools } from './bot/handlers/tools.js';
 import { registerChat } from './bot/handlers/chat.js';
 
-// --- Global error hooks ---
+// Global error hooks
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ UNHANDLED REJECTION AT:', promise, 'REASON:', reason);
   sentryService.captureError(new Error(`Unhandled Rejection: ${reason}`), { extra: { promise } });
@@ -31,12 +31,12 @@ process.on('uncaughtException', (error) => {
   process.exit(1);
 });
 
-// --- App and bot bootstrap ---
+// App and bot bootstrap
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = '0.0.0.0';
 
-// --- Global Config & State ---
+// Global Config & State
 const TOKEN = env.TELEGRAM_BOT_TOKEN;
 const APP_URL = env.APP_URL || '';
 const WEBHOOK_SECRET = (env.WEBHOOK_SECRET || env.TELEGRAM_WEBHOOK_SECRET || env.TG_WEBHOOK_SECRET || '').trim();
@@ -49,18 +49,19 @@ let isServiceReady = false;
 let healthCheckCount = 0;
 let initializationPromise = null;
 
-// --- Utility Functions ---
+// Utility Functions
 function validateEnvironment() {
   const required = ['TELEGRAM_BOT_TOKEN'];
   const missing = required.filter(key => !env[key]);
   if (missing.length > 0) {
     throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
   }
-  console.log('🔧 Webhook Configuration:', {
-    USE_WEBHOOK: USE_WEBHOOK,
-    APP_URL: env.APP_URL ? `${env.APP_URL.substring(0, 20)}...` : 'Not set',
-    HAS_WEBHOOK_SECRET: !!WEBHOOK_SECRET
-  });
+  
+  console.log('🔧 Environment Configuration:');
+  console.log('   - TELEGRAM_BOT_TOKEN:', env.TELEGRAM_BOT_TOKEN ? '✓ Set' : '✗ Missing');
+  console.log('   - APP_URL:', env.APP_URL || 'Not set');
+  console.log('   - USE_WEBHOOK:', USE_WEBHOOK);
+  console.log('   - REDIS_URL:', env.REDIS_URL ? '✓ Set' : '✗ Missing');
 }
 
 export async function safeEditMessage(chatId, messageId, text, options = {}) {
@@ -85,9 +86,8 @@ export async function safeEditMessage(chatId, messageId, text, options = {}) {
   }
 }
 
-// --- Health endpoints ---
+// Health endpoints (keep as is)
 app.get('/health', (_req, res) => res.sendStatus(200));
-
 app.get('/', (_req, res) => {
   healthCheckCount++;
   console.log(`✅ Root health check #${healthCheckCount}`);
@@ -148,23 +148,43 @@ server = app.listen(PORT, HOST, () => {
 async function registerAllCommands(bot) {
   console.log('🔧 Starting comprehensive command registration...');
   try {
-    registerAI(bot);
-    registerAnalytics(bot);
-    registerModel(bot);
-    registerCacheHandler(bot);
-    registerCustom(bot);
-    registerQuant(bot);
-    registerPlayer(bot);
-    registerSettings(bot);
-    registerSystem(bot);
-    registerTools(bot);
-    registerChat(bot);
-    console.log('✅ All command handlers registered successfully');
+    // Register all command handlers with error handling
+    const handlers = [
+      { name: 'AI', func: registerAI },
+      { name: 'Analytics', func: registerAnalytics },
+      { name: 'Model', func: registerModel },
+      { name: 'Cache', func: registerCacheHandler },
+      { name: 'Custom', func: registerCustom },
+      { name: 'Quant', func: registerQuant },
+      { name: 'Player', func: registerPlayer },
+      { name: 'Settings', func: registerSettings },
+      { name: 'System', func: registerSystem },
+      { name: 'Tools', func: registerTools },
+      { name: 'Chat', func: registerChat }
+    ];
+
+    for (const handler of handlers) {
+      try {
+        if (typeof handler.func === 'function') {
+          handler.func(bot);
+          console.log(`✅ ${handler.name} handler registered`);
+        } else {
+          console.warn(`⚠️ ${handler.name} handler is not a function`);
+        }
+      } catch (err) {
+        console.error(`❌ Failed to register ${handler.name} handler:`, err.message);
+      }
+    }
+    
+    console.log('✅ All command handlers processed');
+    
+    // Basic command logging
     bot.on('message', (msg) => {
       if (msg.text && msg.text.startsWith('/')) {
         console.log(`📨 Received command: ${msg.text} from ${msg.chat.id}`);
       }
     });
+    
     return true;
   } catch (error) {
     console.error('❌ Command registration failed:', error);
@@ -184,8 +204,28 @@ async function initializeBot() {
       bot = new TelegramBot(TOKEN, botOptions);
       console.log('✅ Telegram Bot instance created');
 
-      await registerAllCommands(bot);
+      // DEBUG: Add raw message logging
+      bot.on('message', (msg) => {
+        console.log('🔍 RAW MESSAGE RECEIVED:', {
+          text: msg.text,
+          chatId: msg.chat.id,
+          from: msg.from?.id,
+          type: 'message'
+        });
+      });
+
+      bot.on('callback_query', (cbq) => {
+        console.log('🔍 RAW CALLBACK RECEIVED:', {
+          data: cbq.data,
+          chatId: cbq.message?.chat.id,
+          from: cbq.from?.id,
+          type: 'callback'
+        });
+      });
+
+      // Register callbacks FIRST, then commands
       registerAllCallbacks(bot);
+      await registerAllCommands(bot);
       
       app.use(express.json());
       sentryService.attachExpressPreRoutes?.(app);
@@ -248,12 +288,6 @@ async function initializeBot() {
         console.error('❌ Bot initialization failed:', botError.message);
         throw botError;
       }
-      
-      bot.on('message', (msg) => {
-        if (msg.text && msg.text.startsWith('/')) {
-          console.log(`🎯 Command received: "${msg.text}" from user ${msg.from.id} in chat ${msg.chat.id}`);
-        }
-      });
       
       keepAliveInterval = setInterval(() => {
         if (isServiceReady) {
