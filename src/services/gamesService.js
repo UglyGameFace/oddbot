@@ -152,13 +152,51 @@ class GamesService {
   }
 
   /**
+   * Get games by sport (alias for backward compatibility)
+   */
+  async getGamesBySport(sportKey, options = {}) {
+    return this.getGamesForSport(sportKey, options);
+  }
+
+  /**
+   * Check if sport has upcoming games
+   */
+  async hasUpcomingGames(sportKey, hoursAhead = 72) {
+    try {
+      const games = await this.getGamesForSport(sportKey, { 
+        useCache: true, 
+        hoursAhead 
+      });
+      return games.length > 0;
+    } catch (error) {
+      console.error(`Error checking upcoming games for ${sportKey}:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Get game count for sport
+   */
+  async getGameCount(sportKey, hoursAhead = 72) {
+    try {
+      const games = await this.getGamesForSport(sportKey, { 
+        useCache: true, 
+        hoursAhead 
+      });
+      return games.length;
+    } catch (error) {
+      console.error(`Error counting games for ${sportKey}:`, error);
+      return 0;
+    }
+  }
+
+  /**
    * Get verified real games for schedule validation (used by AI service)
    */
   async getVerifiedRealGames(sportKey, hours = 72) {
     console.log(`🔍 Getting VERIFIED real games for ${sportKey} from games service...`);
     
     try {
-      // Try multiple sources in order of reliability
       let realGames = [];
       
       // 1. Primary: Odds API (most current)
