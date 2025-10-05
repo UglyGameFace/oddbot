@@ -7,6 +7,11 @@ import { sentryService } from './sentryService.js';
 let redisClientPromise = null;
 let redisClientInstance = null;
 
+/**
+ * Returns a singleton promise that resolves to an ioredis client instance.
+ * This ensures that only one connection to Redis is established and reused throughout the application.
+ * @returns {Promise<Redis.Redis>} A promise that resolves to the Redis client instance.
+ */
 function getRedisClient() {
   if (redisClientPromise) {
     return redisClientPromise;
@@ -14,14 +19,15 @@ function getRedisClient() {
 
   redisClientPromise = new Promise((resolve, reject) => {
     console.log('🔌 Attempting to connect to Redis...');
-    
+
     // Parse Redis URL for better configuration
     const redisUrl = env.REDIS_URL || 'redis://localhost:6379';
     console.log(`📡 Redis URL: ${redisUrl.replace(/:([^@]+)@/, ':****@')}`); // Hide password in logs
-    
+
     const redisOptions = {
       maxRetriesPerRequest: 3,
       connectTimeout: 30000,
+      commandTimeout: 5000, // Added command timeout
       lazyConnect: false,
       enableReadyCheck: true,
       keepAlive: 50000,
@@ -45,32 +51,32 @@ function getRedisClient() {
       client.on('connect', () => {
         console.log('🔄 Redis client connecting...');
       });
-      
+
       client.on('ready', () => {
         console.log('✅ Redis client connected and ready.');
         resolve(client);
       });
-      
+
       client.on('error', (err) => {
         console.error('❌ Redis client error:', err.message);
-        sentryService.captureError(err, { 
+        sentryService.captureError(err, {
           component: 'redis_service',
           operation: 'connection_error'
         });
-        
+
         if (!client.isReady) {
           reject(new Error(`Failed to connect to Redis: ${err.message}`));
         }
       });
-      
+
       client.on('close', () => {
         console.warn('🔌 Redis connection closed.');
       });
-      
+
       client.on('reconnecting', (time) => {
         console.log(`🔄 Redis client reconnecting in ${time}ms...`);
       });
-      
+
       client.on('end', () => {
         console.log('🛑 Redis connection ended.');
       });
@@ -96,14 +102,17 @@ function getRedisClient() {
   return redisClientPromise;
 }
 
-// Health check function
+/**
+ * Checks the health of the Redis connection.
+ * @returns {Promise<{healthy: boolean, responseTime: number, status: string, timestamp: string, error?: string}>}
+ */
 async function checkRedisHealth() {
   try {
     const client = await getRedisClient();
     const startTime = Date.now();
     await client.ping();
     const responseTime = Date.now() - startTime;
-    
+
     return {
       healthy: true,
       responseTime,
@@ -120,15 +129,18 @@ async function checkRedisHealth() {
   }
 }
 
-// Get Redis info
+/**
+ * Gets information from the Redis server.
+ * @returns {Promise<{status: string, info: object, timestamp: string, error?: string}>}
+ */
 async function getRedisInfo() {
   try {
     const client = await getRedisClient();
     const info = await client.info();
-    
+
     const infoLines = info.split('\r\n');
     const redisInfo = {};
-    
+
     for (const line of infoLines) {
       if (line && !line.startsWith('#')) {
         const [key, value] = line.split(':');
@@ -137,7 +149,7 @@ async function getRedisInfo() {
         }
       }
     }
-    
+
     return {
       status: 'success',
       info: redisInfo,
@@ -152,7 +164,10 @@ async function getRedisInfo() {
   }
 }
 
-// Close Redis connection
+/**
+ * Gracefully closes the Redis connection.
+ * @returns {Promise<void>}
+ */
 async function closeRedis() {
   try {
     if (redisClientInstance) {
@@ -167,9 +182,9 @@ async function closeRedis() {
 }
 
 export default getRedisClient();
-export { 
-  getRedisClient, 
-  checkRedisHealth, 
-  getRedisInfo, 
-  closeRedis 
+export {
+  getRedisClient,
+  checkRedisHealth,
+  getRedisInfo,
+  closeRedis
 };
