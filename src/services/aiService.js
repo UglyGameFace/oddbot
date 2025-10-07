@@ -15,16 +15,6 @@ const GEMINI_MODELS = {
   gemini_fallback: "gemini-2.5-pro",
   gemini_legacy: "gemini-1.5-pro",
   perplexity: "sonar-pro" 
-
-const GEMINI_MODELS = { 
-  // Standard, fastest, and most cost-effective for most tasks
-  flash: "gemini-2.5-flash", 
-  // Standard, most powerful for complex reasoning and coding
-  pro: "gemini-2.5-pro", 
-  // Very large context window model (1M tokens) for document analysis
-  long_context: "gemini-1.5-pro", 
-  // A name for your preferred fallback logic (using the powerful Pro model)
-  fallback: "gemini-2.5-pro" 
 };
 
 
