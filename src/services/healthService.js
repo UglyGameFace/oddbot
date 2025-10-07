@@ -1,5 +1,5 @@
-// src/services/healthService.js - FIXED STRUCTURE
-import redisClient from './redisService.js';
+// src/services/healthService.js - COMPLETE FIXED VERSION
+import { getRedisClient } from './redisService.js';
 import databaseService from './databaseService.js';
 import oddsService from './oddsService.js';
 import gamesService from './gamesService.js';
@@ -7,29 +7,36 @@ import { rateLimitService } from './rateLimitService.js';
 import { sentryService } from './sentryService.js';
 import { withTimeout } from '../utils/asyncUtils.js';
 
-// Health check configuration
 const HEALTH_CHECK_TIMEOUT = 10000;
 const CACHE_TTL_HEALTH = 30;
 
-// Service health checkers
 class ServiceHealthChecker {
   static async checkRedis() {
     const checkStart = Date.now();
     
     try {
-      const redis = await redisClient;
+      const redis = await getRedisClient();
       
-      // Test basic connectivity
+      if (!redis) {
+        return {
+          healthy: false,
+          status: 'not_configured',
+          error: 'Redis not configured',
+          timestamp: new Date().toISOString(),
+          latency: {
+            total: Date.now() - checkStart
+          }
+        };
+      }
+
       const pingStart = Date.now();
       const pingResult = await redis.ping();
       const pingTime = Date.now() - pingStart;
 
-      // Get Redis info
       const infoStart = Date.now();
       const info = await redis.info();
       const infoTime = Date.now() - infoStart;
 
-      // Test read/write operations
       const testKey = `health_test_${Date.now()}`;
       const writeStart = Date.now();
       await redis.setex(testKey, 10, 'health_check_value');
@@ -39,12 +46,10 @@ class ServiceHealthChecker {
       const readValue = await redis.get(testKey);
       const readTime = Date.now() - readStart;
 
-      // Clean up
       await redis.del(testKey);
 
       const totalTime = Date.now() - checkStart;
 
-      // Parse Redis info
       const parsedInfo = this.parseRedisInfo(info);
 
       return {
@@ -85,12 +90,10 @@ class ServiceHealthChecker {
     const checkStart = Date.now();
     
     try {
-      // Test basic connection and query
       const connectionStart = Date.now();
       const sports = await databaseService.getDistinctSports();
       const connectionTime = Date.now() - connectionStart;
 
-      // Get database statistics
       const statsStart = Date.now();
       const dbStats = await databaseService.getDatabaseStats();
       const statsTime = Date.now() - statsStart;
@@ -131,34 +134,17 @@ class ServiceHealthChecker {
     const checkStart = Date.now();
     
     try {
-      // Test basic odds fetching
       const oddsStart = Date.now();
       const nbaOdds = await oddsService.getSportOdds('basketball_nba', { useCache: false });
       const oddsTime = Date.now() - oddsStart;
 
-      // Get service status - FIXED: Handle missing method
-      let serviceStatus = { status: 'unknown' };
-      try {
-        if (typeof oddsService.getServiceStatus === 'function') {
-          serviceStatus = await oddsService.getServiceStatus();
-        }
-      } catch (e) {
-        console.warn('Odds service status check not available');
-      }
+      const statusStart = Date.now();
+      const serviceStatus = await oddsService.getServiceStatus();
+      const statusTime = Date.now() - statusStart;
 
-      const statusTime = Date.now() - oddsStart;
-
-      // Get data freshness - FIXED: Handle missing method
-      let freshness = { overall: { status: 'unknown' }, providers: {} };
-      try {
-        if (typeof oddsService.getDataFreshness === 'function') {
-          freshness = await oddsService.getDataFreshness('basketball_nba');
-        }
-      } catch (e) {
-        console.warn('Odds data freshness check not available');
-      }
-
-      const freshnessTime = Date.now() - oddsStart;
+      const freshnessStart = Date.now();
+      const freshness = await oddsService.getDataFreshness('basketball_nba');
+      const freshnessTime = Date.now() - freshnessStart;
 
       const totalTime = Date.now() - checkStart;
 
@@ -197,27 +183,17 @@ class ServiceHealthChecker {
     const checkStart = Date.now();
     
     try {
-      // Test sports list fetching
       const sportsStart = Date.now();
       const sports = await gamesService.getAvailableSports();
       const sportsTime = Date.now() - sportsStart;
 
-      // Test game fetching
       const gamesStart = Date.now();
       const nbaGames = await gamesService.getGamesForSport('basketball_nba', { useCache: false });
       const gamesTime = Date.now() - gamesStart;
 
-      // Get service status - FIXED: Handle missing method
-      let serviceStatus = { status: 'unknown', cache: { enabled: true }, sources: {} };
-      try {
-        if (typeof gamesService.getServiceStatus === 'function') {
-          serviceStatus = await gamesService.getServiceStatus();
-        }
-      } catch (e) {
-        console.warn('Games service status check not available');
-      }
-
-      const statusTime = Date.now() - gamesStart;
+      const statusStart = Date.now();
+      const serviceStatus = await gamesService.getServiceStatus();
+      const statusTime = Date.now() - statusStart;
 
       const totalTime = Date.now() - checkStart;
 
@@ -256,38 +232,19 @@ class ServiceHealthChecker {
     const checkStart = Date.now();
     
     try {
-      // Test rate limit functionality
       const testIdentifier = `health_test_${Date.now()}`;
       
       const limitStart = Date.now();
       const limitCheck = await rateLimitService.checkRateLimit(testIdentifier, 'user', 'health_check');
       const limitTime = Date.now() - limitStart;
 
-      // Test provider quota checks - FIXED: Handle missing method
-      let oddsQuota = null;
-      let quotaTime = 0;
-      try {
-        if (typeof rateLimitService.getProviderQuota === 'function') {
-          const quotaStart = Date.now();
-          oddsQuota = await rateLimitService.getProviderQuota('theodds');
-          quotaTime = Date.now() - quotaStart;
-        }
-      } catch (e) {
-        console.warn('Provider quota check not available');
-      }
+      const quotaStart = Date.now();
+      const oddsQuota = await rateLimitService.getProviderQuota('theodds');
+      const quotaTime = Date.now() - quotaStart;
 
-      // Test provider health - FIXED: Handle missing method
-      let providerHealth = { overall: 'unknown' };
-      let healthTime = 0;
-      try {
-        if (typeof rateLimitService.getAllProvidersHealth === 'function') {
-          const healthStart = Date.now();
-          providerHealth = await rateLimitService.getAllProvidersHealth();
-          healthTime = Date.now() - healthStart;
-        }
-      } catch (e) {
-        console.warn('Provider health check not available');
-      }
+      const healthStart = Date.now();
+      const providerHealth = await rateLimitService.getAllProvidersHealth();
+      const healthTime = Date.now() - healthStart;
 
       const totalTime = Date.now() - checkStart;
 
@@ -339,7 +296,6 @@ class ServiceHealthChecker {
   }
 }
 
-// Health history manager
 class HealthHistoryManager {
   constructor() {
     this.historyKey = 'health_check_history';
@@ -348,18 +304,17 @@ class HealthHistoryManager {
 
   async saveHealthReport(healthReport) {
     try {
-      const redis = await redisClient;
+      const redis = await getRedisClient();
+      if (!redis) return false;
+
       const reportWithId = {
         ...healthReport,
         id: `health_${Date.now()}`,
         saved_at: new Date().toISOString()
       };
 
-      // Store in history (keep last N entries)
       await redis.lpush(this.historyKey, JSON.stringify(reportWithId));
       await redis.ltrim(this.historyKey, 0, this.maxHistoryEntries - 1);
-
-      // Cache current report
       await redis.setex('health_report_current', CACHE_TTL_HEALTH, JSON.stringify(healthReport));
 
       return true;
@@ -371,7 +326,9 @@ class HealthHistoryManager {
 
   async getHealthHistory(hours = 24) {
     try {
-      const redis = await redisClient;
+      const redis = await getRedisClient();
+      if (!redis) return { period_hours: hours, total_checks: 0, error: 'Redis not available' };
+
       const recentChecks = await redis.lrange(this.historyKey, 0, Math.min(hours * 12, this.maxHistoryEntries));
       
       const parsedChecks = recentChecks
@@ -407,7 +364,6 @@ class HealthHistoryManager {
       };
     }
 
-    // Calculate availability statistics
     const healthyChecks = healthChecks.filter(check => check.overall?.healthy);
     const availability = (healthyChecks.length / healthChecks.length) * 100;
     
@@ -416,10 +372,8 @@ class HealthHistoryManager {
     );
     const averageResponseTime = totalResponseTime / healthChecks.length;
 
-    // Analyze trends
     const trends = this.calculateHealthTrends(healthChecks);
 
-    // Service-specific statistics
     const serviceStats = this.calculateServiceStatistics(healthChecks);
 
     return {
@@ -493,12 +447,10 @@ class HealthHistoryManager {
   }
 }
 
-// Health recommendations generator
 class HealthRecommendationsGenerator {
   static generate(services) {
     const recommendations = [];
 
-    // Redis recommendations
     if (!services.redis.healthy) {
       recommendations.push({
         service: 'redis',
@@ -517,7 +469,6 @@ class HealthRecommendationsGenerator {
       });
     }
 
-    // Database recommendations
     if (!services.database.healthy) {
       recommendations.push({
         service: 'database',
@@ -536,7 +487,6 @@ class HealthRecommendationsGenerator {
       });
     }
 
-    // Odds service recommendations
     if (!services.odds.healthy) {
       recommendations.push({
         service: 'odds',
@@ -555,7 +505,6 @@ class HealthRecommendationsGenerator {
       });
     }
 
-    // Games service recommendations
     if (!services.games.healthy) {
       recommendations.push({
         service: 'games',
@@ -566,7 +515,6 @@ class HealthRecommendationsGenerator {
       });
     }
 
-    // Performance recommendations
     const slowServices = Object.entries(services).filter(([_, service]) => 
       service.latency?.total > 5000
     );
@@ -588,7 +536,6 @@ class HealthRecommendationsGenerator {
   }
 }
 
-// Main Health Service Class
 class EnhancedHealthService {
   constructor() {
     this.historyManager = new HealthHistoryManager();
@@ -607,7 +554,6 @@ class EnhancedHealthService {
     try {
       const startTime = Date.now();
       
-      // Run all health checks in parallel
       const healthResults = await Promise.all([
         ServiceHealthChecker.checkRedis(),
         ServiceHealthChecker.checkDatabase(),
@@ -620,7 +566,6 @@ class EnhancedHealthService {
 
       const [redisHealth, databaseHealth, oddsHealth, gamesHealth, rateLimitHealth] = healthResults;
 
-      // Determine overall system status
       const criticalServices = [redisHealth, databaseHealth];
       const allCriticalHealthy = criticalServices.every(service => service.healthy);
       const degradedServices = healthResults.filter(service => !service.healthy);
@@ -635,7 +580,6 @@ class EnhancedHealthService {
         check_id: healthCheckId
       };
 
-      // Build comprehensive health report
       const healthReport = {
         overall: overallStatus,
         services: {
@@ -655,28 +599,11 @@ class EnhancedHealthService {
         })
       };
 
-      // Save to history
       await this.historyManager.saveHealthReport(healthReport);
 
       console.log(`✅ Health check completed in ${processingTime}ms - Status: ${overallStatus.status}`);
       
-      // FIXED: Return structure that matches what system.js expects
-      const simplifiedReport = {
-        ok: overallStatus.healthy,
-        status: overallStatus.status,
-        timestamp: overallStatus.timestamp,
-        processing_time_ms: processingTime,
-        services: {
-          redis: { ok: redisHealth.healthy, status: redisHealth.status },
-          database: { ok: databaseHealth.healthy, status: databaseHealth.status },
-          odds: { ok: oddsHealth.healthy, status: oddsHealth.status },
-          games: { ok: gamesHealth.healthy, status: gamesHealth.status },
-          rate_limiting: { ok: rateLimitHealth.healthy, status: rateLimitHealth.status }
-        },
-        recommendations: healthReport.recommendations
-      };
-
-      return includeDetails ? healthReport : simplifiedReport;
+      return includeDetails ? healthReport : this.summarizeHealth(healthReport);
 
     } catch (error) {
       console.error('❌ Health check failed:', error);
@@ -698,17 +625,15 @@ class EnhancedHealthService {
       ]);
 
       return {
-        ok: redisOk && databaseOk,
         status: redisOk && databaseOk ? 'healthy' : 'unhealthy',
         timestamp: new Date().toISOString(),
         services: {
-          redis: { ok: redisOk },
-          database: { ok: databaseOk }
+          redis: redisOk,
+          database: databaseOk
         }
       };
     } catch (error) {
       return {
-        ok: false,
         status: 'unhealthy',
         timestamp: new Date().toISOString(),
         error: error.message
@@ -728,23 +653,18 @@ class EnhancedHealthService {
     const checker = serviceCheckers[serviceName];
     if (!checker) {
       return {
-        ok: false,
+        healthy: false,
         status: 'unknown_service',
         error: `Unknown service: ${serviceName}`
       };
     }
 
     try {
-      const result = await checker();
-      return {
-        ok: result.healthy,
-        status: result.status,
-        ...result
-      };
+      return await checker();
     } catch (error) {
       console.error(`Service health check failed for ${serviceName}:`, error);
       return {
-        ok: false,
+        healthy: false,
         status: 'check_failed',
         error: error.message,
         timestamp: new Date().toISOString()
@@ -756,11 +676,10 @@ class EnhancedHealthService {
     return await this.historyManager.getHealthHistory(hours);
   }
 
-  // ========== PRIVATE METHODS ==========
-
   async checkRedisBasic() {
     try {
-      const redis = await redisClient;
+      const redis = await getRedisClient();
+      if (!redis) return false;
       const result = await redis.ping();
       return result === 'PONG';
     } catch (error) {
@@ -781,32 +700,38 @@ class EnhancedHealthService {
     const { overall, services } = healthReport;
     
     return {
-      ok: overall.healthy,
       status: overall.status,
+      healthy: overall.healthy,
       timestamp: overall.timestamp,
       processing_time_ms: overall.processing_time_ms,
-      services: {
-        redis: { ok: services.redis.healthy, status: services.redis.status },
-        database: { ok: services.database.healthy, status: services.database.status },
-        odds: { ok: services.odds.healthy, status: services.odds.status },
-        games: { ok: services.games.healthy, status: services.games.status },
-        rate_limiting: { ok: services.rate_limiting.healthy, status: services.rate_limiting.status }
-      }
+      services_health: {
+        redis: services.redis.healthy,
+        database: services.database.healthy,
+        odds: services.odds.healthy,
+        games: services.games.healthy,
+        rate_limiting: services.rate_limiting.healthy
+      },
+      degraded_services: Object.entries(services)
+        .filter(([_, service]) => !service.healthy)
+        .map(([name, _]) => name),
+      critical_issue: !services.redis.healthy || !services.database.healthy
     };
   }
 
   generateEmergencyHealthReport(error) {
     return {
-      ok: false,
-      status: 'emergency',
-      timestamp: new Date().toISOString(),
-      error: error.message,
+      overall: {
+        healthy: false,
+        status: 'emergency',
+        timestamp: new Date().toISOString(),
+        error: error.message
+      },
       services: {
-        redis: { ok: false, status: 'unknown' },
-        database: { ok: false, status: 'unknown' },
-        odds: { ok: false, status: 'unknown' },
-        games: { ok: false, status: 'unknown' },
-        rate_limiting: { ok: false, status: 'unknown' }
+        redis: { healthy: false, status: 'unknown' },
+        database: { healthy: false, status: 'unknown' },
+        odds: { healthy: false, status: 'unknown' },
+        games: { healthy: false, status: 'unknown' },
+        rate_limiting: { healthy: false, status: 'unknown' }
       },
       emergency: true,
       message: 'Health check system failure - manual investigation required'
@@ -814,6 +739,5 @@ class EnhancedHealthService {
   }
 }
 
-// Create and export singleton instance
 const healthServiceInstance = new EnhancedHealthService();
 export default healthServiceInstance;
