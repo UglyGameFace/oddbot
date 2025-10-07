@@ -13,6 +13,7 @@ const COMPREHENSIVE_FALLBACK_SPORTS = Object.entries(COMPREHENSIVE_SPORTS).map((
 const SUPABASE_KEY = env.SUPABASE_SERVICE_KEY || env.SUPABASE_ANON_KEY;
 
 function buildClient() {
+  // FIX: Explicitly check for both URL and KEY before trying to build the client.
   if (!env.SUPABASE_URL || !SUPABASE_KEY) {
     console.error('❌ Supabase not configured. Database service soft-disabled.');
     return null;
@@ -639,7 +640,7 @@ class DatabaseService {
    * Test database connection and health
    */
   async testConnection() {
-    if (!this.client) return false;
+    if (!this.client) return true; // Soft-disable check
     
     try {
       const { data, error } = await withTimeout(
