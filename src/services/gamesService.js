@@ -1,14 +1,13 @@
-// src/services/gamesService.js - UPDATED TO USE MODULAR SERVICES WITH SCHEDULE VALIDATION
+// src/services/gamesService.js - COMPLETE FIXED VERSION
 import databaseService from './databaseService.js';
 import oddsService from './oddsService.js';
 import env from '../config/env.js';
-import redisClient from './redisService.js';
+import { getRedisClient } from './redisService.js';
 import { COMPREHENSIVE_SPORTS } from '../config/sportDefinitions.js';
 import { GameEnhancementService } from './gameEnhancementService.js';
 import { DataQualityService } from './dataQualityService.js';
 import { withTimeout } from '../utils/asyncUtils.js';
 
-// Cache configuration
 const CACHE_TTL = {
   SPORTS_LIST: 300,
   GAMES_DATA: 120,
@@ -26,18 +25,19 @@ class GamesService {
     const cacheKey = 'available_sports_comprehensive';
     
     try {
-      const redis = await redisClient;
-      const cached = await redis.get(cacheKey);
-      if (cached) {
-        console.log('📦 Using cached sports list');
-        return JSON.parse(cached);
+      const redis = await getRedisClient();
+      if (redis) {
+        const cached = await redis.get(cacheKey);
+        if (cached) {
+          console.log('📦 Using cached sports list');
+          return JSON.parse(cached);
+        }
       }
 
       console.log('🔄 Building comprehensive sports list...');
       
       let sports = [];
       
-      // Source 1: Odds API (primary)
       try {
         const oddsSports = await oddsService.getAvailableSports();
         sports = [...sports, ...oddsSports];
@@ -46,7 +46,6 @@ class GamesService {
         console.warn('❌ Odds API sports fetch failed:', error.message);
       }
 
-      // Source 2: Database (secondary)
       try {
         const dbSports = await databaseService.getDistinctSports();
         sports = [...sports, ...dbSports];
@@ -55,17 +54,16 @@ class GamesService {
         console.warn('❌ Database sports fetch failed:', error.message);
       }
 
-      // Source 3: Comprehensive mapping (fallback)
       const mappedSports = this._getSportsFromMapping();
       sports = [...sports, ...mappedSports];
       console.log(`✅ Added ${mappedSports.length} sports from comprehensive mapping`);
 
-      // Deduplicate and enhance
       const enhancedSports = this._enhanceAndDeduplicateSports(sports);
       console.log(`🎉 Final sports list: ${enhancedSports.length} sports`);
 
-      // Cache the result
-      await redis.setex(cacheKey, CACHE_TTL.SPORTS_LIST, JSON.stringify(enhancedSports));
+      if (redis) {
+        await redis.setex(cacheKey, CACHE_TTL.SPORTS_LIST, JSON.stringify(enhancedSports));
+      }
       
       return enhancedSports;
 
@@ -87,11 +85,13 @@ class GamesService {
 
     try {
       if (useCache) {
-        const redis = await redisClient;
-        const cached = await redis.get(cacheKey);
-        if (cached) {
-          console.log(`📦 Using cached games for ${sportKey}`);
-          return JSON.parse(cached);
+        const redis = await getRedisClient();
+        if (redis) {
+          const cached = await redis.get(cacheKey);
+          if (cached) {
+            console.log(`📦 Using cached games for ${sportKey}`);
+            return JSON.parse(cached);
+          }
         }
       }
 
@@ -100,7 +100,6 @@ class GamesService {
       let games = [];
       let source = 'unknown';
 
-      // Try Odds API first (most current data)
       if (includeOdds) {
         try {
           const oddsGames = await oddsService.getSportOdds(sportKey, { 
@@ -117,7 +116,6 @@ class GamesService {
         }
       }
 
-      // Fallback to database if no games found
       if (games.length === 0) {
         try {
           const dbGames = await databaseService.getUpcomingGames(sportKey, hoursAhead);
@@ -131,16 +129,14 @@ class GamesService {
         }
       }
 
-      // Enhance games with additional data
       const enhancedGames = GameEnhancementService.enhanceGameData(games, sportKey, source);
-      
-      // Update last refresh time
       this.lastRefreshTimes.set(sportKey, new Date().toISOString());
 
-      // Cache the result
       if (useCache && enhancedGames.length > 0) {
-        const redis = await redisClient;
-        await redis.setex(cacheKey, CACHE_TTL.GAMES_DATA, JSON.stringify(enhancedGames));
+        const redis = await getRedisClient();
+        if (redis) {
+          await redis.setex(cacheKey, CACHE_TTL.GAMES_DATA, JSON.stringify(enhancedGames));
+        }
       }
 
       return enhancedGames;
@@ -151,55 +147,12 @@ class GamesService {
     }
   }
 
-  /**
-   * Get games by sport (alias for backward compatibility)
-   */
-  async getGamesBySport(sportKey, options = {}) {
-    return this.getGamesForSport(sportKey, options);
-  }
-
-  /**
-   * Check if sport has upcoming games
-   */
-  async hasUpcomingGames(sportKey, hoursAhead = 72) {
-    try {
-      const games = await this.getGamesForSport(sportKey, { 
-        useCache: true, 
-        hoursAhead 
-      });
-      return games.length > 0;
-    } catch (error) {
-      console.error(`Error checking upcoming games for ${sportKey}:`, error);
-      return false;
-    }
-  }
-
-  /**
-   * Get game count for sport
-   */
-  async getGameCount(sportKey, hoursAhead = 72) {
-    try {
-      const games = await this.getGamesForSport(sportKey, { 
-        useCache: true, 
-        hoursAhead 
-      });
-      return games.length;
-    } catch (error) {
-      console.error(`Error counting games for ${sportKey}:`, error);
-      return 0;
-    }
-  }
-
-  /**
-   * Get verified real games for schedule validation (used by AI service)
-   */
   async getVerifiedRealGames(sportKey, hours = 72) {
     console.log(`🔍 Getting VERIFIED real games for ${sportKey} from games service...`);
     
     try {
       let realGames = [];
       
-      // 1. Primary: Odds API (most current)
       try {
         realGames = await oddsService.getSportOdds(sportKey, { 
           useCache: false,
@@ -210,7 +163,6 @@ class GamesService {
         console.warn('❌ Odds API failed for verified games, trying database...');
       }
       
-      // 2. Fallback: Database
       if (!realGames || realGames.length === 0) {
         try {
           realGames = await databaseService.getVerifiedRealGames(sportKey, hours);
@@ -220,7 +172,6 @@ class GamesService {
         }
       }
       
-      // Filter to upcoming games only
       const now = new Date();
       const horizon = new Date(now.getTime() + hours * 60 * 60 * 1000);
       
@@ -316,7 +267,6 @@ class GamesService {
         sources: {}
       };
 
-      // Check Odds API status
       try {
         const testSports = await oddsService.getAvailableSports();
         freshnessInfo.sources.odds_api = {
@@ -333,7 +283,6 @@ class GamesService {
         freshnessInfo.overall.status = 'degraded';
       }
 
-      // Check database status
       try {
         const testConnection = await databaseService.testConnection();
         freshnessInfo.sources.database = {
@@ -352,7 +301,6 @@ class GamesService {
         freshnessInfo.overall.status = 'degraded';
       }
 
-      // Sport-specific freshness
       if (sportKey) {
         const lastRefresh = this.lastRefreshTimes.get(sportKey);
         freshnessInfo.sport_specific = {
@@ -374,8 +322,6 @@ class GamesService {
       };
     }
   }
-
-  // ========== PRIVATE METHODS ==========
 
   _getSportsFromMapping() {
     return Object.entries(COMPREHENSIVE_SPORTS).map(([sport_key, data]) => ({
@@ -435,17 +381,19 @@ class GamesService {
 
   async clearCache(sportKey = null) {
     try {
-      const redis = await redisClient;
-      if (sportKey) {
-        const pattern = `games_${sportKey}_*`;
-        const keys = await redis.keys(pattern);
-        if (keys.length > 0) {
-          await redis.del(...keys);
-          console.log(`🧹 Cleared ${keys.length} cache entries for ${sportKey}`);
+      const redis = await getRedisClient();
+      if (redis) {
+        if (sportKey) {
+          const pattern = `games_${sportKey}_*`;
+          const keys = await redis.keys(pattern);
+          if (keys.length > 0) {
+            await redis.del(...keys);
+            console.log(`🧹 Cleared ${keys.length} cache entries for ${sportKey}`);
+          }
+        } else {
+          await redis.flushdb();
+          console.log('🧹 Cleared all cache');
         }
-      } else {
-        await redis.flushdb();
-        console.log('🧹 Cleared all cache');
       }
       
       this.availableSportsCache = null;
