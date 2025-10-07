@@ -1,4 +1,5 @@
-// src/bot/handlers/callbackManager.js - ENHANCED ERROR HANDLING
+// src/bot/handlers/callbackManager.js - FINALIZED AND CORRECTED
+
 import { registerAICallbacks } from './ai.js';
 import { registerCustomCallbacks } from './custom.js';
 import { registerSettingsCallbacks } from './settings.js';
@@ -18,7 +19,6 @@ export function registerAllCallbacks(bot) {
   console.log('🔧 Starting final callback handler registration...');
   
   try {
-    // Register all callback handlers with error wrapping
     registerAICallbacks(bot);
     registerCustomCallbacks(bot);
     registerSettingsCallbacks(bot);
@@ -27,7 +27,6 @@ export function registerAllCallbacks(bot) {
     registerToolsCallbacks(bot);
     registerChatCallbacks(bot);
     
-    // Enhanced global error handler
     registerGlobalCallbackErrorHandler(bot);
 
     registeredCallbacks.add(bot);
@@ -40,33 +39,22 @@ export function registerAllCallbacks(bot) {
 }
 
 function registerGlobalCallbackErrorHandler(bot) {
-  // Global callback query error handler
   bot.on('callback_query', async (callbackQuery) => {
     const { data, message, id } = callbackQuery || {};
     if (!data || !message) return;
 
     try {
-      // Always answer callback query to prevent loading indicators
-      await bot.answerCallbackQuery(id).catch(() => {
-        console.warn('⚠️ Callback query answer failed (likely too old)');
-      });
+      await bot.answerCallbackQuery(id).catch(() => {});
     } catch (error) {
-      console.error('❌ Global callback error handler failed:', error.message);
+      if (!error.message.includes('query is too old')) {
+        console.error('Error answering callback query:', error.message);
+      }
     }
   });
 
-  // Enhanced error handlers for Telegram API
-  bot.on('polling_error', (error) => {
-    console.error('📡 Telegram polling error (should not occur in webhook mode):', error.message);
-  });
-  
-  bot.on('webhook_error', (error) => {
-    console.error('🌐 Telegram webhook error:', error.message);
-  });
-
-  bot.on('error', (error) => {
-    console.error('🤖 General bot error:', error.message);
-  });
+  bot.on('polling_error', (error) => console.error('📡 Telegram polling error (should not occur in webhook mode):', error.message));
+  bot.on('webhook_error', (error) => console.error('🌐 Telegram webhook error:', error.message));
+  bot.on('error', (error) => console.error('🤖 General bot error:', error.message));
 }
 
 // Export for testing
