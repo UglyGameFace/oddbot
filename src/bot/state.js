@@ -1,7 +1,7 @@
-// src/bot/state.js - UPDATED WITH VALIDATION PREFERENCES
+// src/bot/state.js - COMPLETE FIXED VERSION
 import env from '../config/env.js';
 import { sentryService } from '../services/sentryService.js';
-import redisClient from '../services/redisService.js';
+import { getRedisClient } from '../services/redisService.js';
 import databaseService from '../services/databaseService.js';
 
 const NS = (env.NODE_ENV || 'production').toLowerCase();
@@ -15,29 +15,34 @@ const safeParse = (s, f) => { try { return JSON.parse(s); } catch (e) { sentrySe
 const withTimeout = (p, ms, label) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error(`Timeout ${ms}ms: ${label}`)), ms))]);
 
 const setWithTTL = async (c, k, v, ttl) => {
+  if (!c) return;
   if (!ttl) return c.set(k, v);
   return c.set(k, v, 'EX', ttl);
 };
 
 export async function setUserState(chatId, state, ttl = 3600) {
-  const redis = await redisClient;
+  const redis = await getRedisClient();
+  if (!redis) return;
   await withTimeout(setWithTTL(redis, `${STATE_PREFIX}${chatId}`, JSON.stringify(state), ttl), 3000, 'setUserState');
 }
 
 export async function getUserState(chatId) {
-  const redis = await redisClient;
+  const redis = await getRedisClient();
+  if (!redis) return {};
   const data = await withTimeout(redis.get(`${STATE_PREFIX}${chatId}`), 3000, 'getUserState');
   return data ? safeParse(data, {}) : {};
 }
 
 export async function getParlaySlip(chatId) {
-  const redis = await redisClient;
+  const redis = await getRedisClient();
+  if (!redis) return { ...DEFAULT_SLIP };
   const data = await withTimeout(redis.get(`${SLIP_PREFIX}${chatId}`), 3000, 'getParlaySlip');
   return data ? safeParse(data, { ...DEFAULT_SLIP }) : { ...DEFAULT_SLIP };
 }
 
 export async function setParlaySlip(chatId, slip) {
-  const redis = await redisClient;
+  const redis = await getRedisClient();
+  if (!redis) return;
   await withTimeout(setWithTTL(redis, `${SLIP_PREFIX}${chatId}`, JSON.stringify(slip), 86400), 3000, 'setParlaySlip');
 }
 
@@ -104,27 +109,26 @@ export async function getValidationState(chatId) {
 
 const tokenPrefix = `${PREFIX}token:`;
 export async function saveToken(type, payload, ttl = 600) {
-  const redis = await redisClient;
+  const redis = await getRedisClient();
+  if (!redis) return null;
   const tok = `${type}_${Math.random().toString(36).slice(2, 10)}`;
   await withTimeout(setWithTTL(redis, `${tokenPrefix}${tok}`, JSON.stringify(payload), ttl), 3000, 'saveToken');
   return tok;
 }
 
 export async function loadToken(type, tok) {
-  const redis = await redisClient;
-  if (!tok?.startsWith(`${type}_`)) return null;
+  const redis = await getRedisClient();
+  if (!redis || !tok?.startsWith(`${type}_`)) return null;
   const key = `${tokenPrefix}${tok}`;
   const data = await withTimeout(redis.get(key), 3000, 'loadToken.get');
   await withTimeout(redis.del(key), 3000, 'loadToken.del');
   return data ? safeParse(data, null) : null;
 }
 
-/**
- * Clear all state for a user (useful for testing/reset)
- */
 export async function clearUserState(chatId) {
   try {
-    const redis = await redisClient;
+    const redis = await getRedisClient();
+    if (!redis) return false;
     await Promise.all([
       redis.del(`${STATE_PREFIX}${chatId}`),
       redis.del(`${SLIP_PREFIX}${chatId}`)
@@ -136,9 +140,6 @@ export async function clearUserState(chatId) {
   }
 }
 
-/**
- * Get user activity statistics
- */
 export async function getUserActivityStats(telegramId) {
   try {
     const user = await databaseService.findOrCreateUser(telegramId);
@@ -158,20 +159,15 @@ export async function getUserActivityStats(telegramId) {
   }
 }
 
-/**
- * Check if user has active AI session
- */
 export async function hasActiveAISession(chatId) {
   const state = await getUserState(chatId);
   return !!(state?.sportKey && state?.numLegs);
 }
 
-/**
- * Get all users with active states (for admin)
- */
 export async function getAllActiveSessions() {
   try {
-    const redis = await redisClient;
+    const redis = await getRedisClient();
+    if (!redis) return [];
     const keys = await redis.keys(`${STATE_PREFIX}*`);
     
     const sessions = [];
