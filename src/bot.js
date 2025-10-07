@@ -112,7 +112,7 @@ app.get('/healthz', async (_req, res) => {
   }
   try {
     const healthReport = await healthService.getHealth();
-    res.status(healthReport.ok ? 200 : 503).json({ status: healthReport.ok ? 'OK' : 'DEGRADED', ...healthReport, checks: healthCheckCount, timestamp: new Date().toISOString() });
+    res.status(healthReport.overall.healthy ? 200 : 503).json({ status: healthReport.overall.healthy ? 'OK' : 'DEGRADED', ...healthReport, checks: healthCheckCount, timestamp: new Date().toISOString() });
   } catch (error) {
     res.status(503).json({ status: 'ERROR', error: error.message, checks: healthCheckCount, timestamp: new Date().toISOString() });
   }
@@ -132,7 +132,7 @@ app.get('/readiness', async (_req, res) => {
   }
   try {
     const healthReport = await healthService.getHealth();
-    const isReady = healthReport.ok;
+    const isReady = healthReport.overall.healthy;
     res.status(isReady ? 200 : 503).json({ status: isReady ? 'READY' : 'NOT_READY', ...healthReport, checks: healthCheckCount, timestamp: new Date().toISOString() });
   } catch (error) {
     res.status(503).json({ status: 'NOT_READY', error: error.message, checks: healthCheckCount, timestamp: new Date().toISOString() });
@@ -308,6 +308,14 @@ async function initializeBot() {
         sentryService.attachExpressPostRoutes(app);
       }
       
+      // CRITICAL FIX: Block until all services are ready before marking the bot as ready.
+      console.log('⏱️ Waiting for all essential services to pass health check (max 30s)...');
+      const readyCheck = await healthService.waitForReady(30000); 
+      
+      if (!readyCheck) {
+          throw new Error('Critical services failed to become ready within the startup timeout.');
+      }
+
       isServiceReady = true;
       console.log('🎯 Service marked as ready for health checks');
 
