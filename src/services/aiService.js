@@ -1,4 +1,4 @@
-// src/services/aiService.js - RESTORED & FINALIZED
+// src/services/aiService.js - COMPLETE FIXED VERSION
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import axios from 'axios';
 import env from '../config/env.js';
@@ -8,8 +8,14 @@ import quantitativeService from './quantitativeService.js';
 import { buildParlayPrompt } from './promptService.js';
 
 const TZ = env.TIMEZONE || 'America/New_York';
-const WEB_TIMEOUT_MS = 90000;
-const GEMINI_MODELS = { gemini: "gemini-2.5-flash", perplexity: "sonar-pro" };
+const WEB_TIMEOUT_MS = 30000;
+
+const GEMINI_MODELS = { 
+  gemini: "gemini-1.5-flash",
+  gemini_fallback: "gemini-1.5-pro",
+  gemini_legacy: "gemini-pro",
+  perplexity: "sonar-pro" 
+};
 
 function americanToDecimal(a) {
     const x = Number(a);
@@ -32,12 +38,12 @@ function extractJSON(text = '') {
     const jsonBlockRegex = /```json\s*([\s\S]+?)\s*```/;
     const match = text.match(jsonBlockRegex);
     if (match && match[1]) {
-        try { return JSON.parse(match[1]); } catch (e) { /* Fallback */ }
+        try { return JSON.parse(match[1]); } catch (e) { }
     }
     const start = text.indexOf('{');
     const end = text.lastIndexOf('}');
     if (start !== -1 && end > start) {
-        try { return JSON.parse(text.substring(start, end + 1)); } catch (e) { /* Fallback */ }
+        try { return JSON.parse(text.substring(start, end + 1)); } catch (e) { }
     }
     return null;
 }
@@ -112,12 +118,18 @@ class AIService {
           parlayData.legs = validatedLegs.slice(0, numLegs);
           parlayData.parlay_price_decimal = parlayDecimal(parlayData.legs);
           parlayData.parlay_price_american = decimalToAmerican(parlayData.parlay_price_decimal);
-          parlayData.quantitative_analysis = await quantitativeService.evaluateParlay(parlayData.legs, parlayData.parlay_price_decimal);
+          
+          try {
+            parlayData.quantitative_analysis = await quantitativeService.evaluateParlay(parlayData.legs, parlayData.parlay_price_decimal);
+          } catch (qError) {
+            console.warn('Quantitative analysis failed:', qError.message);
+            parlayData.quantitative_analysis = { error: 'Analysis unavailable' };
+          }
           
           return { ...parlayData, research_metadata: { requestId, real_games_validated: true } };
       } catch (error) {
           console.error(`❌ Parlay generation failed for ${requestId}:`, error.message);
-          const fallbackError = new Error(`Web research failed: ${error.message}`);
+          const fallbackError = new Error(`AI service error: ${error.message}`);
           fallbackError.fallbackAvailable = true;
           throw fallbackError;
       }
@@ -126,22 +138,51 @@ class AIService {
   async _callAIProvider(aiModel, prompt) {
       const { GOOGLE_GEMINI_API_KEY, PERPLEXITY_API_KEY } = env;
       let responseText;
+      let lastError = null;
 
       if (aiModel === 'gemini' && GOOGLE_GEMINI_API_KEY) {
-          const genAI = new GoogleGenerativeAI(GOOGLE_GEMINI_API_KEY);
-          const model = genAI.getGenerativeModel({ model: GEMINI_MODELS.gemini });
-          const result = await model.generateContent(prompt);
-          responseText = result.response.text();
+          const modelsToTry = [
+            GEMINI_MODELS.gemini,
+            GEMINI_MODELS.gemini_fallback,
+            GEMINI_MODELS.gemini_legacy
+          ];
+
+          for (const modelName of modelsToTry) {
+            try {
+              console.log(`🔄 Trying Gemini model: ${modelName}`);
+              const genAI = new GoogleGenerativeAI(GOOGLE_GEMINI_API_KEY);
+              const model = genAI.getGenerativeModel({ model: modelName });
+              const result = await model.generateContent(prompt);
+              responseText = result.response.text();
+              console.log(`✅ Success with Gemini model: ${modelName}`);
+              break;
+            } catch (modelError) {
+              lastError = modelError;
+              console.warn(`❌ Gemini model ${modelName} failed:`, modelError.message);
+            }
+          }
+
+          if (!responseText) {
+            throw new Error(`All Gemini models failed. Last error: ${lastError?.message}`);
+          }
       } else if (aiModel === 'perplexity' && PERPLEXITY_API_KEY) {
-          const response = await axios.post('https://api.perplexity.ai/chat/completions',
-              { model: GEMINI_MODELS.perplexity, messages: [{ role: 'user', content: prompt }] },
-              { headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}` }, timeout: WEB_TIMEOUT_MS }
-          );
-          responseText = response?.data?.choices?.[0]?.message?.content || '';
-      } else { throw new Error(`${aiModel} API key not configured.`); }
+          try {
+            const response = await axios.post('https://api.perplexity.ai/chat/completions',
+                { model: GEMINI_MODELS.perplexity, messages: [{ role: 'user', content: prompt }] },
+                { headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}` }, timeout: WEB_TIMEOUT_MS }
+            );
+            responseText = response?.data?.choices?.[0]?.message?.content || '';
+          } catch (error) {
+            throw new Error(`Perplexity API error: ${error.message}`);
+          }
+      } else { 
+          throw new Error(`${aiModel} API key not configured or model not available.`); 
+      }
 
       const parsedJson = extractJSON(responseText);
-      if (!parsedJson) { throw new Error('AI response did not contain valid JSON.'); }
+      if (!parsedJson) { 
+          throw new Error('AI response did not contain valid JSON.'); 
+      }
       return parsedJson;
   }
   
@@ -160,40 +201,25 @@ class AIService {
       }));
       const parlay_price_decimal = parlayDecimal(legs);
       const parlay_price_american = decimalToAmerican(parlay_price_decimal);
-      return { legs, parlay_price_american, parlay_price_decimal, quantitative_analysis: await quantitativeService.evaluateParlay(legs, parlay_price_decimal) };
+      
+      let quantitative_analysis = { error: 'Analysis skipped in fallback mode' };
+      try {
+        quantitative_analysis = await quantitativeService.evaluateParlay(legs, parlay_price_decimal);
+      } catch (error) {
+        console.warn('Quantitative analysis failed in fallback:', error.message);
+      }
+      
+      return { 
+        legs, 
+        parlay_price_american, 
+        parlay_price_decimal, 
+        quantitative_analysis 
+      };
   }
 
   async handleFallbackSelection(sportKey, numLegs, mode, betType) {
+    console.log(`🔄 Using fallback mode: ${mode} for ${sportKey}`);
     return this.generateParlay(sportKey, numLegs, mode, 'gemini', betType, { horizonHours: 72 });
-  }
-
-  /**
-   * Validate odds data (for model.js handler)
-   */
-  async validateOdds(oddsData) {
-    try {
-      if (!oddsData || !Array.isArray(oddsData)) {
-        return { valid: false, error: 'Invalid odds data format' };
-      }
-
-      const validGames = oddsData.filter(game => 
-        game.home_team && 
-        game.away_team && 
-        game.commence_time &&
-        game.bookmakers && 
-        Array.isArray(game.bookmakers)
-      );
-
-      return {
-        valid: validGames.length > 0,
-        totalGames: oddsData.length,
-        validGames: validGames.length,
-        validationRate: validGames.length / oddsData.length
-      };
-    } catch (error) {
-      console.error('Odds validation error:', error);
-      return { valid: false, error: error.message };
-    }
   }
 }
 
