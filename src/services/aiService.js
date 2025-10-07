@@ -11,6 +11,12 @@ const TZ = env.TIMEZONE || 'America/New_York';
 const WEB_TIMEOUT_MS = 30000;
 
 const GEMINI_MODELS = { 
+  gemini: "gemini-2.5-flash",
+  gemini_fallback: "gemini-2.5-pro",
+  gemini_legacy: "gemini-1.5-pro",
+  perplexity: "sonar-pro" 
+
+const GEMINI_MODELS = { 
   // Standard, fastest, and most cost-effective for most tasks
   flash: "gemini-2.5-flash", 
   // Standard, most powerful for complex reasoning and coding
