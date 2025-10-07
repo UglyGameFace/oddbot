@@ -1,4 +1,4 @@
-// src/bot.js - FIXED WEBHOOK-ONLY VERSION
+// src/bot.js - FINAL FIXED WEBHOOK-ONLY VERSION
 import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
@@ -78,11 +78,11 @@ export async function safeEditMessage(chatId, messageId, text, options = {}) {
     }
     return await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...editOptions });
   } catch (error) {
-    if (error.response?.body?.description.includes('message is not modified')) { return; }
-    if (error.response?.body?.error_code === 400 && error.response.body.description.includes('inline keyboard expected')) {
+    if (error.response?.body?.description?.includes('message is not modified')) { return; }
+    if (error.response?.body?.error_code === 400 && error.response.body.description?.includes('inline keyboard expected')) {
       return await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: options.parse_mode || 'HTML', reply_markup: { inline_keyboard: [] } });
     }
-    if (error.response?.body?.error_code === 400 && error.response.body.description.includes('message to edit not found')) { return; }
+    if (error.response?.body?.error_code === 400 && error.response.body.description?.includes('message to edit not found')) { return; }
     console.error('❌ Message edit failed:', error.message);
     throw error;
   }
@@ -181,11 +181,36 @@ async function registerAllCommands(bot) {
     await bot.setMyCommands(commands);
     
     // FIXED: Add explicit text handlers for all commands
-    commands.forEach(cmd => {
-      bot.onText(new RegExp(`^/${cmd.command}$`), (msg) => {
-        console.log(`🎯 Command received: "/${cmd.command}" from ${msg.chat.id}`);
-        // The individual handlers will process these in their modules
-      });
+    bot.onText(/^\/ai$/, (msg) => {
+      console.log(`🎯 /ai command received from ${msg.chat.id}`);
+    });
+    
+    bot.onText(/^\/chat$/, (msg) => {
+      console.log(`🎯 /chat command received from ${msg.chat.id}`);
+    });
+    
+    bot.onText(/^\/custom$/, (msg) => {
+      console.log(`🎯 /custom command received from ${msg.chat.id}`);
+    });
+    
+    bot.onText(/^\/player$/, (msg) => {
+      console.log(`🎯 /player command received from ${msg.chat.id}`);
+    });
+    
+    bot.onText(/^\/settings$/, (msg) => {
+      console.log(`🎯 /settings command received from ${msg.chat.id}`);
+    });
+    
+    bot.onText(/^\/status$/, (msg) => {
+      console.log(`🎯 /status command received from ${msg.chat.id}`);
+    });
+    
+    bot.onText(/^\/tools$/, (msg) => {
+      console.log(`🎯 /tools command received from ${msg.chat.id}`);
+    });
+    
+    bot.onText(/^\/help$/, (msg) => {
+      console.log(`🎯 /help command received from ${msg.chat.id}`);
     });
 
     // Global command logger
@@ -231,7 +256,9 @@ async function initializeBot() {
       registerAllCallbacks(bot);
       
       app.use(express.json());
-      sentryService.attachExpressPreRoutes?.(app);
+      if (sentryService.attachExpressPreRoutes) {
+        sentryService.attachExpressPreRoutes(app);
+      }
 
       // FIXED: Webhook configuration with proper timing
       console.log('🌐 Configuring webhook mode...');
@@ -277,7 +304,10 @@ async function initializeBot() {
         res.sendStatus(200);
       });
 
-      sentryService.attachExpressPostRoutes?.(app);
+      if (sentryService.attachExpressPostRoutes) {
+        sentryService.attachExpressPostRoutes(app);
+      }
+      
       isServiceReady = true;
       console.log('🎯 Service marked as ready for health checks');
 
