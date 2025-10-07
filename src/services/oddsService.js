@@ -79,7 +79,8 @@ class OddsService {
     this.providers = [
       new TheOddsProvider(env.THE_ODDS_API_KEY),
     ].filter((provider) => {
-      const hasKey = provider.apiKey && provider.apiKey !== 'undefined';
+      // FIX: Ensure apiKey is a truthy and non-empty string.
+      const hasKey = provider.apiKey && provider.apiKey.length > 0;
       if (!hasKey) {
         console.warn(
           `⚠️ Excluding ${provider.name} provider - no API key configured`
@@ -230,6 +231,7 @@ class OddsService {
       // Get status from each provider
       for (const provider of this.providers) {
         try {
+          // This calls a method that is outside the provided files (TheOddsProvider)
           freshnessInfo.providers[provider.name] =
             await provider.getProviderStatus();
         } catch (error) {
@@ -282,6 +284,7 @@ class OddsService {
     for (const provider of this.providers) {
       try {
         console.log(`🔧 Trying ${provider.name} for ${sportKey}...`);
+        // This calls a method that is outside the provided files (TheOddsProvider)
         const games = await provider.fetchSportOdds(sportKey, options);
 
         if (games && games.length > 0) {
