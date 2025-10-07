@@ -47,7 +47,7 @@ const env = cleanEnv(process.env, {
   RATE_LIMIT_REQUESTS: num({ default: 100 }),
   RATE_LIMIT_TIME_WINDOW: num({ default: 900000 }),
   TELEGRAM_POLLING_INTERVAL: num({ default: 300 }),
-  REDIS_URL: url({ default: 'redis://localhost:6379' }),
+  REDIS_URL: str({ default: '' }), // FIXED: Changed from 'url' to 'str' and default to ''
   CACHE_TTL_DEFAULT: num({ default: 300 }),
   ENCRYPTION_KEY: str({ default: 'default-encryption-key-change-in-production' }),
   JWT_SECRET: str({ default: 'default-jwt-secret-change-in-production' }),
