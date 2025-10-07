@@ -11,6 +11,7 @@ const HEALTH_CHECK_TIMEOUT = 10000;
 const CACHE_TTL_HEALTH = 30;
 
 class ServiceHealthChecker {
+// ... (All existing check methods are unchanged)
   static async checkRedis() {
     const checkStart = Date.now();
     
@@ -100,6 +101,8 @@ class ServiceHealthChecker {
 
       const totalTime = Date.now() - checkStart;
 
+      // Note: databaseService.getDistinctSports returns a fallback list if the client is null,
+      // which is why the check relies heavily on dbStats to be fully "healthy"
       return {
         healthy: Array.isArray(sports) && dbStats?.status === 'healthy',
         status: 'connected',
@@ -297,6 +300,7 @@ class ServiceHealthChecker {
 }
 
 class HealthHistoryManager {
+// ... (All existing methods are unchanged)
   constructor() {
     this.historyKey = 'health_check_history';
     this.maxHistoryEntries = 100;
@@ -448,6 +452,7 @@ class HealthHistoryManager {
 }
 
 class HealthRecommendationsGenerator {
+// ... (All existing methods are unchanged)
   static generate(services) {
     const recommendations = [];
 
@@ -545,6 +550,40 @@ class EnhancedHealthService {
       odds: ['live-odds', 'player-props', 'sports-discovery'],
       games: ['sports-list', 'game-schedules', 'live-scores']
     };
+  }
+  
+  // CRITICAL FIX: Add this method to block startup in bot.js
+  async waitForReady(timeoutMs = 30000) {
+    const startTime = Date.now();
+    const intervalMs = 2000; // Check every 2 seconds
+
+    while (Date.now() - startTime < timeoutMs) {
+      try {
+        // Use getHealth with details=false to get the summarized report
+        const report = await this.getHealth(false);
+        
+        // Check if the report is overall healthy (all critical services OK)
+        if (report.healthy) {
+          console.log(`✅ Health check passed: All services are ready.`);
+          return true; 
+        }
+
+        console.log(`⏳ Services not ready yet. Retrying in ${intervalMs}ms...`);
+        // Optional: Log degraded service names for better visibility
+        Object.entries(report.services_health)
+            .filter(([, isHealthy]) => !isHealthy)
+            .forEach(([name]) => console.log(`   - ❌ ${name} is DOWN`));
+
+        await new Promise(resolve => setTimeout(resolve, intervalMs));
+
+      } catch (error) {
+        console.error('❌ Error during startup health check:', error.message);
+        await new Promise(resolve => setTimeout(resolve, intervalMs));
+      }
+    }
+
+    console.error(`❌ Startup timeout of ${timeoutMs}ms reached. Services are still degraded.`);
+    return false;
   }
 
   async getHealth(includeDetails = false) {
@@ -689,7 +728,10 @@ class EnhancedHealthService {
 
   async checkDatabaseBasic() {
     try {
+      // NOTE: databaseService.getDistinctSports returns a fallback if unconfigured
+      // but fails if the client is configured but connection fails.
       const sports = await databaseService.getDistinctSports();
+      // A more robust check might be databaseService.testConnection() but relying on getDistinctSports is fine here.
       return Array.isArray(sports);
     } catch (error) {
       return false;
