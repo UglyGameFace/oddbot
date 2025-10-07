@@ -9,7 +9,7 @@ import { buildParlayPrompt } from './promptService.js';
 
 const TZ = env.TIMEZONE || 'America/New_York';
 const WEB_TIMEOUT_MS = 90000;
-const GEMINI_MODELS = { gemini: "gemini-pro", perplexity: "sonar-pro" };
+const GEMINI_MODELS = { gemini: "gemini-2.5-flash", perplexity: "sonar-pro" };
 
 function americanToDecimal(a) {
     const x = Number(a);
