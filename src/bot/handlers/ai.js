@@ -1,4 +1,4 @@
-// src/bot/handlers/ai.js - FIXED COMMAND REGISTRATION
+// src/bot/handlers/ai.js - COMPLETE FIXED VERSION
 import aiService from '../../services/aiService.js';
 import gamesService from '../../services/gamesService.js';
 import { setUserState, getUserState, getAIConfig } from '../state.js';
@@ -25,6 +25,20 @@ const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 function pageOf(arr, page) {
   const start = page * PAGE_SIZE;
   return arr.slice(start, start + PAGE_SIZE);
+}
+
+function formatLocalIfPresent(utcDateString, timezone) {
+    if (!utcDateString) return null;
+    try {
+        const date = new Date(utcDateString);
+        return new Intl.DateTimeFormat('en-US', {
+        timeZone: timezone,
+        year: 'numeric', month: 'short', day: '2-digit',
+        hour: '2-digit', minute: '2-digit'
+        }).format(date);
+    } catch (e) {
+        return utcDateString; // Fallback to original string on error
+    }
 }
 
 async function getCachedSports() {
@@ -281,7 +295,7 @@ async function sendQuantitativeModeSelection(bot, chatId, messageId) {
 
 async function sendFallbackOptions(bot, chatId, messageId, error) {
   const text = `❌ <b>Web Research Failed</b>\n\n` +
-               `<b>Error:</b> ${escapeHTML(error.originalError)}\n\n` +
+               `<b>Error:</b> ${escapeHTML(error.message)}\n\n` +
                `Choose a fallback option:`;
   const keyboard = [
     [{ text: '🔴 Use Live Mode', callback_data: 'ai_fallback_live' }],
