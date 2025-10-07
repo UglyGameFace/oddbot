@@ -19,6 +19,29 @@ export default function makeCache(redis) {
   const DEFAULT_LOCK_MS = 8000;
   const DEFAULT_RETRY_MS = 150;
 
+  // Unified function to execute the loader and set the cache
+  async function executeLoaderAndCache(key, ttlSec, loader, context) {
+    try {
+      const data = await loader();
+      if (data !== undefined && data !== null) {
+        await redis.set(key, JSON.stringify(data), 'EX', ttlSec);
+        console.log(`💾 Cached data for key: ${key} (TTL: ${ttlSec}s)`);
+      } else {
+        console.warn(`⚠️ Loader returned null/undefined for key: ${key}`);
+      }
+      return data;
+    } catch (loaderError) {
+      console.error(`❌ Loader failed for cache key: ${key}`, loaderError.message);
+      sentryService.captureError(loaderError, {
+        component: 'cache_service',
+        operation: 'getOrSetJSON_loader',
+        cacheKey: key,
+        ...context
+      });
+      throw loaderError;
+    }
+  }
+
   async function getOrSetJSON(key, ttlSec, loader, { 
     lockMs = DEFAULT_LOCK_MS, 
     retryMs = DEFAULT_RETRY_MS,
@@ -49,25 +72,12 @@ export default function makeCache(redis) {
       const gotLock = await redis.set(lockKey, '1', 'PX', lockMs, 'NX');
 
       if (gotLock === 'OK') {
+        // --- Lock Acquired Path ---
         console.log(`🔒 Acquired lock for key: ${key}`);
         try {
-          const data = await loader();
-          if (data !== undefined && data !== null) {
-            await redis.set(key, JSON.stringify(data), 'EX', ttlSec);
-            console.log(`💾 Cached data for key: ${key} (TTL: ${ttlSec}s)`);
-          } else {
-            console.warn(`⚠️ Loader returned null/undefined for key: ${key}`);
-          }
-          return data;
+          // Use the unified function
+          return await executeLoaderAndCache(key, ttlSec, loader, context);
         } catch (loaderError) {
-          console.error(`❌ Loader failed for cache key: ${key}`, loaderError.message);
-          sentryService.captureError(loaderError, {
-            component: 'cache_service',
-            operation: 'getOrSetJSON_loader',
-            cacheKey: key,
-            ...context
-          });
-          
           if (fallbackOnError && cached) {
             console.log('🔄 Using cached data despite loader error');
             const fallbackData = safeJsonParse(cached, null);
@@ -77,13 +87,14 @@ export default function makeCache(redis) {
           }
           throw loaderError;
         } finally {
+          // GUARANTEED lock release
           await redis.del(lockKey).catch(delError => {
             console.warn(`⚠️ Failed to delete lock key: ${lockKey}`, delError.message);
           });
           console.log(`🔓 Released lock for key: ${key}`);
         }
       } else {
-        // Wait for the lock holder to complete
+        // --- Lock Wait Path (The Error Source) ---
         console.log(`⏳ Waiting for lock on key: ${key}`);
         const deadline = Date.now() + lockMs;
         while (Date.now() < deadline) {
@@ -95,17 +106,42 @@ export default function makeCache(redis) {
               console.log(`📦 Got cached data after lock wait for key: ${key}`);
               return parsed;
             }
+            // If data is corrupt, stop waiting and continue to load fresh data.
             break;
           }
         }
         
-        // If we get here, either deadline passed or data was corrupt
-        console.log(`⏰ Lock wait timeout for key: ${key}, loading fresh data`);
-        const data = await loader();
-        if (data !== undefined && data !== null) {
-          await redis.set(key, JSON.stringify(data), 'EX', ttlSec);
+        // FIX: The issue is that the code below was not wrapped in a try/finally
+        // to handle nested Redis calls correctly, leading to command stream issues.
+        // We will now acquire the lock immediately with a short expiration
+        // if the wait timed out, ensuring a cleanup.
+
+        console.log(`⏰ Lock wait timeout for key: ${key}, attempting to load fresh data`);
+        const aggressiveLockKey = `aggressive_lock:${key}`;
+        
+        // Attempt aggressive lock with short TTL (e.g., 3 seconds)
+        const aggressiveLock = await redis.set(aggressiveLockKey, '1', 'EX', 3, 'NX');
+        
+        try {
+          const data = await executeLoaderAndCache(key, ttlSec, loader, context);
+          return data;
+        } catch (loaderError) {
+          // If the aggressive lock failed (aggressiveLock !== 'OK'), another process beat us
+          // which means we should check the cache one last time
+          if (aggressiveLock !== 'OK') {
+            const finalCache = await redis.get(key);
+            const finalParsed = safeJsonParse(finalCache, null);
+            if (finalParsed) return finalParsed;
+          }
+          // If we couldn't get a lock OR the loader failed, fall through to outer error handler
+          throw loaderError;
+        } finally {
+          // Clean up the aggressive lock if we acquired it
+          if (aggressiveLock === 'OK') {
+             await redis.del(aggressiveLockKey).catch(() => {});
+             console.log(`🔓 Released aggressive lock for key: ${key}`);
+          }
         }
-        return data;
       }
     } catch (error) {
       console.error(`❌ Cache operation failed for key: ${key}`, error.message);
