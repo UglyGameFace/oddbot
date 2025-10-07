@@ -1,10 +1,9 @@
-// src/services/rateLimitService.js - ENHANCED ENTERPRISE VERSION
-import redis from './redisService.js';
+// src/services/rateLimitService.js - COMPLETE FIXED VERSION
+import { getRedisClient } from './redisService.js';
 import env from '../config/env.js';
 import { sentryService } from './sentryService.js';
 import { sleep } from '../utils/asyncUtils.js';
 
-// Utility functions
 const num = (v) => (v == null ? null : Number(v));
 const pick = (o, keys) => {
   const out = {}; if (!o) return out;
@@ -17,15 +16,15 @@ class EnterpriseRateLimitService {
     this.limits = {
       user: {
         points: Number(env.RATE_LIMIT_REQUESTS || 100),
-        duration: Number(env.RATE_LIMIT_TIME_WINDOW || 60_000), // ms
+        duration: Number(env.RATE_LIMIT_TIME_WINDOW || 60_000),
       },
       api_provider: {
         points: Number(env.API_RATE_LIMIT_REQUESTS || 1000),
-        duration: Number(env.API_RATE_LIMIT_WINDOW || 3600000), // 1 hour
+        duration: Number(env.API_RATE_LIMIT_WINDOW || 3600000),
       },
       telegram: {
         points: Number(env.TELEGRAM_RATE_LIMIT_REQUESTS || 30),
-        duration: Number(env.TELEGRAM_RATE_LIMIT_WINDOW || 60000), // 1 minute
+        duration: Number(env.TELEGRAM_RATE_LIMIT_WINDOW || 60000),
       }
     };
     
@@ -38,7 +37,7 @@ class EnterpriseRateLimitService {
       },
       sportradar: {
         name: 'SportRadar',
-        monthly_limit: null, // Varies by plan
+        monthly_limit: null,
         burst_limit: 5,
         recommended_delay: 1200
       },
@@ -53,13 +52,14 @@ class EnterpriseRateLimitService {
     console.log('✅ Enterprise Rate Limit Service Initialized.');
   }
 
-  // -------- Sliding-window rate limiter with enhanced features --------
   async checkRateLimit(identifier, type = 'user', context = '') {
     const limitConfig = this.limits[type];
     if (!limitConfig) return { allowed: true, remaining: Infinity };
 
     try {
-      const redisClient = await redis;
+      const redisClient = await getRedisClient();
+      if (!redisClient) return { allowed: true, remaining: Infinity, error: 'Redis not available' };
+
       const key = `ratelimit:${type}:${identifier}:${context}`;
       const now = Date.now();
       const windowStart = now - limitConfig.duration;
@@ -75,10 +75,7 @@ class EnterpriseRateLimitService {
       const remaining = Math.max(0, limitConfig.points - requestCount);
       const allowed = requestCount <= limitConfig.points;
       
-      // Calculate reset time
       const resetTime = now + limitConfig.duration;
-      
-      // Calculate retry after (if limited)
       const retryAfter = allowed ? 0 : Math.ceil((resetTime - now) / 1000);
 
       return { 
@@ -92,15 +89,15 @@ class EnterpriseRateLimitService {
 
     } catch (error) {
       sentryService.captureError(error, { component: 'rate_limiter' });
-      // Fail open - allow requests if rate limiting fails
       return { allowed: true, remaining: Infinity, error: error.message };
     }
   }
 
-  // -------- Burst protection --------
   async checkBurstLimit(identifier, maxBurst = 10, windowMs = 1000) {
     try {
-      const redisClient = await redis;
+      const redisClient = await getRedisClient();
+      if (!redisClient) return { allowed: true, error: 'Redis not available' };
+
       const key = `burst:${identifier}`;
       const now = Date.now();
       const windowStart = now - windowMs;
@@ -127,7 +124,6 @@ class EnterpriseRateLimitService {
     }
   }
 
-  // -------- Enhanced provider quota management --------
   parseProviderHeaders(provider, headers = {}) {
     const h = headers || {};
 
@@ -140,7 +136,7 @@ class EnterpriseRateLimitService {
         name: 'The Odds API',
         remaining,
         used,
-        limit: 1000, // Monthly limit
+        limit: 1000,
         reset: this._calculateOddsAPIReset(),
         window: 'monthly',
         utilization: remaining !== null ? ((used || 0) / 1000 * 100).toFixed(1) : null,
@@ -188,7 +184,6 @@ class EnterpriseRateLimitService {
       };
     }
 
-    // Generic fallback for other providers
     const remaining = num(h['x-ratelimit-remaining'] ?? h['x-rate-limit-remaining']);
     const limit = num(h['x-ratelimit-limit'] ?? h['x-rate-limit-limit']);
     const reset = num(h['x-ratelimit-reset'] ?? h['x-rate-limit-reset']);
@@ -214,25 +209,22 @@ class EnterpriseRateLimitService {
     };
   }
 
-  // Save enhanced provider quota snapshot
   async saveProviderQuota(provider, headers) {
     try {
       const snapshot = this.parseProviderHeaders(provider, headers);
       snapshot.at = Date.now();
       snapshot.timestamp = new Date().toISOString();
       
-      const client = await redis;
+      const client = await getRedisClient();
+      if (!client) return null;
       
-      // Save current snapshot
       await client.set(`quota:${provider}:current`, JSON.stringify(snapshot), { EX: 3600 });
       
-      // Add to history (keep last 24 hours)
       const historyKey = `quota:${provider}:history`;
       await client.zadd(historyKey, snapshot.at, JSON.stringify(snapshot));
       await client.zremrangebyscore(historyKey, 0, snapshot.at - (24 * 60 * 60 * 1000));
-      await client.expire(historyKey, 48 * 60 * 60); // 48 hours TTL
+      await client.expire(historyKey, 48 * 60 * 60);
       
-      // Update provider status
       await this._updateProviderStatus(provider, snapshot);
       
       return snapshot;
@@ -242,10 +234,11 @@ class EnterpriseRateLimitService {
     }
   }
 
-  // Read provider quota with history analysis
   async getProviderQuota(provider, includeHistory = false) {
     try {
-      const client = await redis;
+      const client = await getRedisClient();
+      if (!client) return null;
+
       const current = await client.get(`quota:${provider}:current`);
       const snapshot = current ? JSON.parse(current) : null;
       
@@ -253,17 +246,15 @@ class EnterpriseRateLimitService {
         return snapshot;
       }
 
-      // Get recent history for trend analysis
       const historyKey = `quota:${provider}:history`;
-      const historyRaw = await client.zrange(historyKey, -10, -1); // Last 10 entries
+      const historyRaw = await client.zrange(historyKey, -10, -1);
       const history = historyRaw.map(entry => JSON.parse(entry));
       
-      // Analyze trends
       const trends = this._analyzeQuotaTrends(history, snapshot);
       
       return {
         ...snapshot,
-        history: history.slice(-5), // Last 5 entries
+        history: history.slice(-5),
         trends
       };
 
@@ -273,12 +264,10 @@ class EnterpriseRateLimitService {
     }
   }
 
-  // Enhanced provider status checking
   async shouldBypassLive(provider) {
     const snap = await this.getProviderQuota(provider);
     if (!snap) return false;
     
-    // Check multiple conditions for bypass
     const conditions = [
       snap.remaining === 0,
       snap.critical === true,
@@ -289,7 +278,6 @@ class EnterpriseRateLimitService {
     return conditions.some(condition => condition === true);
   }
 
-  // Get recommended delay for provider
   async getRecommendedDelay(provider) {
     const config = this.providerConfigs[provider];
     if (!config) return 1000;
@@ -297,7 +285,6 @@ class EnterpriseRateLimitService {
     const quota = await this.getProviderQuota(provider);
     if (!quota) return config.recommended_delay;
     
-    // Adjust delay based on utilization
     let delay = config.recommended_delay;
     if (quota.utilization > 80) {
       delay *= 2;
@@ -307,10 +294,9 @@ class EnterpriseRateLimitService {
       delay *= 0.8;
     }
     
-    return Math.max(500, Math.min(5000, delay)); // Clamp between 500ms and 5s
+    return Math.max(500, Math.min(5000, delay));
   }
 
-  // Provider health status
   async getProviderHealth(provider) {
     const quota = await this.getProviderQuota(provider, true);
     const config = this.providerConfigs[provider];
@@ -356,7 +342,6 @@ class EnterpriseRateLimitService {
     };
   }
 
-  // Get all providers health status
   async getAllProvidersHealth() {
     const providers = Object.keys(this.providerConfigs);
     const healthReports = await Promise.all(
@@ -373,10 +358,11 @@ class EnterpriseRateLimitService {
     };
   }
 
-  // Rate limit statistics
   async getRateLimitStats(timeframe = '24h') {
     try {
-      const client = await redis;
+      const client = await getRedisClient();
+      if (!client) return { error: 'Redis not available' };
+
       const patterns = ['ratelimit:*', 'burst:*', 'quota:*'];
       
       const stats = {};
@@ -385,7 +371,6 @@ class EnterpriseRateLimitService {
         stats[pattern] = keys.length;
       }
       
-      // Get recent rate limit events
       const recentLimits = await client.keys('ratelimit:*:current');
       const limitedProviders = [];
       
@@ -414,11 +399,11 @@ class EnterpriseRateLimitService {
     }
   }
 
-  // ========== PRIVATE METHODS ==========
-
   async _updateProviderStatus(provider, snapshot) {
     try {
-      const client = await redis;
+      const client = await getRedisClient();
+      if (!client) return;
+
       const statusKey = `provider:${provider}:status`;
       
       const status = {
@@ -429,7 +414,7 @@ class EnterpriseRateLimitService {
         healthy: !snapshot.critical && snapshot.remaining !== 0
       };
       
-      await client.set(statusKey, JSON.stringify(status), { EX: 7200 }); // 2 hours TTL
+      await client.set(statusKey, JSON.stringify(status), { EX: 7200 });
       
     } catch (error) {
       console.error(`Failed to update provider status for ${provider}:`, error);
@@ -438,7 +423,8 @@ class EnterpriseRateLimitService {
 
   async _isProviderTempBanned(provider) {
     try {
-      const client = await redis;
+      const client = await getRedisClient();
+      if (!client) return false;
       const banKey = `provider:${provider}:banned`;
       const banned = await client.get(banKey);
       return banned === '1';
@@ -450,11 +436,10 @@ class EnterpriseRateLimitService {
   _analyzeQuotaTrends(history, current) {
     if (history.length < 2) return { trend: 'insufficient_data' };
     
-    const recent = history.slice(-3); // Last 3 data points
+    const recent = history.slice(-3);
     const utilizationTrend = recent.map(h => parseFloat(h.utilization || 0));
     const remainingTrend = recent.map(h => h.remaining || 0);
     
-    // Calculate simple linear trend
     const utilizationSlope = this._calculateSlope(utilizationTrend);
     const remainingSlope = this._calculateSlope(remainingTrend);
     
@@ -502,14 +487,12 @@ class EnterpriseRateLimitService {
   }
 
   _calculateOddsAPIReset() {
-    // The Odds API resets on the 1st of each month
     const now = new Date();
     const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
     return nextMonth.toISOString();
   }
 
   _calculateDailyReset() {
-    // Daily reset at midnight UTC
     const now = new Date();
     const tomorrow = new Date(now);
     tomorrow.setUTCHours(24, 0, 0, 0);
@@ -517,6 +500,5 @@ class EnterpriseRateLimitService {
   }
 }
 
-// FIXED: Export as named export
 export const rateLimitService = new EnterpriseRateLimitService();
 export default rateLimitService;
