@@ -233,8 +233,6 @@ class GamesService {
     }
   }
 
-  // In your gamesService.js - update the getVerifiedRealGames method:
-
 async getVerifiedRealGames(sportKey, hours = 72) {
     console.log(`🔍 Getting VERIFIED real games for ${sportKey} from games service...`);
     
@@ -279,28 +277,6 @@ async getVerifiedRealGames(sportKey, hours = 72) {
     } catch (error) {
         console.error('❌ Verified real games fetch failed:', error);
         return []; // Return empty instead of stale data
-    }
-}
-        
-        // CRITICAL FIX: If still no games, return empty array instead of failing
-        const upcomingGames = (realGames || []).filter(game => {
-            try {
-                const gameTime = new Date(game.commence_time);
-                const now = new Date();
-                const horizon = new Date(now.getTime() + hours * 60 * 60 * 1000);
-                return gameTime > now && gameTime <= horizon;
-            } catch {
-                return false;
-            }
-        });
-        
-        console.log(`📅 VERIFIED: ${upcomingGames.length} real ${sportKey} games in next ${hours}h`);
-        return upcomingGames;
-        
-    } catch (error) {
-        console.error('❌ Verified real games fetch failed:', error);
-        // CRITICAL FIX: Return empty array instead of throwing to prevent complete failure
-        return [];
     }
 }
 
