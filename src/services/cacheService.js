@@ -1,9 +1,3 @@
-althCheck
-  };
-}
-
-// Export utility functions for use elsewhere
-export { sleep, safeJsonParse };
 // src/services/cacheService.js - ABSOLUTE FINAL FIXED VERSION (Complete Script)
 
 import { sentryService } from './sentryService.js';
