@@ -233,8 +233,17 @@ class GamesService {
     }
   }
 
-  async getVerifiedRealGames(sportKey, hours = 72) {
+  // In your gamesService.js - update the getVerifiedRealGames method:
+
+async getVerifiedRealGames(sportKey, hours = 72) {
     console.log(`🔍 Getting VERIFIED real games for ${sportKey} from games service...`);
+    
+    // CRITICAL: Skip entirely if API keys are expired
+    const { THE_ODDS_API_KEY } = env;
+    if (!THE_ODDS_API_KEY || THE_ODDS_API_KEY.includes('expired') || THE_ODDS_API_KEY.length < 10) {
+        console.log('🎯 Skipping game validation - API keys expired');
+        return [];
+    }
     
     try {
         let realGames = [];
@@ -246,30 +255,32 @@ class GamesService {
             }), 6000, 'VerifiedOddsFetch');
             console.log(`✅ Odds API: ${realGames?.length || 0} real games`);
         } catch (error) {
-            // CRITICAL FIX: Don't fail completely on API errors
-            if (error.message.includes('401') || error.message.includes('API key') || error.message.includes('expired')) {
-                console.warn(`⚠️ Odds API key issue for ${sportKey}, skipping odds service`);
-                realGames = [];
-            } else if (!(error instanceof TimeoutError)) {
-                console.warn('❌ Odds API failed for verified games:', error.message);
-            } else {
-                console.warn('❌ Odds API timeout for verified games');
-            }
+            // CRITICAL: Don't fall back to database - stale data is worse than no data
+            console.warn(`❌ Odds API failed, skipping database fallback: ${error.message}`);
+            return [];
         }
         
-        // CRITICAL FIX: Try database even if odds API fails
-        if (!realGames || realGames.length === 0) {
+        // Filter to upcoming games only
+        const now = new Date();
+        const horizon = new Date(now.getTime() + hours * 60 * 60 * 1000);
+        
+        const upcomingGames = (realGames || []).filter(game => {
             try {
-                realGames = await withTimeout(databaseService.getVerifiedRealGames(sportKey, hours), 6000, 'VerifiedDBFetch');
-                console.log(`✅ Database: ${realGames?.length || 0} verified games`);
-            } catch (error) {
-                if (!(error instanceof TimeoutError)) {
-                    console.warn('❌ Database verified games failed:', error.message);
-                } else {
-                    console.warn('❌ Database verified games TIMEOUT.');
-                }
+                const gameTime = new Date(game.commence_time);
+                return gameTime > now && gameTime <= horizon;
+            } catch {
+                return false;
             }
-        }
+        });
+        
+        console.log(`📅 VERIFIED: ${upcomingGames.length} real ${sportKey} games in next ${hours}h`);
+        return upcomingGames;
+        
+    } catch (error) {
+        console.error('❌ Verified real games fetch failed:', error);
+        return []; // Return empty instead of stale data
+    }
+}
         
         // CRITICAL FIX: If still no games, return empty array instead of failing
         const upcomingGames = (realGames || []).filter(game => {
