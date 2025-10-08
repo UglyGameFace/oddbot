@@ -1,209 +1,601 @@
-// src/services/redisService.js - ABSOLUTE FINAL, ULTRA-DEFENSIVE SCRIPT - PRODUCTION FIXED
+// src/services/cacheService.js - ABSOLUTE FINAL FIXED VERSION
 
-import Redis from 'ioredis';
-import env from '../config/env.js';
 import { sentryService } from './sentryService.js';
+import { getRedisClient } from './redisService.js'; // ADD THIS IMPORT
 
-let redisClient = null;
-let connectionPromise = null;
+// Utility functions (previously from asyncUtils.js)
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-function createRedisClient() {
-  console.log('🔌 Creating Redis client...');
+const safeJsonParse = (str, fallback = null) => {
+  if (str === null || str === undefined) return fallback;
+  try {
+    return JSON.parse(str);
+  } catch (error) {
+    console.warn('❌ JSON parse error:', error.message);
+    return fallback;
+  }
+};
+
+export default function makeCache(redis) {
+  const DEFAULT_LOCK_MS = 8000;
+  const DEFAULT_RETRY_MS = 150;
   
-  if (!env.REDIS_URL) {
-    console.warn('❌ REDIS_URL not configured - Redis disabled');
-    return null;
+  // CRITICAL FIX: Lua script for atomic lock release (prevents race conditions and command corruption)
+  const RELEASE_LOCK_SCRIPT = `
+    if redis.call('GET', KEYS[1]) == ARGV[1] then
+        return redis.call('DEL', KEYS[1])
+    else
+        return 0
+    end
+  `;
+
+  // CRITICAL FIX: Get a valid Redis client - handle both passed client and fallback
+  async function getValidRedisClient() {
+    try {
+      // If a redis client was passed and it has the get method, use it
+      if (redis && typeof redis.get === 'function') {
+        return redis;
+      }
+      
+      // Otherwise, get a fresh client from redisService
+      console.warn('⚠️ Passed Redis client invalid, getting new client from redisService');
+      const freshClient = await getRedisClient();
+      
+      if (!freshClient) {
+        throw new Error('Redis client not available');
+      }
+      
+      return freshClient;
+    } catch (error) {
+      console.error('❌ Failed to get valid Redis client:', error.message);
+      throw error;
+    }
   }
 
-  const redisOptions = {
-    // CRITICAL FIX: Use default retry settings - let ioredis handle it
-    maxRetriesPerRequest: 3,
-    connectTimeout: 10000,
-    lazyConnect: true,
-    enableReadyCheck: false, // FIX: Disable ready check to avoid extra commands
-    keepAlive: 1000,
-    
-    // FIX: Use ioredis defaults for retry delays
-    retryDelayOnFailover: 1000, 
-    retryDelayOnTryAgain: 1000, 
-    
-    retryStrategy: (times) => {
-      if (times > 10) {
-        console.warn('🔄 Redis retry limit exceeded');
-        return null;
+  // CRITICAL FIX: Safe Redis command execution with error handling
+  async function safeRedisCommand(operation, context = 'redis_command') {
+    try {
+      const client = await getValidRedisClient();
+      return await operation(client);
+    } catch (error) {
+      // Don't log syntax errors to Sentry - they're command issues, not system errors
+      if (!error.message.includes('ERR syntax error') && !error.message.includes('not a function')) {
+        console.error(`❌ Redis command failed (${context}):`, error.message);
+        sentryService.captureError(error, {
+          component: 'cache_service',
+          operation: context
+        });
+      } else {
+        console.warn(`⚠️ Redis command issue in ${context}:`, error.message);
       }
-      const delay = Math.min(times * 200, 5000);
-      console.log(`🔄 Redis reconnecting in ${delay}ms (attempt ${times})`);
-      return delay;
-    },
+      throw error;
+    }
+  }
+
+  // Unified function to execute the loader and set the cache
+  async function executeLoaderAndCache(key, ttlSec, loader, context) {
+    try {
+      const data = await loader();
+      if (data !== undefined && data !== null) {
+        // CRITICAL FIX: Use safe command wrapper
+        await safeRedisCommand(async (client) => {
+          await client.set(key, JSON.stringify(data), 'EX', ttlSec);
+        }, 'set_cache_data');
+        console.log(`💾 Cached data for key: ${key} (TTL: ${ttlSec}s)`);
+      } else {
+        console.warn(`⚠️ Loader returned null/undefined for key: ${key}`);
+      }
+      return data;
+    } catch (loaderError) {
+      console.error(`❌ Loader failed for cache key: ${key}`, loaderError.message);
+      sentryService.captureError(loaderError, {
+        component: 'cache_service',
+        operation: 'getOrSetJSON_loader',
+        cacheKey: key,
+        ...context
+      });
+      throw loaderError;
+    }
+  }
+
+  async function getOrSetJSON(key, ttlSec, loader, { 
+    lockMs = DEFAULT_LOCK_MS, 
+    retryMs = DEFAULT_RETRY_MS,
+    context = {},
+    fallbackOnError = true
+  } = {}) {
     
-    // CRITICAL FIX: SIMPLIFIED - Let ioredis handle reconnection logic
-    reconnectOnError: (err) => {
-      const errorMessage = err.message;
+    const lockValue = '1'; 
+    
+    try {
+      // Try to get cached data first
+      const cached = await safeRedisCommand(async (client) => {
+        return await client.get(key);
+      }, 'get_cached_data');
+
+      if (cached) {
+        try {
+          const parsed = safeJsonParse(cached);
+          if (parsed !== null) {
+            console.log(`📦 Cache HIT for key: ${key}`);
+            return parsed;
+          }
+        } catch (parseError) {
+          console.warn(`❌ Failed to parse cached JSON for key: ${key}`, parseError);
+          // If cached data is corrupt, continue to refresh it
+        }
+      }
+
+      console.log(`❌ Cache MISS for key: ${key}`);
+      const lockKey = `lock:${key}`;
       
-      // FIX: Only force reconnect on actual connection failures
-      const forceReconnectErrors = [
-        'ECONNREFUSED',
-        'ETIMEDOUT', 
-        'EHOSTUNREACH',
-        'ENOTFOUND',
-        'Socket closed unexpectedly'
-      ];
+      // CRITICAL FIX: Use safe command wrapper for lock acquisition
+      let gotLock;
+      try {
+        gotLock = await safeRedisCommand(async (client) => {
+          // FIX: Use correct SET command syntax for lock
+          return await client.set(lockKey, lockValue, 'PX', lockMs, 'NX');
+        }, 'acquire_lock');
+      } catch (lockError) {
+        // If lock acquisition fails due to syntax error, proceed without lock
+        console.warn(`⚠️ Lock acquisition failed for ${key}, proceeding without lock:`, lockError.message);
+        gotLock = null;
+      }
+
+      if (gotLock === 'OK') {
+        // --- Lock Acquired Path ---
+        console.log(`🔒 Acquired lock for key: ${key}`);
+        try {
+          // Use the unified function
+          return await executeLoaderAndCache(key, ttlSec, loader, context);
+        } catch (loaderError) {
+          if (fallbackOnError && cached) {
+            console.log('🔄 Using cached data despite loader error');
+            const fallbackData = safeJsonParse(cached, null);
+            if (fallbackData) {
+              return fallbackData;
+            }
+          }
+          throw loaderError;
+        } finally {
+          // CRITICAL FIX: Use atomic Lua script to release lock only if we own it.
+          try {
+            await safeRedisCommand(async (client) => {
+              await client.eval(RELEASE_LOCK_SCRIPT, 1, lockKey, lockValue);
+            }, 'release_lock');
+            console.log(`🔓 Released lock for key: ${key}`);
+          } catch (releaseError) {
+            console.warn(`⚠️ Failed to release lock for key: ${lockKey}`, releaseError.message);
+            // Don't throw - lock release failure is non-critical
+          }
+        }
+      } else {
+        // --- Lock Wait Path ---
+        console.log(`⏳ Waiting for lock on key: ${key}`);
+        const deadline = Date.now() + lockMs;
+        
+        while (Date.now() < deadline) {
+          await sleep(retryMs);
+          
+          // CRITICAL FIX: Use safe command wrapper
+          try {
+            const again = await safeRedisCommand(async (client) => {
+              return await client.get(key);
+            }, 'lock_wait_check');
+            
+            if (again) {
+              const parsed = safeJsonParse(again);
+              if (parsed !== null) {
+                console.log(`📦 Got cached data after lock wait for key: ${key}`);
+                return parsed;
+              }
+              // If data is corrupt, stop waiting and attempt to refresh.
+              break;
+            }
+          } catch (waitError) {
+            // If we get a syntax error during wait, break out and try without lock
+            console.warn(`⚠️ Lock wait check failed, proceeding without lock:`, waitError.message);
+            break;
+          }
+        }
+        
+        // --- Wait Timeout or Error Path ---
+        console.log(`⏰ Lock wait timed out/failed for key: ${key}. Loading data without lock...`);
+        
+        // If the lock wait timed out or failed, we load the fresh data without a lock.
+        try {
+          // Load fresh data, do not attempt to acquire a lock (avoiding the ERR syntax race)
+          const data = await executeLoaderAndCache(key, ttlSec, loader, context);
+          return data;
+        } catch (loaderError) {
+           // If load fails here, re-throw the error, which goes to the outer catch.
+           throw loaderError;
+        }
+      }
+    } catch (error) {
+      console.error(`❌ Cache operation failed for key: ${key}`, error.message);
       
-      if (forceReconnectErrors.some(e => errorMessage.includes(e))) {
-        console.warn(`🔄 Redis forcing reconnect on: ${errorMessage}`);
+      // Don't log syntax errors to Sentry
+      if (!error.message.includes('ERR syntax error') && !error.message.includes('not a function')) {
+        sentryService.captureError(error, {
+          component: 'cache_service',
+          operation: 'getOrSetJSON',
+          cacheKey: key,
+          ...context
+        });
+      }
+      
+      // If cache fails, still try to return fresh data
+      if (fallbackOnError) {
+        try {
+          console.log(`🔄 Fallback to direct loader for key: ${key}`);
+          return await loader();
+        } catch (fallbackError) {
+          console.error(`❌ Fallback loader also failed for key: ${key}`, fallbackError.message);
+          throw fallbackError;
+        }
+      }
+      throw error;
+    }
+  }
+
+  async function getJSON(key, fallback = null) {
+    try {
+      const cached = await safeRedisCommand(async (client) => {
+        return await client.get(key);
+      }, 'getJSON');
+      const result = safeJsonParse(cached, fallback);
+      console.log(`🔍 Cache GET for ${key}: ${result ? 'HIT' : 'MISS'}`);
+      return result;
+    } catch (error) {
+      console.error(`❌ Cache get failed for key: ${key}`, error.message);
+      return fallback;
+    }
+  }
+
+  async function setJSON(key, value, ttlSec = 3600) {
+    try {
+      if (value === undefined || value === null) {
+        await safeRedisCommand(async (client) => {
+          await client.del(key);
+        }, 'delete_key');
+        console.log(`🗑️ Deleted cache key: ${key}`);
         return true;
       }
       
-      // FIX: For command errors (like syntax errors), DO NOT reconnect
-      // This is the key fix - syntax errors are command issues, not connection issues
-      console.warn(`⚠️ Redis command error (no reconnect): ${errorMessage.substring(0, 100)}`);
+      await safeRedisCommand(async (client) => {
+        await client.set(key, JSON.stringify(value), 'EX', ttlSec);
+      }, 'setJSON');
+      console.log(`💾 Cache SET for ${key} (TTL: ${ttlSec}s)`);
+      return true;
+    } catch (error) {
+      console.error(`❌ Cache set failed for key: ${key}`, error.message);
       return false;
-    },
-    
-    enableOfflineQueue: true, 
-    showFriendlyErrorStack: true,
-    // FIX: Disable auto resubscribing to reduce command complexity
-    autoResubscribe: false,
-    // FIX: Disable auto resend unfulfilled commands  
-    autoResendUnfulfilled: false
-  };
-
-  const client = new Redis(env.REDIS_URL, redisOptions);
-
-  client.on('connect', () => {
-    console.log('🔄 Redis connecting...');
-  });
-
-  client.on('ready', () => {
-    console.log('✅ Redis connected and ready');
-  });
-
-  client.on('error', (err) => {
-    // FIX: Don't spam logs/Sentry for normal operational errors
-    const ignorableErrors = [
-      'ECONNREFUSED',
-      'ETIMEDOUT',
-      'EHOSTUNREACH', 
-      'ENOTFOUND',
-      'ERR syntax error', // This is a command issue, not connection
-      'Redis internal system error'
-    ];
-    
-    if (ignorableErrors.some(e => err.message.includes(e))) {
-      console.warn('⚠️ Redis operational error:', err.message);
-    } else {
-      console.error('❌ Redis critical error:', err.message);
-      sentryService.captureError(err, { component: 'redis_service' });
-    }
-  });
-
-  client.on('close', () => {
-    console.warn('🔌 Redis connection closed');
-  });
-
-  client.on('reconnecting', () => {
-    console.log('🔄 Redis reconnecting...');
-  });
-
-  client.on('end', () => {
-    console.warn('🛑 Redis connection ended');
-  });
-
-  return client;
-}
-
-export async function getRedisClient() {
-  // FIX: More reliable connection state checking
-  if (redisClient) {
-    const status = redisClient.status;
-    if (status === 'ready' || status === 'connecting' || status === 'connect') {
-      return redisClient;
-    }
-    // If client exists but is in error state, reset it
-    if (status === 'close' || status === 'end' || status === 'error') {
-      console.warn('🔄 Redis client in bad state, resetting...');
-      redisClient = null;
-      connectionPromise = null;
     }
   }
 
-  if (connectionPromise) {
-    return connectionPromise;
-  }
-
-  connectionPromise = new Promise(async (resolve, reject) => {
+  async function deleteKey(key) {
     try {
-      redisClient = createRedisClient();
+      const result = await safeRedisCommand(async (client) => {
+        return await client.del(key);
+      }, 'deleteKey');
+      console.log(`🗑️ Deleted cache key: ${key} (result: ${result})`);
+      return result > 0;
+    } catch (error) {
+      console.error(`❌ Failed to delete cache key: ${key}`, error.message);
+      if (!error.message.includes('ERR syntax error') && !error.message.includes('not a function')) {
+        sentryService.captureError(error, {
+          component: 'cache_service',
+          operation: 'deleteKey',
+          cacheKey: key
+        });
+      }
+      return false;
+    }
+  }
+
+  async function getKeys(pattern) {
+    try {
+      const keys = await safeRedisCommand(async (client) => {
+        return await client.keys(pattern);
+      }, 'getKeys');
+      console.log(`🔍 Found ${keys.length} keys matching pattern: ${pattern}`);
+      return keys;
+    } catch (error) {
+      console.error(`❌ Failed to get keys for pattern: ${pattern}`, error.message);
+      if (!error.message.includes('ERR syntax error') && !error.message.includes('not a function')) {
+        sentryService.captureError(error, {
+          component: 'cache_service',
+          operation: 'getKeys',
+          pattern
+        });
+      }
+      return [];
+    }
+  }
+
+  async function flushPattern(pattern) {
+    try {
+      const keys = await safeRedisCommand(async (client) => {
+        return await client.keys(pattern);
+      }, 'flushPattern_keys');
       
-      if (!redisClient) {
-        console.warn('⚠️ Redis client not created - running without Redis');
-        resolve(null);
-        return;
+      if (keys.length > 0) {
+        await safeRedisCommand(async (client) => {
+          await client.del(...keys);
+        }, 'flushPattern_del');
+        console.log(`🧹 Flushed ${keys.length} keys matching: ${pattern}`);
+        return keys.length;
+      }
+      console.log(`🔍 No keys found matching pattern: ${pattern}`);
+      return 0;
+    } catch (error) {
+      console.error(`❌ Failed to flush pattern: ${pattern}`, error.message);
+      if (!error.message.includes('ERR syntax error') && !error.message.includes('not a function')) {
+        sentryService.captureError(error, {
+          component: 'cache_service',
+          operation: 'flushPattern',
+          pattern
+        });
+      }
+      return 0;
+    }
+  }
+
+  async function getCacheInfo() {
+    try {
+      const info = await safeRedisCommand(async (client) => {
+        return await client.info();
+      }, 'getCacheInfo');
+
+      const lines = info.split('\r\n');
+      const cacheInfo = {};
+      
+      for (const line of lines) {
+        if (line && !line.startsWith('#')) {
+          const [key, value] = line.split(':');
+          if (key && value) {
+            cacheInfo[key] = value;
+          }
+        }
       }
 
-      await redisClient.connect();
+      // Get key patterns distribution
+      const commonPatterns = ['odds:*', 'games:*', 'sports:*', 'player_props:*', 'quota:*', 'lock:*'];
+      const patternCounts = {};
       
-      // FIX: Simple ping test with timeout
-      const pingPromise = redisClient.ping().then(() => {
-        console.log('✅ Redis connection test passed');
-      }).catch(pingError => {
-        console.warn('⚠️ Redis ping failed, but continuing:', pingError.message);
-        // Don't fail connection on ping failure
-      });
-      
-      // Wait for ping or timeout after 2 seconds
-      await Promise.race([
-        pingPromise,
-        new Promise(resolve => setTimeout(resolve, 2000))
+      for (const pattern of commonPatterns) {
+        try {
+          const keys = await safeRedisCommand(async (client) => {
+            return await client.keys(pattern);
+          }, `getKeys_${pattern}`);
+          patternCounts[pattern] = keys.length;
+        } catch (error) {
+          patternCounts[pattern] = 0;
+        }
+      }
+
+      // Get memory usage
+      let memoryData = {};
+      try {
+        const memoryInfo = await safeRedisCommand(async (client) => {
+          return await client.info('memory');
+        }, 'getMemoryInfo');
+        
+        const memoryLines = memoryInfo.split('\r\n');
+        for (const line of memoryLines) {
+          if (line && !line.startsWith('#')) {
+            const [key, value] = line.split(':');
+            if (key && value) {
+              memoryData[key] = value;
+            }
+          }
+        }
+      } catch (memoryError) {
+        console.warn('⚠️ Failed to get memory info:', memoryError.message);
+      }
+
+      const totalKeys = Object.values(patternCounts).reduce((sum, count) => sum + count, 0);
+      const hitRate = cacheInfo.keyspace_hits && cacheInfo.keyspace_misses ? 
+        (parseInt(cacheInfo.keyspace_hits) / (parseInt(cacheInfo.keyspace_hits) + parseInt(cacheInfo.keyspace_misses))).toFixed(4) : 0;
+
+      console.log(`📊 Cache Info: ${totalKeys} total keys, hit rate: ${(hitRate * 100).toFixed(2)}%`);
+
+      return {
+        ...cacheInfo,
+        pattern_distribution: patternCounts,
+        total_cached_keys: totalKeys,
+        memory_usage: memoryData.used_memory_human || 'unknown',
+        memory_peak: memoryData.used_memory_peak_human || 'unknown',
+        hit_rate: hitRate,
+        hit_rate_percentage: `${(hitRate * 100).toFixed(2)}%`,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      console.error('❌ Failed to get cache info:', error.message);
+      if (!error.message.includes('ERR syntax error') && !error.message.includes('not a function')) {
+        sentryService.captureError(error, {
+          component: 'cache_service',
+          operation: 'getCacheInfo'
+        });
+      }
+      return { 
+        error: error.message,
+        timestamp: new Date().toISOString()
+      };
+    }
+  }
+
+  async function keyInfo(key) {
+    try {
+      const [exists, ttl, type, memory] = await Promise.all([
+        safeRedisCommand(async (client) => await client.exists(key), 'keyInfo_exists'),
+        safeRedisCommand(async (client) => await client.ttl(key), 'keyInfo_ttl'),
+        safeRedisCommand(async (client) => await client.type(key), 'keyInfo_type'),
+        safeRedisCommand(async (client) => await client.memory('USAGE', key).catch(() => null), 'keyInfo_memory')
       ]);
       
-      resolve(redisClient);
-      connectionPromise = null;
-      
+      const result = {
+        exists: exists === 1,
+        ttl,
+        type,
+        memory_usage: memory ? `${memory} bytes` : 'unknown',
+        ttl_human: ttl > 0 ? `${ttl} seconds` : 'no TTL',
+        status: exists ? (ttl > 0 ? 'active' : 'persistent') : 'not_found',
+        timestamp: new Date().toISOString()
+      };
+
+      console.log(`🔍 Key info for ${key}:`, result);
+      return result;
+
     } catch (error) {
-      console.error('❌ Redis connection failed:', error.message);
-      redisClient = null;
-      connectionPromise = null;
-      console.warn('⚠️ Running without Redis - some features disabled');
-      resolve(null); // Always resolve to prevent app crashes
+      console.error(`❌ Failed to get key info for: ${key}`, error.message);
+      return {
+        exists: false,
+        error: error.message,
+        timestamp: new Date().toISOString()
+      };
     }
-  });
-
-  return connectionPromise;
-}
-
-// FIX: Add a health check method
-export async function checkRedisHealth() {
-  try {
-    const client = await getRedisClient();
-    if (!client) return false;
-    
-    await client.ping();
-    return true;
-  } catch (error) {
-    console.warn('⚠️ Redis health check failed:', error.message);
-    return false;
   }
-}
 
-// FIX: Add cleanup method
-export async function disconnectRedis() {
-  if (redisClient) {
+  async function increment(key, value = 1, ttlSec = null) {
     try {
-      await redisClient.quit();
+      const result = await safeRedisCommand(async (client) => {
+        return await client.incrby(key, value);
+      }, 'increment');
+      
+      if (ttlSec && ttlSec > 0) {
+        await safeRedisCommand(async (client) => {
+          await client.expire(key, ttlSec);
+        }, 'increment_expire');
+      }
+      console.log(`➕ Incremented ${key} by ${value}, new value: ${result}`);
+      return result;
     } catch (error) {
-      // Ignore quit errors during shutdown
+      console.error(`❌ Failed to increment key: ${key}`, error.message);
+      return null;
     }
-    redisClient = null;
-    connectionPromise = null;
   }
+
+  async function decrement(key, value = 1, ttlSec = null) {
+    try {
+      const result = await safeRedisCommand(async (client) => {
+        return await client.decrby(key, value);
+      }, 'decrement');
+      
+      if (ttlSec && ttlSec > 0) {
+        await safeRedisCommand(async (client) => {
+          await client.expire(key, ttlSec);
+        }, 'decrement_expire');
+      }
+      console.log(`➖ Decremented ${key} by ${value}, new value: ${result}`);
+      return result;
+    } catch (error) {
+      console.error(`❌ Failed to decrement key: ${key}`, error.message);
+      return null;
+    }
+  }
+
+  async function setWithTTL(key, value, ttlSec) {
+    try {
+      if (ttlSec && ttlSec > 0) {
+        await safeRedisCommand(async (client) => {
+          await client.set(key, value, 'EX', ttlSec);
+        }, 'setWithTTL');
+      } else {
+        await safeRedisCommand(async (client) => {
+          await client.set(key, value);
+        }, 'setWithoutTTL');
+      }
+      console.log(`💾 Set key ${key} with TTL ${ttlSec || 'none'}`);
+      return true;
+    } catch (error) {
+      console.error(`❌ Failed to set with TTL for key: ${key}`, error.message);
+      return false;
+    }
+  }
+
+  async function getWithTTL(key) {
+    try {
+      const [value, ttl] = await Promise.all([
+        safeRedisCommand(async (client) => await client.get(key), 'getWithTTL_value'),
+        safeRedisCommand(async (client) => await client.ttl(key), 'getWithTTL_ttl')
+      ]);
+      console.log(`🔍 Get with TTL for ${key}: value=${value ? 'exists' : 'null'}, ttl=${ttl}`);
+      return { value, ttl };
+    } catch (error) {
+      console.error(`❌ Failed to get with TTL for key: ${key}`, error.message);
+      return { value: null, ttl: -2 };
+    }
+  }
+
+  async function healthCheck() {
+    try {
+      const startTime = Date.now();
+      const testKey = `health_check_${startTime}`;
+      
+      // Test write
+      await safeRedisCommand(async (client) => {
+        await client.setex(testKey, 10, 'health_check_value');
+      }, 'healthCheck_set');
+      
+      // Test read
+      const value = await safeRedisCommand(async (client) => {
+        return await client.get(testKey);
+      }, 'healthCheck_get');
+      
+      // Test delete
+      await safeRedisCommand(async (client) => {
+        await client.del(testKey);
+      }, 'healthCheck_del');
+      
+      const responseTime = Date.now() - startTime;
+      
+      const result = {
+        healthy: value === 'health_check_value',
+        response_time: responseTime,
+        timestamp: new Date().toISOString(),
+        details: {
+          write: true,
+          read: true,
+          delete: true
+        }
+      };
+
+      console.log(`❤️ Cache health check: ${result.healthy ? 'HEALTHY' : 'UNHEALTHY'} (${responseTime}ms)`);
+      return result;
+
+    } catch (error) {
+      console.error('❌ Cache health check failed:', error.message);
+      return {
+        healthy: false,
+        error: error.message,
+        timestamp: new Date().toISOString(),
+        details: {
+          write: false,
+          read: false,
+          delete: false
+        }
+      };
+    }
+  }
+
+  return { 
+    getOrSetJSON,
+    getJSON,
+    setJSON,
+    deleteKey,
+    getKeys,
+    flushPattern,
+    getCacheInfo,
+    keyInfo,
+    increment,
+    decrement,
+    setWithTTL,
+    getWithTTL,
+    healthCheck
+  };
 }
 
-// Handle graceful shutdown
-process.on('SIGTERM', async () => {
-  console.log('🔌 Redis disconnecting due to SIGTERM...');
-  await disconnectRedis();
-});
-
-export default getRedisClient;
+// Export utility functions for use elsewhere
+export { sleep, safeJsonParse };
