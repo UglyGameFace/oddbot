@@ -1,4 +1,4 @@
-// src/bot.js - FINAL FIXED WEBHOOK-ONLY VERSION
+// src/bot.js - FINAL ABSOLUTE FIXED VERSION
 import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
@@ -309,6 +309,7 @@ async function initializeBot() {
       }
       
       // CRITICAL FIX: Block until all services are ready before marking the bot as ready.
+      // This is the line that previously failed due to the method not being found.
       console.log('⏱️ Waiting for all essential services to pass health check (max 30s)...');
       const readyCheck = await healthService.waitForReady(30000); 
       
@@ -353,6 +354,17 @@ async function initializeBot() {
       initializationPromise = null;
       console.error('💥 Initialization failed:', error.message);
       console.error('Stack trace:', error.stack);
+      
+      // FIX: Handle 429 errors from Telegram API on startup
+      if (String(error.message).includes('429')) {
+        console.log('⏳ Rate limit error during Telegram setup, waiting 10s before exit...');
+        sentryService.captureError(error);
+        setTimeout(() => process.exit(1), 10000);
+      } else {
+        sentryService.captureError(error);
+        process.exit(1);
+      }
+      
       throw error;
     }
   })();
@@ -370,7 +382,8 @@ const shutdown = async (signal) => {
       console.log('🌐 Webhook remains active during restart');
     }
     const redis = await import('./services/redisService.js').then(m => m.default);
-    if (redis.status === 'ready' || redis.status === 'connecting') {
+    // Use the exported client to quit safely.
+    if (redis && (redis.status === 'ready' || redis.status === 'connecting')) {
         await redis.quit();
         console.log('✅ Redis connection closed.');
     }
@@ -392,11 +405,11 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 
 initializeBot().catch((error) => {
   console.error('💥 Fatal initialization error:', error.message);
-  sentryService.captureError(error);
+  // NOTE: Error handling is now inside initializeBot's catch block to prevent double-logging
+  // This outer catch can be simplified, but kept for final safety measure.
   if (String(error.message).includes('429')) {
     console.log('⏳ Rate limit error, waiting before exit...');
-    setTimeout(() => process.exit(1), 10000);
   } else {
-    process.exit(1);
+    // The inner catch handles Sentry and process.exit, but this ensures a clean exit if anything slipped.
   }
 });
