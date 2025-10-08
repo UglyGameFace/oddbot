@@ -1,6 +1,7 @@
-// src/services/oddsService.js - ABSOLUTE FINAL SCRIPT
+// src/services/oddsService.js - ABSOLUTE FINAL FIXED VERSION
+
 import env from '../config/env.js';
-import redisClient from './redisService.js';
+import { getRedisClient } from './redisService.js'; // FIX: Use named import
 import { sentryService } from './sentryService.js';
 import { withTimeout, TimeoutError } from '../utils/asyncUtils.js'; 
 import makeCache from './cacheService.js';
@@ -13,7 +14,7 @@ const CACHE_TTL = {
   SPORTS: 300,
 };
 
-// --- HELPER CLASS DEFINITIONS (Inserted to fix "is not defined" errors) ---
+// Helper classes
 class GameEnhancementService {
   static enhanceGameData(games, sportKey, source) {
     if (!Array.isArray(games)) return [];
@@ -43,7 +44,6 @@ class GameEnhancementService {
   }
 }
 
-// Data quality service (simplified stand-in for local use)
 class DataQualityService {
   static assessDataQuality(games) {
     if (!Array.isArray(games) || games.length === 0) {
@@ -72,7 +72,6 @@ class DataQualityService {
     };
   }
 }
-// -----------------------------------------------------------------------
 
 // Main Odds Service Class
 class OddsService {
@@ -80,7 +79,6 @@ class OddsService {
     this.providers = [
       new TheOddsProvider(env.THE_ODDS_API_KEY),
     ].filter((provider) => {
-      // FIX: Ensure apiKey is a truthy and non-empty string.
       const hasKey = provider.apiKey && provider.apiKey.length > 0;
       if (!hasKey) {
         console.warn(
@@ -90,14 +88,14 @@ class OddsService {
       return hasKey;
     });
 
-    // Sort providers by priority
     this.providers.sort((a, b) => a.priority - b.priority);
     this.cache = null;
   }
 
   async _getCache() {
     if (!this.cache) {
-      const redis = await redisClient;
+      // FIX: Get actual Redis client instance, not the function
+      const redis = await getRedisClient();
       this.cache = makeCache(redis);
     }
     return this.cache;
@@ -112,25 +110,21 @@ class OddsService {
       return await cache.getOrSetJSON(cacheKey, CACHE_TTL.SPORTS, async () => {
         console.log('🔄 Fetching sports list from providers...');
 
-        // Try The Odds API first (most reliable for sports list)
         const theOddsProvider = this.providers.find((p) => p.name === 'theodds');
         if (theOddsProvider) {
           try {
-            // FIX: Use withTimeout here
             const sports = await withTimeout(theOddsProvider.fetchAvailableSports(), 6000, 'OddsAPISportsFetch');
             console.log(`✅ Found ${sports.length} sports from The Odds API`);
             return sports;
           } catch (error) {
-             // FIX: Only suppress TimeoutError, re-throw all other errors.
              if (!(error instanceof TimeoutError)) {
                 console.warn('❌ The Odds API sports fetch CRITICAL error:', error.message);
-                throw error; // Re-throw critical API errors
+                throw error;
              }
              console.warn('❌ The Odds API sports fetch TIMEOUT, falling back.');
           }
         }
 
-        // Fallback to comprehensive list
         console.log('🔄 Using comprehensive sports list fallback');
         const { getAllSports } = await import('./sportsService.js');
         return getAllSports();
@@ -142,12 +136,10 @@ class OddsService {
         operation: 'getAvailableSports',
       });
       
-      // FIX: Re-throw all critical errors (non-timeout errors)
       if (!(error instanceof TimeoutError)) {
           throw error;
       }
 
-      // Final fallback (only reached on timeout or cache failure)
       const { getAllSports } = await import('./sportsService.js');
       return getAllSports();
     }
@@ -184,7 +176,6 @@ class OddsService {
         sportKey,
         options,
       });
-      // FIX: Re-throw all critical errors (non-timeout/non-cache errors)
       if (!(error instanceof TimeoutError)) {
           throw error;
       }
@@ -193,7 +184,6 @@ class OddsService {
   }
 
   async getPlayerPropsForGame(sportKey, gameId, options = {}) {
-    // Player props not implemented in base version
     console.log(`Player props not implemented for ${sportKey} game ${gameId}`);
     return [];
   }
@@ -229,7 +219,7 @@ class OddsService {
       return liveGames;
     } catch (error) {
       console.error(`❌ Live games fetch failed for ${sportKey}:`, error);
-      throw error; // Re-throw critical errors from getSportOdds
+      throw error;
     }
   }
 
@@ -244,10 +234,8 @@ class OddsService {
         providers: {},
       };
 
-      // Get status from each provider
       for (const provider of this.providers) {
         try {
-          // This calls a method that is outside the provided files (TheOddsProvider)
           const statusResult = await withTimeout(provider.getProviderStatus(), 3000, `ProviderStatus_${provider.name}`);
           freshnessInfo.providers[provider.name] = statusResult;
         } catch (error) {
@@ -259,7 +247,6 @@ class OddsService {
         }
       }
 
-      // Sport-specific info
       if (sportKey) {
         try {
           const testGames = await this.getSportOdds(sportKey, {
@@ -284,7 +271,6 @@ class OddsService {
       return freshnessInfo;
     } catch (error) {
       console.error('❌ Data freshness check failed:', error);
-      // Re-throw critical errors
       if (!(error instanceof TimeoutError)) {
           throw error;
       }
@@ -296,8 +282,6 @@ class OddsService {
     }
   }
 
-  // ========== PRIVATE METHODS ==========
-
   async _fetchSportOddsWithFallback(sportKey, options) {
     console.log(`🔄 Fetching odds for ${sportKey}...`);
 
@@ -305,7 +289,6 @@ class OddsService {
       try {
         console.log(`🔧 Trying ${provider.name} for ${sportKey}...`);
         
-        // Wrap external call with timeout
         const games = await withTimeout(
             provider.fetchSportOdds(sportKey, options), 
             8000, 
@@ -330,22 +313,19 @@ class OddsService {
           error.message
         );
 
-        // Don't try other providers on 429
         if (error?.response?.status === 429) {
           console.log(
             `🚫 ${provider.name} rate limited, stopping provider chain`
           );
-          throw error; // Throw critical rate limit error immediately
+          throw error;
         }
         
-        // Log non-timeout errors
         if (!(error instanceof TimeoutError)) {
           sentryService.captureError(error, {
             component: 'odds_service_provider_failure',
             provider: provider.name,
             sportKey,
           });
-          // For non-timeout, non-429 errors, we proceed to the next provider
         }
       }
     }
@@ -371,7 +351,6 @@ class OddsService {
       const freshness = await this.getDataFreshness();
       status.freshness = freshness;
 
-      // Test a popular sport
       const testGames = await this.getSportOdds('basketball_nba', {
         useCache: false,
       });
