@@ -1,6 +1,6 @@
-// src/utils/asyncUtils.js - ABSOLUTE FINAL FIXED SCRIPT (Resolving Duplicate Export)
+// src/utils/asyncUtils.js - FINAL ABSOLUTE FIXED SCRIPT (Simplest Named Export Structure)
 
-// Define a custom error type for timeouts to ensure it can be specifically handled.
+// Define a custom error class for timeouts to ensure it can be specifically handled.
 export class TimeoutError extends Error {
   constructor(message) {
     super(message);
@@ -8,16 +8,15 @@ export class TimeoutError extends Error {
   }
 }
 
-const withTimeout = (promise, ms, label) =>
+export const withTimeout = (promise, ms, label) =>
   Promise.race([
     promise,
     new Promise((_, reject) => 
-      // We explicitly reject with the custom TimeoutError
       setTimeout(() => reject(new TimeoutError(`Timeout ${ms}ms: ${label}`)), ms)
     )
   ]);
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+export const sleep = (ms) => new Promise(r => setTimeout(r, ms)); 
 
-// CRITICAL FIX: Only export all functions once via the export list.
-export { TimeoutError, withTimeout, sleep }; 
+// NOTE: We are intentionally NOT using an export list like "export { ... }" 
+// to prevent the duplicate export error shown in your log.
