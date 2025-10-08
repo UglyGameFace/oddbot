@@ -1,8 +1,8 @@
-// src/services/oddsService.js - COMPLETE FIXED VERSION
+// src/services/oddsService.js - ABSOLUTE FINAL SCRIPT
 import env from '../config/env.js';
 import redisClient from './redisService.js';
 import { sentryService } from './sentryService.js';
-import { withTimeout } from '../utils/asyncUtils.js';
+import { withTimeout, TimeoutError } from '../utils/asyncUtils.js'; 
 import makeCache from './cacheService.js';
 import { TheOddsProvider } from './providers/theOddsProvider.js';
 
@@ -115,11 +115,17 @@ class OddsService {
         const theOddsProvider = this.providers.find((p) => p.name === 'theodds');
         if (theOddsProvider) {
           try {
-            const sports = await theOddsProvider.fetchAvailableSports();
+            // FIX: Use withTimeout here
+            const sports = await withTimeout(theOddsProvider.fetchAvailableSports(), 6000, 'OddsAPISportsFetch');
             console.log(`✅ Found ${sports.length} sports from The Odds API`);
             return sports;
           } catch (error) {
-            console.warn('❌ The Odds API sports fetch failed:', error.message);
+             // FIX: Only suppress TimeoutError, re-throw all other errors.
+             if (!(error instanceof TimeoutError)) {
+                console.warn('❌ The Odds API sports fetch CRITICAL error:', error.message);
+                throw error; // Re-throw critical API errors
+             }
+             console.warn('❌ The Odds API sports fetch TIMEOUT, falling back.');
           }
         }
 
@@ -134,8 +140,13 @@ class OddsService {
         component: 'odds_service',
         operation: 'getAvailableSports',
       });
+      
+      // FIX: Re-throw all critical errors (non-timeout errors)
+      if (!(error instanceof TimeoutError)) {
+          throw error;
+      }
 
-      // Final fallback
+      // Final fallback (only reached on timeout or cache failure)
       const { getAllSports } = await import('./sportsService.js');
       return getAllSports();
     }
@@ -172,6 +183,10 @@ class OddsService {
         sportKey,
         options,
       });
+      // FIX: Re-throw all critical errors (non-timeout/non-cache errors)
+      if (!(error instanceof TimeoutError)) {
+          throw error;
+      }
       return [];
     }
   }
@@ -213,7 +228,7 @@ class OddsService {
       return liveGames;
     } catch (error) {
       console.error(`❌ Live games fetch failed for ${sportKey}:`, error);
-      return [];
+      throw error; // Re-throw critical errors from getSportOdds
     }
   }
 
@@ -232,8 +247,8 @@ class OddsService {
       for (const provider of this.providers) {
         try {
           // This calls a method that is outside the provided files (TheOddsProvider)
-          freshnessInfo.providers[provider.name] =
-            await provider.getProviderStatus();
+          const statusResult = await withTimeout(provider.getProviderStatus(), 3000, `ProviderStatus_${provider.name}`);
+          freshnessInfo.providers[provider.name] = statusResult;
         } catch (error) {
           freshnessInfo.providers[provider.name] = {
             status: 'error',
@@ -268,6 +283,10 @@ class OddsService {
       return freshnessInfo;
     } catch (error) {
       console.error('❌ Data freshness check failed:', error);
+      // Re-throw critical errors
+      if (!(error instanceof TimeoutError)) {
+          throw error;
+      }
       return {
         overall: { status: 'unknown', last_checked: new Date().toISOString() },
         providers: {},
@@ -284,8 +303,13 @@ class OddsService {
     for (const provider of this.providers) {
       try {
         console.log(`🔧 Trying ${provider.name} for ${sportKey}...`);
-        // This calls a method that is outside the provided files (TheOddsProvider)
-        const games = await provider.fetchSportOdds(sportKey, options);
+        
+        // Wrap external call with timeout
+        const games = await withTimeout(
+            provider.fetchSportOdds(sportKey, options), 
+            8000, 
+            `FetchOdds_${provider.name}_${sportKey}`
+        );
 
         if (games && games.length > 0) {
           console.log(
@@ -310,16 +334,17 @@ class OddsService {
           console.log(
             `🚫 ${provider.name} rate limited, stopping provider chain`
           );
-          break;
+          throw error; // Throw critical rate limit error immediately
         }
-
+        
         // Log non-rate-limit errors
-        if (error?.response?.status !== 429) {
+        if (error?.response?.status !== 429 && !(error instanceof TimeoutError)) {
           sentryService.captureError(error, {
             component: 'odds_service_provider_failure',
             provider: provider.name,
             sportKey,
           });
+          // For non-timeout, non-429 errors, we proceed to the next provider
         }
       }
     }
