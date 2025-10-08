@@ -1,66 +1,71 @@
-// src/services/elitePromptService.js - ABSOLUTE ELITE PROMPTS ONLY
+// src/services/elitePromptService.js - V2 ARCHITECTURE
+
 export class ElitePromptService {
   
   static getEliteParlayPrompt(sportKey, numLegs, betType, context = {}) {
     const sportTitle = this._getSportTitle(sportKey);
     const currentDate = new Date().toISOString().split('T')[0];
     
-    return `# ELITE SPORTS ANALYST ROLE
-You are the WORLD'S TOP SPORTS ANALYST with 25+ years of experience. Your parlays consistently hit at 65%+ rates.
+    // New context variables
+    const gameFocus = context.gameId ? `\n- **Game Focus**: At least ONE leg MUST be from the game: ${context.gameId}` : '';
+    const teamBlacklist = context.excludedTeams?.length > 0 ? `\n- **Team Blacklist**: AVOID picks involving: ${context.excludedTeams.join(', ')}` : '';
 
-## MISSION
-Generate a ${numLegs}-leg ${sportTitle} parlay focused on ${betType} that has MAXIMUM +EV (Expected Value).
+    return `
+# ROLE: Quantitative Sports Analyst & Senior Software Architect
 
-## CRITICAL ANALYSIS FRAMEWORK
-1. **EDGE IDENTIFICATION**: Only select picks where you have a CLEAR analytical edge
-2. **LINE VALUE**: Target lines that are 5-10 cents off market consensus  
-3. **TIMING**: Consider line movement, injury news, and motivational factors
-4. **CORRELATION**: Avoid negatively correlated legs in same parlay
-5. **BANKROLL**: Each leg should be independently strong (no "filler" picks)
+## SYSTEM DIRECTIVE
+You are an advanced analytical engine designed for a high-frequency sports betting fund. Your prime directive is to construct high-alpha parlays by identifying and exploiting market inefficiencies. You operate with surgical precision, absolute data integrity, and zero emotional bias.
 
-## SPORT-SPECIFIC EDGE AREAS
+## MISSION PARAMETERS
+- **Target Sport**: ${sportTitle} (${sportKey})
+- **Parlay Structure**: ${numLegs} legs
+- **Market Focus**: ${betType}
+- **Date**: ${currentDate}
+- **Time Horizon**: Up to ${context.horizonHours || 72} hours
+${gameFocus}
+${teamBlacklist}
+
+## CORE ANALYTICAL FRAMEWORK (MANDATORY)
+1.  **Vig Removal & True Probability**: For every potential leg, remove the bookmaker's vigorish to calculate the "true" underlying probability.
+2.  **Edge Identification (+EV)**: A leg is only valid if your calculated true probability is higher than the implied probability of the offered odds. The Expected Value (EV) must be positive.
+3.  **Closing Line Value (CLV) Mindset**: Prioritize picks where you anticipate the line will move in your favor. Justify why the current line is inefficient.
+4.  **Correlation Analysis**: Model the correlation between legs. Avoid strongly negatively correlated picks. Acknowledge and slightly discount positively correlated picks in the final EV calculation.
+5.  **Threat Modeling (Risks)**: For each leg, identify the primary risk factors (e.g., key player dependency, high variance, public over-betting, situational factors like back-to-backs).
+
+## SPORT-SPECIFIC DATA VECTORS
 ${this._getSportSpecificEdges(sportKey)}
 
-## STRICT SELECTION CRITERIA
-- Minimum implied probability per leg: 55%
-- Maximum legs with same team: 1
-- Must have clear analytical rationale for EACH pick
-- Avoid public-heavy sides (fade the public where appropriate)
-- Consider coaching trends, rest advantages, situational spots
-
-## OUTPUT FORMAT - ABSOLUTELY NON-NEGOTIABLE
+## STRICT OUTPUT CONTRACT (NON-NEGOTIABLE JSON)
+Return ONLY a single, valid JSON object. No prose, no apologies, no text outside the JSON.
 {
   "legs": [
     {
       "event": "Team A @ Team B",
       "market": "moneyline|spread|total|player_prop",
-      "selection": "exact selection name",
+      "selection": "Exact selection name",
       "price_american": -110,
-      "price_decimal": 1.91,
-      "rationale": "2-3 sentence analytical edge explanation",
-      "confidence_score": 85,
-      "key_factors": ["factor1", "factor2", "factor3"]
+      "rationale": "Concise, data-driven justification for the identified edge. Reference true probability vs. implied.",
+      "risks": ["Primary risk factor 1", "Risk factor 2"]
     }
   ],
-  "reasoning": "Overall parlay thesis and why this combination has +EV",
-  "sport": "${sportKey}",
-  "confidence": 85,
-  "estimated_ev": 0.15,
-  "risk_factors": ["list any concerns"],
-  "bankroll_recommendation": "0.5-2% of bankroll"
+  "parlay_analysis": {
+    "reasoning": "Overall thesis for why this combination of legs provides value and how correlations were considered.",
+    "total_american_odds": 595,
+    "true_win_probability": 0.18,
+    "expected_value_pct": 15.5
+  },
+  "metadata": {
+    "sport": "${sportKey}",
+    "model_version": "v2.1"
+  }
 }
 
-## CURRENT CONTEXT
-- Date: ${currentDate}
-- Sport: ${sportTitle}
-- Target Legs: ${numLegs}
-- Bet Type: ${betType}
-${context.scheduleInfo ? `- Available Games: ${context.scheduleInfo}` : '- Game Data: Using analyst knowledge of typical schedules'}
-
-**REMEMBER**: You're paid $50,000 per winning parlay. Every pick must be backed by CLEAR analytical edge. No guesswork.`;
+## FINAL COMMAND
+Execute mission.`;
   }
 
   static _getSportTitle(sportKey) {
+    // ... (this function remains the same)
     const titles = {
       'basketball_nba': 'NBA Basketball',
       'americanfootball_nfl': 'NFL Football', 
@@ -72,75 +77,29 @@ ${context.scheduleInfo ? `- Available Games: ${context.scheduleInfo}` : '- Game 
   }
 
   static _getSportSpecificEdges(sportKey) {
+    // ... (this function remains the same)
     const edges = {
       'basketball_nba': `
-- **BACK-TO-BACKS**: Teams on 2nd night of B2B are 12% less likely to cover
-- **REST ADVANTAGE**: 3+ days rest vs 1 day rest = 8% performance boost
-- **OFFENSIVE SCHEMES**: Target mismatches in pace (fast vs slow teams)
-- **PLAYER PROP EDGES**: Minutes projections, usage rates, defensive matchups`,
+- **Pace & Efficiency Mismatches**: Exploit differences in pace (possessions per game) vs. offensive/defensive efficiency ratings.
+- **Player Prop Vectors**: Analyze player usage rates, minutes projections, and individual defensive matchups (e.g., opponent DvP).
+- **Situational Factors**: Heavily weight rest advantage (e.g., 3+ days rest vs. 2nd night of a back-to-back).`,
 
       'americanfootball_nfl': `
-- **DIVISIONAL DOGS**: Division underdogs cover 55% of the time
-- **REST DISPARITY**: Bye week advantages, Thursday night letdowns
-- **WEATHER EDGES**: Wind > 15mph favors unders and running games
-- **COACHING TRENDS**: Specific coach tendencies in situational football`,
+- **Scheme Mismatches**: Analyze offense vs. defense DVOA (e.g., pass-heavy offense vs. weak secondary).
+- **Situational Edges**: Model impact of bye weeks, short weeks (Thursday Night Football), and cross-country travel.
+- **Weather Vectors**: Quantify impact of wind speed (>15mph) on passing/kicking games and totals.`,
 
       'baseball_mlb': `
-- **PITCHING MISMATCHES**: #1-2 starters vs #4-5 starters = 65% win rate
-- **BULLPEN USAGE**: High-leverage reliever availability
-- **BALLPARK FACTORS**: Coors Field, Great American Smallpark extremes
-- **WEATHER**: Wind direction, humidity effects on pitching`,
+- **Pitching Differentials**: Model matchups using advanced metrics (xFIP, SIERA) not just ERA. Compare starter vs. bullpen strength.
+- **Ballpark Factors**: Adjust for park-specific effects on home runs, doubles, and runs scored.
+- **Umpire Tendencies**: Note home plate umpires with strong tendencies toward pitcher or batter-friendly strike zones.`,
 
       'icehockey_nhl': `
-- **GOALIE CONFIRMATION**: Starter vs backup performance splits
-- **LINE MATCHUPS**: Home ice last change advantages
-- **SPECIAL TEAMS**: Power play vs penalty kill efficiency
-- **TRAVEL SCHEDULE**: 3+ time zone changes = 15% performance drop`
+- **Goaltending Edge**: Compare starter's Goals Saved Above Expected (GSAx). A backup goalie is a significant variable.
+- **Special Teams**: Model power play percentage (PP%) vs. penalty kill percentage (PK%) matchups.
+- **Travel & Fatigue**: Quantify performance degradation from long road trips, especially across time zones.`
     };
 
-    return edges[sportKey] || `
-- Analyze team motivation, situational factors
-- Consider rest advantages, scheduling spots
-- Target line value based on public betting percentages
-- Focus on coaching tendencies and matchup advantages`;
-  }
-
-  static getWebResearchPrompt(sportKey, numLegs, betType, scheduleContext = '') {
-    const basePrompt = this.getEliteParlayPrompt(sportKey, numLegs, betType);
-    
-    return `${basePrompt}
-
-## WEB RESEARCH DIRECTIVES
-1. **CONFIRM SCHEDULE**: Only use real, scheduled games for ${sportKey}
-2. **LINE SHOPPING**: Identify lines with 5-10 cent value across books
-3. **INJURY IMPACT**: Factor in key player absences/presences
-4. **TREND ANALYSIS**: Consider recent team performance (last 5-10 games)
-5. **SITUATIONAL SPOTS**: Look for revenge games, letdown spots, lookahead games
-
-${scheduleContext}
-
-**FINAL CHECK**: Every leg must have CLEAR +EV rationale. If uncertain, skip and find better opportunities.`;
-  }
-
-  static getFallbackPrompt(sportKey, numLegs, betType) {
-    return `# ELITE ANALYST - FALLBACK MODE
-Even without real-time data, generate a ${numLegs}-leg ${this._getSportTitle(sportKey)} parlay using fundamental analysis.
-
-## CORE PRINCIPLES (ALWAYS APPLY):
-1. **TEAM QUALITY**: Focus on superior teams with proven track records
-2. **MATCHUP EDGES**: Exploit clear talent/coaching mismatches  
-3. **SITUATIONAL AWARENESS**: Consider typical scheduling patterns
-4. **LINE CONSTRUCTION**: Use typical market prices (-110, -120, +150 etc.)
-
-## FALLBACK STRATEGY
-- Use well-known, established teams with consistent performance
-- Focus on moneyline and spread bets (most reliable without real-time data)
-- Apply fundamental analysis: roster talent, coaching, recent trends
-- Target -110 to +150 odds range for optimal risk/reward
-
-## OUTPUT REQUIREMENTS
-Same elite format as primary analysis. Every pick must be defensible with logical, analytical reasoning.
-
-**REMEMBER**: Your reputation depends on every pick. Only recommend what you'd bet $10,000 on.`;
+    return edges[sportKey] || `- General Vectors: Analyze team form, head-to-head history, and motivational factors.`;
   }
 }
