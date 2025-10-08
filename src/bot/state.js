@@ -1,9 +1,8 @@
-// src/bot/state.js - COMPLETE ABSOLUTE FIXED VERSION
+// src/bot/state.js - COMPLETE ABSOLUTE FIXED VERSION (Fixing SET command syntax)
 import env from '../config/env.js';
 import { sentryService } from '../services/sentryService.js';
 import { getRedisClient } from '../services/redisService.js';
 import databaseService from '../services/databaseService.js';
-// CRITICAL FIX: Import TimeoutError and withTimeout from asyncUtils.js
 import { withTimeout, TimeoutError } from '../utils/asyncUtils.js';
 
 const NS = (env.NODE_ENV || 'production').toLowerCase();
@@ -13,15 +12,14 @@ const STATE_PREFIX = `${PREFIX}user:state:`;
 const SLIP_PREFIX = `${PREFIX}parlay:slip:`;
 const DEFAULT_SLIP = { picks: [], stake: 10, totalOdds: 0, messageId: null };
 
-// FIX: safeParse now handles potential input errors more gracefully but doesn't suppress connection errors.
 const safeParse = (s, f) => { try { return JSON.parse(s); } catch (e) { sentryService.captureError(e, { component: 'state', op: 'parse' }); return f; } };
 
-// FIX: Removed local definition of withTimeout
-
+// CRITICAL FIX: Correct the command syntax for set with TTL.
 const setWithTTL = async (c, k, v, ttl) => {
   if (!c) return;
   if (!ttl) return c.set(k, v);
-  return c.set(k, v, v, 'EX', ttl);
+  // FIX: Removed the duplicate 'v' argument.
+  return c.set(k, v, 'EX', ttl); 
 };
 
 // --- CORE REDIS STATE FUNCTIONS ---
