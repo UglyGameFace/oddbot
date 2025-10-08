@@ -5,7 +5,7 @@ import gamesService from '../../services/gamesService.js';
 import redis from '../../services/redisService.js';
 import { getSportEmoji, getSportTitle, sortSports } from '../../services/sportsService.js';
 import { formatGameTimeTZ, toDecimalFromAmerican, toAmericanFromDecimal } from '../../utils/botUtils.js';
-import { safeEditMessage } from '../../utils/asyncUtils.js';
+import { safeEditMessage } from '../../bot.js';
 
 const tz = env.TIMEZONE || 'America/New_York';
 
