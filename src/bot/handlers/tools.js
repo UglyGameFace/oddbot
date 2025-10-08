@@ -1,4 +1,4 @@
-// src/bot/handlers/tools.js
+// src/bot/handlers/tools.js - CORRECTED AND VERIFIED
 
 import redisClient from '../../services/redisService.js';
 import databaseService from '../../services/databaseService.js';
@@ -70,7 +70,8 @@ async function sendToolsMenu(bot, chatId, messageId = null) {
 async function handleOddsFreshness(bot, chatId, messageId) {
     await bot.editMessageText('📊 Checking odds data freshness...', { chat_id: chatId, message_id: messageId });
     try {
-        const redis = await redisClient;
+        // FIX: Called the function to get the client instance
+        const redis = await redisClient(); 
         const lastIngestISO = await redis.get('meta:last_successful_ingestion');
         const dateRange = await databaseService.getOddsDateRange();
 
@@ -110,7 +111,8 @@ async function handleOddsFreshness(bot, chatId, messageId) {
 
 async function handleManualIngest(bot, chatId, messageId) {
     try {
-        const redis = await redisClient;
+        // FIX: Called the function to get the client instance
+        const redis = await redisClient();
         const channel = 'odds_ingestion_trigger';
         const message = 'run';
         await redis.publish(channel, message);
@@ -137,7 +139,8 @@ async function handleCacheClear(bot, chatId, messageId) {
   });
   
   try {
-    const redis = await redisClient;
+    // FIX: Called the function to get the client instance
+    const redis = await redisClient();
     const prefixes = ['odds:', 'player_props:', 'games:', 'user:state:', 'parlay:slip:', 'user:config:', 'token:', 'quota:', 'meta:'];
     let clearedCount = 0;
     
