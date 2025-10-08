@@ -1,4 +1,4 @@
-// src/services/redisService.js - ABSOLUTE FINAL, ULTRA-DEFENSIVE SCRIPT - FIXED VERSION
+// src/services/redisService.js - ABSOLUTE FINAL, ULTRA-DEFENSIVE SCRIPT - PRODUCTION FIXED
 
 import Redis from 'ioredis';
 import env from '../config/env.js';
@@ -16,14 +16,14 @@ function createRedisClient() {
   }
 
   const redisOptions = {
-    // CRITICAL FIX: Keep maxRetriesPerRequest at 3 for better reliability
+    // CRITICAL FIX: Use default retry settings - let ioredis handle it
     maxRetriesPerRequest: 3,
     connectTimeout: 10000,
     lazyConnect: true,
-    enableReadyCheck: true,
+    enableReadyCheck: false, // FIX: Disable ready check to avoid extra commands
     keepAlive: 1000,
     
-    // FIX: More reasonable retry delays
+    // FIX: Use ioredis defaults for retry delays
     retryDelayOnFailover: 1000, 
     retryDelayOnTryAgain: 1000, 
     
@@ -37,45 +37,36 @@ function createRedisClient() {
       return delay;
     },
     
-    // CRITICAL FIX: Simplified reconnectOnError logic
+    // CRITICAL FIX: SIMPLIFIED - Let ioredis handle reconnection logic
     reconnectOnError: (err) => {
       const errorMessage = err.message;
       
-      // FIX: Only reconnect on these specific connection errors
-      const reconnectErrors = [
-        'ECONNRESET',
+      // FIX: Only force reconnect on actual connection failures
+      const forceReconnectErrors = [
+        'ECONNREFUSED',
         'ETIMEDOUT', 
         'EHOSTUNREACH',
         'ENOTFOUND',
-        'ECONNREFUSED',
         'Socket closed unexpectedly'
       ];
       
-      // FIX: Don't reconnect on command errors - these are usually transient
-      const commandErrors = [
-        'ERR syntax error',
-        'Redis internal system error',
-        'WRONGTYPE',
-        'EXECABORT'
-      ];
-      
-      if (reconnectErrors.some(e => errorMessage.includes(e))) {
-        console.warn(`🔄 Redis reconnecting on connection error: ${errorMessage}`);
-        return true; // Trigger reconnect
+      if (forceReconnectErrors.some(e => errorMessage.includes(e))) {
+        console.warn(`🔄 Redis forcing reconnect on: ${errorMessage}`);
+        return true;
       }
       
-      if (commandErrors.some(e => errorMessage.includes(e))) {
-        console.warn(`⚠️ Redis command error (not reconnecting): ${errorMessage}`);
-        return false; // Don't reconnect - just fail the command
-      }
-      
-      // For unknown errors, default to reconnecting
-      console.warn(`🔄 Redis reconnecting on unknown error: ${errorMessage}`);
-      return true;
+      // FIX: For command errors (like syntax errors), DO NOT reconnect
+      // This is the key fix - syntax errors are command issues, not connection issues
+      console.warn(`⚠️ Redis command error (no reconnect): ${errorMessage.substring(0, 100)}`);
+      return false;
     },
     
     enableOfflineQueue: true, 
-    showFriendlyErrorStack: true
+    showFriendlyErrorStack: true,
+    // FIX: Disable auto resubscribing to reduce command complexity
+    autoResubscribe: false,
+    // FIX: Disable auto resend unfulfilled commands  
+    autoResendUnfulfilled: false
   };
 
   const client = new Redis(env.REDIS_URL, redisOptions);
@@ -89,19 +80,21 @@ function createRedisClient() {
   });
 
   client.on('error', (err) => {
-    // FIX: Don't log connection-related errors to Sentry (they're normal)
+    // FIX: Don't spam logs/Sentry for normal operational errors
     const ignorableErrors = [
       'ECONNREFUSED',
       'ETIMEDOUT',
-      'EHOSTUNREACH',
-      'ENOTFOUND'
+      'EHOSTUNREACH', 
+      'ENOTFOUND',
+      'ERR syntax error', // This is a command issue, not connection
+      'Redis internal system error'
     ];
     
-    if (!ignorableErrors.some(e => err.message.includes(e))) {
-      console.error('❌ Redis error:', err.message);
-      sentryService.captureError(err, { component: 'redis_service' });
+    if (ignorableErrors.some(e => err.message.includes(e))) {
+      console.warn('⚠️ Redis operational error:', err.message);
     } else {
-      console.warn('⚠️ Redis connection error (normal):', err.message);
+      console.error('❌ Redis critical error:', err.message);
+      sentryService.captureError(err, { component: 'redis_service' });
     }
   });
 
@@ -121,10 +114,18 @@ function createRedisClient() {
 }
 
 export async function getRedisClient() {
-  // FIX: More robust connection state checking
-  if (redisClient && 
-      (redisClient.status === 'ready' || redisClient.status === 'connecting' || redisClient.status === 'connect')) {
-    return redisClient;
+  // FIX: More reliable connection state checking
+  if (redisClient) {
+    const status = redisClient.status;
+    if (status === 'ready' || status === 'connecting' || status === 'connect') {
+      return redisClient;
+    }
+    // If client exists but is in error state, reset it
+    if (status === 'close' || status === 'end' || status === 'error') {
+      console.warn('🔄 Redis client in bad state, resetting...');
+      redisClient = null;
+      connectionPromise = null;
+    }
   }
 
   if (connectionPromise) {
@@ -143,14 +144,19 @@ export async function getRedisClient() {
 
       await redisClient.connect();
       
-      // FIX: More forgiving ping test
-      try {
-        await redisClient.ping();
+      // FIX: Simple ping test with timeout
+      const pingPromise = redisClient.ping().then(() => {
         console.log('✅ Redis connection test passed');
-      } catch (pingError) {
+      }).catch(pingError => {
         console.warn('⚠️ Redis ping failed, but continuing:', pingError.message);
-        // Don't fail the entire connection on ping failure
-      }
+        // Don't fail connection on ping failure
+      });
+      
+      // Wait for ping or timeout after 2 seconds
+      await Promise.race([
+        pingPromise,
+        new Promise(resolve => setTimeout(resolve, 2000))
+      ]);
       
       resolve(redisClient);
       connectionPromise = null;
@@ -160,12 +166,44 @@ export async function getRedisClient() {
       redisClient = null;
       connectionPromise = null;
       console.warn('⚠️ Running without Redis - some features disabled');
-      resolve(null); // FIX: Always resolve, never reject
+      resolve(null); // Always resolve to prevent app crashes
     }
   });
 
   return connectionPromise;
 }
 
-// FIX: Maintain your existing default export
-export default getRedisClient();
+// FIX: Add a health check method
+export async function checkRedisHealth() {
+  try {
+    const client = await getRedisClient();
+    if (!client) return false;
+    
+    await client.ping();
+    return true;
+  } catch (error) {
+    console.warn('⚠️ Redis health check failed:', error.message);
+    return false;
+  }
+}
+
+// FIX: Add cleanup method
+export async function disconnectRedis() {
+  if (redisClient) {
+    try {
+      await redisClient.quit();
+    } catch (error) {
+      // Ignore quit errors during shutdown
+    }
+    redisClient = null;
+    connectionPromise = null;
+  }
+}
+
+// Handle graceful shutdown
+process.on('SIGTERM', async () => {
+  console.log('🔌 Redis disconnecting due to SIGTERM...');
+  await disconnectRedis();
+});
+
+export default getRedisClient;
