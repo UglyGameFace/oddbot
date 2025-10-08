@@ -1,197 +1,181 @@
-// src/services/redisService.js - ABSOLUTE FINAL FIXED VERSION
-
-import Redis from 'ioredis';
+// src/services/redisService.js - COMPLETE REWRITE
+import { createClient } from 'redis';
 import env from '../config/env.js';
 import { sentryService } from './sentryService.js';
 
-let redisClient = null;
-let connectionPromise = null;
-
-function createRedisClient() {
-  console.log('🔌 Creating Redis client...');
-  
-  if (!env.REDIS_URL) {
-    console.warn('❌ REDIS_URL not configured - Redis disabled');
-    return null;
-  }
-
-  const redisOptions = {
-    maxRetriesPerRequest: 3,
-    connectTimeout: 10000,
-    lazyConnect: true,
-    enableReadyCheck: false,
-    keepAlive: 1000,
-    
-    retryDelayOnFailover: 1000, 
-    retryDelayOnTryAgain: 1000, 
-    
-    retryStrategy: (times) => {
-      if (times > 10) {
-        console.warn('🔄 Redis retry limit exceeded');
-        return null;
-      }
-      const delay = Math.min(times * 200, 5000);
-      console.log(`🔄 Redis reconnecting in ${delay}ms (attempt ${times})`);
-      return delay;
-    },
-    
-    reconnectOnError: (err) => {
-      const errorMessage = err.message;
-      
-      // Never reconnect on syntax errors
-      if (errorMessage.includes('ERR syntax error')) {
-        console.warn(`⚠️ Redis syntax error (no reconnect): ${errorMessage.substring(0, 100)}`);
-        return false;
-      }
-      
-      const forceReconnectErrors = [
-        'ECONNREFUSED',
-        'ETIMEDOUT', 
-        'EHOSTUNREACH',
-        'ENOTFOUND',
-        'Socket closed unexpectedly'
-      ];
-      
-      if (forceReconnectErrors.some(e => errorMessage.includes(e))) {
-        console.warn(`🔄 Redis forcing reconnect on: ${errorMessage}`);
-        return true;
-      }
-      
-      return false;
-    },
-    
-    enableOfflineQueue: true, 
-    showFriendlyErrorStack: true,
-    autoResubscribe: false,
-    autoResendUnfulfilled: false
-  };
-
-  const client = new Redis(env.REDIS_URL, redisOptions);
-
-  client.on('connect', () => {
-    console.log('🔄 Redis connecting...');
-  });
-
-  client.on('ready', () => {
-    console.log('✅ Redis connected and ready');
-  });
-
-  client.on('error', (err) => {
-    const ignorableErrors = [
-      'ECONNREFUSED',
-      'ETIMEDOUT',
-      'EHOSTUNREACH', 
-      'ENOTFOUND',
-      'ERR syntax error',
-      'Redis internal system error'
-    ];
-    
-    if (ignorableErrors.some(e => err.message.includes(e))) {
-      console.warn('⚠️ Redis operational error:', err.message);
+class RedisService {
+  constructor() {
+    this.client = null;
+    this.isConnecting = false;
+    this.connectionPromise = null;
+    this.connectionEstablished = false;
+    if (env.REDIS_URL) {
+      this.connect();
     } else {
-      console.error('❌ Redis critical error:', err.message);
-      sentryService.captureError(err, { component: 'redis_service' });
-    }
-  });
-
-  client.on('close', () => {
-    console.warn('🔌 Redis connection closed');
-  });
-
-  client.on('reconnecting', () => {
-    console.log('🔄 Redis reconnecting...');
-  });
-
-  client.on('end', () => {
-    console.warn('🛑 Redis connection ended');
-  });
-
-  return client;
-}
-
-export async function getRedisClient() {
-  if (redisClient) {
-    const status = redisClient.status;
-    if (status === 'ready' || status === 'connecting' || status === 'connect') {
-      return redisClient;
-    }
-    if (status === 'close' || status === 'end' || status === 'error') {
-      console.warn('🔄 Redis client in bad state, resetting...');
-      redisClient = null;
-      connectionPromise = null;
+      console.warn('🟡 Redis URL not found, Redis service is disabled.');
     }
   }
 
-  if (connectionPromise) {
-    return connectionPromise;
-  }
+  async connect() {
+    // FIX: If already connecting, return the existing promise to avoid race conditions.
+    if (this.isConnecting) {
+      console.log('🔄 Redis connection attempt already in progress...');
+      return this.connectionPromise;
+    }
 
-  connectionPromise = new Promise(async (resolve, reject) => {
-    try {
-      redisClient = createRedisClient();
+    this.isConnecting = true;
+    this.connectionPromise = new Promise(async (resolve, reject) => {
+      console.log('🔄 Attempting to connect to Redis...');
       
-      if (!redisClient) {
-        console.warn('⚠️ Redis client not created - running without Redis');
-        resolve(null);
-        return;
+      this.client = createClient({
+        url: env.REDIS_URL,
+        socket: {
+          connectTimeout: 8000,
+          reconnectStrategy: (retries) => {
+            // FIX: Implement exponential backoff for reconnection to avoid spamming.
+            if (retries > 10) {
+              console.error('❌ Redis: Max connection retries reached. Giving up.');
+              return new Error('Max retries reached');
+            }
+            // Wait 250ms, 500ms, 1s, 2s, 4s, etc.
+            const delay = Math.min(retries * 250, 5000); 
+            console.log(`🔌 Redis: Reconnecting in ${delay}ms (attempt ${retries + 1})`);
+            return delay;
+          }
+        }
+      });
+
+      this.client.on('error', (error) => {
+        console.error('❌ Redis Client Error:', error.message);
+        // FIX: Capture critical Redis errors (e.g., auth failure) in Sentry
+        // but avoid capturing routine connection errors which are handled by reconnectStrategy.
+        if (error.code === 'ECONNREFUSED' || error.message.includes('AUTH')) {
+          sentryService.captureError(error, { component: 'redis_service', operation: 'connection_error' });
+        }
+        this.connectionEstablished = false; // Mark as disconnected
+      });
+
+      this.client.on('connect', () => console.log('🔄 Redis: connecting...'));
+      this.client.on('ready', () => {
+        if (!this.connectionEstablished) {
+          console.log('✅ Redis client connected and ready.');
+          this.connectionEstablished = true;
+          this.isConnecting = false;
+          resolve(this.client);
+        }
+      });
+      this.client.on('reconnecting', () => console.log('🔄 Redis: reconnecting...'));
+      this.client.on('end', () => {
+        console.warn('🟡 Redis connection closed.');
+        this.connectionEstablished = false;
+      });
+
+      try {
+        await this.client.connect();
+      } catch (error) {
+        console.error('❌ Failed to establish initial Redis connection:', error.message);
+        this.isConnecting = false;
+        this.connectionEstablished = false;
+        // Do not resolve or reject, let the reconnectStrategy handle it.
+      }
+    });
+
+    return this.connectionPromise;
+  }
+
+  /**
+   * FIX: Centralized client retrieval with validation.
+   * Ensures the client is connected and ready before use.
+   */
+  async getClient() {
+    if (!this.client || !this.client.isOpen) {
+      if (env.REDIS_URL) {
+        await this.connect();
+      } else {
+        return null; // Redis is disabled
+      }
+    }
+    return this.client;
+  }
+
+  async testConnection() {
+    try {
+      const client = await this.getClient();
+      if (!client) return { connected: false, latency: -1 };
+
+      const startTime = Date.now();
+      const reply = await client.ping();
+      const endTime = Date.now();
+      
+      const isConnected = reply === 'PONG';
+      if (isConnected) {
+        console.log('✅ Redis connection test PASSED.');
+      } else {
+        console.error('❌ Redis connection test FAILED.');
+      }
+      return { connected: isConnected, latency: endTime - startTime };
+    } catch (error) {
+      console.error('❌ Redis PING command failed:', error.message);
+      return { connected: false, latency: -1, error: error.message };
+    }
+  }
+
+  /**
+   * Gracefully disconnect from Redis
+   */
+  async disconnect() {
+    if (this.client && this.client.isOpen) {
+      try {
+        await this.client.quit();
+        console.log('✅ Redis client disconnected gracefully.');
+      } catch (error) {
+        console.error('❌ Error during Redis disconnection:', error.message);
+      } finally {
+        this.client = null;
+        this.connectionEstablished = false;
+      }
+    }
+  }
+  
+  /**
+    * Get Redis memory usage and other stats.
+    */
+  async getStats() {
+    try {
+      const client = await this.getClient();
+      if (!client) {
+          return {
+              status: 'disabled',
+              error: 'Redis URL not configured'
+          };
       }
 
-      await redisClient.connect();
-      
-      const pingPromise = redisClient.ping().then(() => {
-        console.log('✅ Redis connection test passed');
-      }).catch(pingError => {
-        console.warn('⚠️ Redis ping failed, but continuing:', pingError.message);
+      const info = await client.info();
+      const parsedInfo = {};
+      info.split('\r\n').forEach(line => {
+          if (line && !line.startsWith('#')) {
+              const parts = line.split(':');
+              parsedInfo[parts[0]] = parts[1];
+          }
       });
       
-      await Promise.race([
-        pingPromise,
-        new Promise(resolve => setTimeout(resolve, 2000))
-      ]);
-      
-      resolve(redisClient);
-      connectionPromise = null;
-      
+      return {
+        status: this.connectionEstablished ? 'connected' : 'disconnected',
+        uptime_in_seconds: parsedInfo.uptime_in_seconds,
+        used_memory_human: parsedInfo.used_memory_human,
+        total_keys: (await client.dbSize()),
+        connected_clients: parsedInfo.connected_clients,
+        redis_version: parsedInfo.redis_version,
+        last_updated: new Date().toISOString()
+      };
     } catch (error) {
-      console.error('❌ Redis connection failed:', error.message);
-      redisClient = null;
-      connectionPromise = null;
-      console.warn('⚠️ Running without Redis - some features disabled');
-      resolve(null);
+        console.error('❌ Failed to get Redis stats:', error.message);
+        return {
+            status: 'error',
+            error: error.message
+        };
     }
-  });
-
-  return connectionPromise;
-}
-
-export async function checkRedisHealth() {
-  try {
-    const client = await getRedisClient();
-    if (!client) return false;
-    
-    await client.ping();
-    return true;
-  } catch (error) {
-    console.warn('⚠️ Redis health check failed:', error.message);
-    return false;
   }
 }
 
-export async function disconnectRedis() {
-  if (redisClient) {
-    try {
-      await redisClient.quit();
-    } catch (error) {
-      // Ignore quit errors during shutdown
-    }
-    redisClient = null;
-    connectionPromise = null;
-  }
-}
-
-process.on('SIGTERM', async () => {
-  console.log('🔌 Redis disconnecting due to SIGTERM...');
-  await disconnectRedis();
-});
-
-export default getRedisClient;
+export default new RedisService();
