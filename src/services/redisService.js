@@ -16,14 +16,12 @@ function createRedisClient() {
   }
 
   const redisOptions = {
-    // CRITICAL FIX: Use default retry settings - let ioredis handle it
     maxRetriesPerRequest: 3,
     connectTimeout: 10000,
     lazyConnect: true,
-    enableReadyCheck: false, // FIX: Disable ready check to avoid extra commands
+    enableReadyCheck: false,
     keepAlive: 1000,
     
-    // FIX: Use ioredis defaults for retry delays
     retryDelayOnFailover: 1000, 
     retryDelayOnTryAgain: 1000, 
     
@@ -37,17 +35,15 @@ function createRedisClient() {
       return delay;
     },
     
-    // CRITICAL FIX: SIMPLIFIED - Let ioredis handle reconnection logic
     reconnectOnError: (err) => {
       const errorMessage = err.message;
       
-      // FIX: Never reconnect on syntax errors - they're command issues
+      // Never reconnect on syntax errors
       if (errorMessage.includes('ERR syntax error')) {
         console.warn(`⚠️ Redis syntax error (no reconnect): ${errorMessage.substring(0, 100)}`);
         return false;
       }
       
-      // Only reconnect on actual connection failures
       const forceReconnectErrors = [
         'ECONNREFUSED',
         'ETIMEDOUT', 
@@ -61,15 +57,12 @@ function createRedisClient() {
         return true;
       }
       
-      // For other errors, use ioredis default behavior
       return false;
     },
     
     enableOfflineQueue: true, 
     showFriendlyErrorStack: true,
-    // FIX: Disable auto resubscribing to reduce command complexity
     autoResubscribe: false,
-    // FIX: Disable auto resend unfulfilled commands  
     autoResendUnfulfilled: false
   };
 
@@ -84,13 +77,12 @@ function createRedisClient() {
   });
 
   client.on('error', (err) => {
-    // FIX: Don't spam logs/Sentry for normal operational errors
     const ignorableErrors = [
       'ECONNREFUSED',
       'ETIMEDOUT',
       'EHOSTUNREACH', 
       'ENOTFOUND',
-      'ERR syntax error', // This is a command issue, not connection
+      'ERR syntax error',
       'Redis internal system error'
     ];
     
@@ -118,13 +110,11 @@ function createRedisClient() {
 }
 
 export async function getRedisClient() {
-  // FIX: More reliable connection state checking
   if (redisClient) {
     const status = redisClient.status;
     if (status === 'ready' || status === 'connecting' || status === 'connect') {
       return redisClient;
     }
-    // If client exists but is in error state, reset it
     if (status === 'close' || status === 'end' || status === 'error') {
       console.warn('🔄 Redis client in bad state, resetting...');
       redisClient = null;
@@ -148,15 +138,12 @@ export async function getRedisClient() {
 
       await redisClient.connect();
       
-      // FIX: Simple ping test with timeout
       const pingPromise = redisClient.ping().then(() => {
         console.log('✅ Redis connection test passed');
       }).catch(pingError => {
         console.warn('⚠️ Redis ping failed, but continuing:', pingError.message);
-        // Don't fail connection on ping failure
       });
       
-      // Wait for ping or timeout after 2 seconds
       await Promise.race([
         pingPromise,
         new Promise(resolve => setTimeout(resolve, 2000))
@@ -170,14 +157,13 @@ export async function getRedisClient() {
       redisClient = null;
       connectionPromise = null;
       console.warn('⚠️ Running without Redis - some features disabled');
-      resolve(null); // Always resolve to prevent app crashes
+      resolve(null);
     }
   });
 
   return connectionPromise;
 }
 
-// FIX: Add a health check method
 export async function checkRedisHealth() {
   try {
     const client = await getRedisClient();
@@ -191,7 +177,6 @@ export async function checkRedisHealth() {
   }
 }
 
-// FIX: Add cleanup method
 export async function disconnectRedis() {
   if (redisClient) {
     try {
@@ -204,11 +189,9 @@ export async function disconnectRedis() {
   }
 }
 
-// Handle graceful shutdown
 process.on('SIGTERM', async () => {
   console.log('🔌 Redis disconnecting due to SIGTERM...');
   await disconnectRedis();
 });
 
-// FIX: Export as both named and default
 export default getRedisClient;
