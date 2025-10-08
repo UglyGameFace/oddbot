@@ -1,6 +1,6 @@
-// src/utils/asyncUtils.js - FINAL ABSOLUTE FIXED VERSION
+// src/utils/asyncUtils.js - FINAL ABSOLUTE FIXED SCRIPT
 
-// Define a custom error type for timeouts to ensure it can be specifically handled or ignored.
+// Define a custom error type for timeouts to ensure it can be specifically handled.
 export class TimeoutError extends Error {
   constructor(message) {
     super(message);
@@ -12,10 +12,11 @@ export const withTimeout = (promise, ms, label) =>
   Promise.race([
     promise,
     new Promise((_, reject) => 
+      // We explicitly reject with the custom TimeoutError
       setTimeout(() => reject(new TimeoutError(`Timeout ${ms}ms: ${label}`)), ms)
     )
   ]);
 
 export const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// NOTE: safeEditMessage removed as it is defined in bot.js and is unnecessary here.
+export { TimeoutError, withTimeout, sleep }; 
