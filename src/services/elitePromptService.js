@@ -65,7 +65,6 @@ Execute mission.`;
   }
 
   static _getSportTitle(sportKey) {
-    // ... (this function remains the same)
     const titles = {
       'basketball_nba': 'NBA Basketball',
       'americanfootball_nfl': 'NFL Football', 
@@ -77,7 +76,6 @@ Execute mission.`;
   }
 
   static _getSportSpecificEdges(sportKey) {
-    // ... (this function remains the same)
     const edges = {
       'basketball_nba': `
 - **Pace & Efficiency Mismatches**: Exploit differences in pace (possessions per game) vs. offensive/defensive efficiency ratings.
