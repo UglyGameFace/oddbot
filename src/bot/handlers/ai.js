@@ -1,4 +1,4 @@
-// src/bot/handlers/ai.js - COMPLETE FIXED VERSION
+// src/bot/handlers/ai.js - ABSOLUTE FINAL FIXED VERSION
 import aiService from '../../services/aiService.js';
 import gamesService from '../../services/gamesService.js';
 import { setUserState, getUserState, getAIConfig } from '../state.js';
@@ -343,7 +343,14 @@ async function executeAiRequest(bot, chatId, messageId) {
             quantitativeMode,
             horizonHours: 72
         });
-        await sendParlayResult(bot, chatId, parlay, state, mode, messageId);
+        
+        // CRITICAL FIX: Check if this is a fallback response
+        if (parlay.research_metadata?.fallback_used) {
+            console.log('🔄 Handling fallback parlay response');
+            await handleFallbackParlayResponse(bot, chatId, messageId, parlay, state);
+        } else {
+            await sendParlayResult(bot, chatId, parlay, state, mode, messageId);
+        }
     } catch (error) {
         console.error('AI handler execution error:', error.message);
         if (error.fallbackAvailable) {
@@ -357,20 +364,105 @@ async function executeAiRequest(bot, chatId, messageId) {
     }
 }
 
+// NEW FUNCTION: Handle fallback parlay responses gracefully
+async function handleFallbackParlayResponse(bot, chatId, messageId, parlay, state) {
+    const { sportKey } = state;
+    const { legs, reasoning, research_metadata } = parlay;
+    
+    // Check if we have any valid legs
+    if (!legs || legs.length === 0) {
+        const text = `❌ <b>No Valid Parlay Generated</b>\n\n` +
+                     `${reasoning || 'The AI service was unable to generate a valid parlay.'}\n\n` +
+                     `<b>Suggested actions:</b>\n` +
+                     `• Try a different sport\n` +
+                     `• Reduce the number of legs\n` +
+                     `• Try again later\n` +
+                     `• Use /ai_quick for a simpler option`;
+        
+        const keyboard = [
+            [{ text: '🔄 Try Different Sport', callback_data: 'ai_back_sport' }],
+            [{ text: '🔴 Use Live Mode', callback_data: 'ai_fallback_live' }],
+            [{ text: '💾 Use Database Mode', callback_data: 'ai_fallback_db' }]
+        ];
+        
+        await safeEditMessage(chatId, messageId, text, {
+            parse_mode: 'HTML', 
+            reply_markup: { inline_keyboard: keyboard }
+        });
+        return;
+    }
+    
+    // If we have some legs, show them with a warning
+    const sportTitle = getSportTitle(sportKey);
+    let response = `⚠️ <b>Limited Parlay Generated</b>\n\n`;
+    response += `<b>Note:</b> ${reasoning || 'AI service experienced issues but generated some picks.'}\n\n`;
+    response += `<b>Sport:</b> ${escapeHTML(sportTitle)}\n`;
+    response += `<b>Legs Found:</b> ${legs.length} (requested ${state.numLegs})\n\n`;
+    
+    legs.forEach((leg, index) => {
+        const game = escapeHTML(leg.event || leg.game || 'Unknown game');
+        const pick = escapeHTML(leg.selection || leg.pick || 'Unknown pick');
+        const odds = leg.price_american > 0 ? `+${leg.price_american}` : leg.price_american;
+        response += `<b>Leg ${index + 1}:</b> ${game}\n`;
+        response += `<b>Pick:</b> ${pick} (${escapeHTML(odds)})\n\n`;
+    });
+    
+    if (parlay.parlay_price_american) {
+        response += `<b>Total Odds:</b> ${parlay.parlay_price_american > 0 ? '+' : ''}${escapeHTML(parlay.parlay_price_american)}\n`;
+    }
+    
+    const finalKeyboard = [
+        [{ text: '🔄 Build Another', callback_data: 'ai_back_sport' }],
+        [{ text: '🔴 Try Live Mode', callback_data: 'ai_fallback_live' }]
+    ];
+    
+    await safeEditMessage(chatId, messageId, response, { 
+        parse_mode: 'HTML', 
+        reply_markup: { inline_keyboard: finalKeyboard } 
+    });
+}
+
 async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
     const { sportKey } = state;
     const { legs, parlay_price_american, quantitative_analysis, research_metadata } = parlay;
     const sportTitle = getSportTitle(sportKey);
+    
+    // CRITICAL FIX: Validate legs before displaying
+    if (!legs || legs.length === 0) {
+        const errorText = `❌ <b>No Valid Legs Generated</b>\n\n` +
+                         `The AI service could not find valid picks for ${escapeHTML(sportTitle)}.\n\n` +
+                         `Try:\n` +
+                         `• A different sport\n` +
+                         `• Fewer legs\n` +
+                         `• Different bet types`;
+        
+        const keyboard = [
+            [{ text: '🔄 Try Different Sport', callback_data: 'ai_back_sport' }],
+            [{ text: '🔴 Use Live Mode', callback_data: 'ai_fallback_live' }]
+        ];
+        
+        return safeEditMessage(chatId, messageId, errorText, {
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: keyboard }
+        });
+    }
+    
     let response = `🧠 <b>AI-Generated Parlay</b>\n`;
     response += `<b>Sport:</b> ${escapeHTML(sportTitle)}\n`;
+    
     if (research_metadata?.real_games_validated) {
         response += `✅ <b>Verified Real Games</b>\n`;
     }
+    
+    if (research_metadata?.fallback_used) {
+        response += `⚠️ <b>Fallback Mode Used</b>\n`;
+    }
+    
     response += `\n`;
 
     legs.forEach((leg, index) => {
-        const game = escapeHTML(leg.event || leg.game);
-        const pick = escapeHTML(leg.selection || leg.pick);
+        const game = escapeHTML(leg.event || leg.game || 'Unknown game');
+        const pick = escapeHTML(leg.selection || leg.pick || 'Unknown pick');
         const odds = leg.price_american > 0 ? `+${leg.price_american}` : leg.price_american;
         response += `<b>Leg ${index + 1}: ${game}</b>\n`;
         response += `  <b>Pick:</b> ${pick} (${escapeHTML(odds)})\n\n`;
@@ -378,13 +470,18 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
 
     response += `<b>Total Odds:</b> ${parlay_price_american > 0 ? '+' : ''}${escapeHTML(parlay_price_american)}\n`;
     
-    if (quantitative_analysis) {
+    if (quantitative_analysis && !quantitative_analysis.error) {
         const { calibrated, riskAssessment } = quantitative_analysis;
         response += `<b>Calibrated EV:</b> ${escapeHTML(calibrated.evPercentage.toFixed(1))}% ${calibrated.evPercentage > 0 ? '👍' : '👎'}\n`;
         response += `<b>Win Probability:</b> ${escapeHTML((calibrated.jointProbability * 100).toFixed(1))}%\n`;
         response += `<b>Risk Level:</b> ${escapeHTML(riskAssessment.overallRisk)}\n`;
+    } else if (quantitative_analysis?.error) {
+        response += `<b>Analysis:</b> ${escapeHTML(quantitative_analysis.error)}\n`;
     }
 
     const finalKeyboard = [[{ text: '🔄 Build Another', callback_data: 'ai_back_sport' }]];
-    await safeEditMessage(chatId, messageId, response, { parse_mode: 'HTML', reply_markup: { inline_keyboard: finalKeyboard } });
+    await safeEditMessage(chatId, messageId, response, { 
+        parse_mode: 'HTML', 
+        reply_markup: { inline_keyboard: finalKeyboard } 
+    });
 }
