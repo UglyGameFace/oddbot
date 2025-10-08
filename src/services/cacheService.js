@@ -1,9 +1,7 @@
 // src/services/cacheService.js - ABSOLUTE FINAL FIXED VERSION
 
 import { sentryService } from './sentryService.js';
-import { getRedisClient } from './redisService.js'; // ADD THIS IMPORT
 
-// Utility functions (previously from asyncUtils.js)
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 const safeJsonParse = (str, fallback = null) => {
@@ -20,7 +18,6 @@ export default function makeCache(redis) {
   const DEFAULT_LOCK_MS = 8000;
   const DEFAULT_RETRY_MS = 150;
   
-  // CRITICAL FIX: Lua script for atomic lock release (prevents race conditions and command corruption)
   const RELEASE_LOCK_SCRIPT = `
     if redis.call('GET', KEYS[1]) == ARGV[1] then
         return redis.call('DEL', KEYS[1])
@@ -29,57 +26,44 @@ export default function makeCache(redis) {
     end
   `;
 
-  // CRITICAL FIX: Get a valid Redis client - handle both passed client and fallback
-  async function getValidRedisClient() {
-    try {
-      // If a redis client was passed and it has the get method, use it
-      if (redis && typeof redis.get === 'function') {
-        return redis;
-      }
-      
-      // Otherwise, get a fresh client from redisService
-      console.warn('⚠️ Passed Redis client invalid, getting new client from redisService');
-      const freshClient = await getRedisClient();
-      
-      if (!freshClient) {
-        throw new Error('Redis client not available');
-      }
-      
-      return freshClient;
-    } catch (error) {
-      console.error('❌ Failed to get valid Redis client:', error.message);
-      throw error;
-    }
+  // CRITICAL FIX: Check if Redis client is valid
+  function isValidRedisClient(client) {
+    return client && 
+           typeof client.get === 'function' && 
+           typeof client.set === 'function' &&
+           typeof client.del === 'function';
   }
 
-  // CRITICAL FIX: Safe Redis command execution with error handling
+  // CRITICAL FIX: Safe Redis command execution
   async function safeRedisCommand(operation, context = 'redis_command') {
+    // Check if redis client is valid
+    if (!isValidRedisClient(redis)) {
+      console.warn(`⚠️ Invalid Redis client in ${context}, skipping operation`);
+      throw new Error('Redis client not available or invalid');
+    }
+    
     try {
-      const client = await getValidRedisClient();
-      return await operation(client);
+      return await operation();
     } catch (error) {
-      // Don't log syntax errors to Sentry - they're command issues, not system errors
-      if (!error.message.includes('ERR syntax error') && !error.message.includes('not a function')) {
+      if (!error.message.includes('ERR syntax error')) {
         console.error(`❌ Redis command failed (${context}):`, error.message);
         sentryService.captureError(error, {
           component: 'cache_service',
           operation: context
         });
       } else {
-        console.warn(`⚠️ Redis command issue in ${context}:`, error.message);
+        console.warn(`⚠️ Redis syntax error in ${context}:`, error.message);
       }
       throw error;
     }
   }
 
-  // Unified function to execute the loader and set the cache
   async function executeLoaderAndCache(key, ttlSec, loader, context) {
     try {
       const data = await loader();
       if (data !== undefined && data !== null) {
-        // CRITICAL FIX: Use safe command wrapper
-        await safeRedisCommand(async (client) => {
-          await client.set(key, JSON.stringify(data), 'EX', ttlSec);
+        await safeRedisCommand(async () => {
+          await redis.set(key, JSON.stringify(data), 'EX', ttlSec);
         }, 'set_cache_data');
         console.log(`💾 Cached data for key: ${key} (TTL: ${ttlSec}s)`);
       } else {
@@ -108,9 +92,8 @@ export default function makeCache(redis) {
     const lockValue = '1'; 
     
     try {
-      // Try to get cached data first
-      const cached = await safeRedisCommand(async (client) => {
-        return await client.get(key);
+      const cached = await safeRedisCommand(async () => {
+        return await redis.get(key);
       }, 'get_cached_data');
 
       if (cached) {
@@ -122,31 +105,25 @@ export default function makeCache(redis) {
           }
         } catch (parseError) {
           console.warn(`❌ Failed to parse cached JSON for key: ${key}`, parseError);
-          // If cached data is corrupt, continue to refresh it
         }
       }
 
       console.log(`❌ Cache MISS for key: ${key}`);
       const lockKey = `lock:${key}`;
       
-      // CRITICAL FIX: Use safe command wrapper for lock acquisition
       let gotLock;
       try {
-        gotLock = await safeRedisCommand(async (client) => {
-          // FIX: Use correct SET command syntax for lock
-          return await client.set(lockKey, lockValue, 'PX', lockMs, 'NX');
+        gotLock = await safeRedisCommand(async () => {
+          return await redis.set(lockKey, lockValue, 'PX', lockMs, 'NX');
         }, 'acquire_lock');
       } catch (lockError) {
-        // If lock acquisition fails due to syntax error, proceed without lock
         console.warn(`⚠️ Lock acquisition failed for ${key}, proceeding without lock:`, lockError.message);
         gotLock = null;
       }
 
       if (gotLock === 'OK') {
-        // --- Lock Acquired Path ---
         console.log(`🔒 Acquired lock for key: ${key}`);
         try {
-          // Use the unified function
           return await executeLoaderAndCache(key, ttlSec, loader, context);
         } catch (loaderError) {
           if (fallbackOnError && cached) {
@@ -158,29 +135,25 @@ export default function makeCache(redis) {
           }
           throw loaderError;
         } finally {
-          // CRITICAL FIX: Use atomic Lua script to release lock only if we own it.
           try {
-            await safeRedisCommand(async (client) => {
-              await client.eval(RELEASE_LOCK_SCRIPT, 1, lockKey, lockValue);
+            await safeRedisCommand(async () => {
+              await redis.eval(RELEASE_LOCK_SCRIPT, 1, lockKey, lockValue);
             }, 'release_lock');
             console.log(`🔓 Released lock for key: ${key}`);
           } catch (releaseError) {
             console.warn(`⚠️ Failed to release lock for key: ${lockKey}`, releaseError.message);
-            // Don't throw - lock release failure is non-critical
           }
         }
       } else {
-        // --- Lock Wait Path ---
         console.log(`⏳ Waiting for lock on key: ${key}`);
         const deadline = Date.now() + lockMs;
         
         while (Date.now() < deadline) {
           await sleep(retryMs);
           
-          // CRITICAL FIX: Use safe command wrapper
           try {
-            const again = await safeRedisCommand(async (client) => {
-              return await client.get(key);
+            const again = await safeRedisCommand(async () => {
+              return await redis.get(key);
             }, 'lock_wait_check');
             
             if (again) {
@@ -189,34 +162,27 @@ export default function makeCache(redis) {
                 console.log(`📦 Got cached data after lock wait for key: ${key}`);
                 return parsed;
               }
-              // If data is corrupt, stop waiting and attempt to refresh.
               break;
             }
           } catch (waitError) {
-            // If we get a syntax error during wait, break out and try without lock
             console.warn(`⚠️ Lock wait check failed, proceeding without lock:`, waitError.message);
             break;
           }
         }
         
-        // --- Wait Timeout or Error Path ---
         console.log(`⏰ Lock wait timed out/failed for key: ${key}. Loading data without lock...`);
         
-        // If the lock wait timed out or failed, we load the fresh data without a lock.
         try {
-          // Load fresh data, do not attempt to acquire a lock (avoiding the ERR syntax race)
           const data = await executeLoaderAndCache(key, ttlSec, loader, context);
           return data;
         } catch (loaderError) {
-           // If load fails here, re-throw the error, which goes to the outer catch.
            throw loaderError;
         }
       }
     } catch (error) {
       console.error(`❌ Cache operation failed for key: ${key}`, error.message);
       
-      // Don't log syntax errors to Sentry
-      if (!error.message.includes('ERR syntax error') && !error.message.includes('not a function')) {
+      if (!error.message.includes('ERR syntax error')) {
         sentryService.captureError(error, {
           component: 'cache_service',
           operation: 'getOrSetJSON',
@@ -225,7 +191,6 @@ export default function makeCache(redis) {
         });
       }
       
-      // If cache fails, still try to return fresh data
       if (fallbackOnError) {
         try {
           console.log(`🔄 Fallback to direct loader for key: ${key}`);
@@ -241,8 +206,8 @@ export default function makeCache(redis) {
 
   async function getJSON(key, fallback = null) {
     try {
-      const cached = await safeRedisCommand(async (client) => {
-        return await client.get(key);
+      const cached = await safeRedisCommand(async () => {
+        return await redis.get(key);
       }, 'getJSON');
       const result = safeJsonParse(cached, fallback);
       console.log(`🔍 Cache GET for ${key}: ${result ? 'HIT' : 'MISS'}`);
@@ -256,15 +221,15 @@ export default function makeCache(redis) {
   async function setJSON(key, value, ttlSec = 3600) {
     try {
       if (value === undefined || value === null) {
-        await safeRedisCommand(async (client) => {
-          await client.del(key);
+        await safeRedisCommand(async () => {
+          await redis.del(key);
         }, 'delete_key');
         console.log(`🗑️ Deleted cache key: ${key}`);
         return true;
       }
       
-      await safeRedisCommand(async (client) => {
-        await client.set(key, JSON.stringify(value), 'EX', ttlSec);
+      await safeRedisCommand(async () => {
+        await redis.set(key, JSON.stringify(value), 'EX', ttlSec);
       }, 'setJSON');
       console.log(`💾 Cache SET for ${key} (TTL: ${ttlSec}s)`);
       return true;
@@ -276,14 +241,14 @@ export default function makeCache(redis) {
 
   async function deleteKey(key) {
     try {
-      const result = await safeRedisCommand(async (client) => {
-        return await client.del(key);
+      const result = await safeRedisCommand(async () => {
+        return await redis.del(key);
       }, 'deleteKey');
       console.log(`🗑️ Deleted cache key: ${key} (result: ${result})`);
       return result > 0;
     } catch (error) {
       console.error(`❌ Failed to delete cache key: ${key}`, error.message);
-      if (!error.message.includes('ERR syntax error') && !error.message.includes('not a function')) {
+      if (!error.message.includes('ERR syntax error')) {
         sentryService.captureError(error, {
           component: 'cache_service',
           operation: 'deleteKey',
@@ -296,14 +261,14 @@ export default function makeCache(redis) {
 
   async function getKeys(pattern) {
     try {
-      const keys = await safeRedisCommand(async (client) => {
-        return await client.keys(pattern);
+      const keys = await safeRedisCommand(async () => {
+        return await redis.keys(pattern);
       }, 'getKeys');
       console.log(`🔍 Found ${keys.length} keys matching pattern: ${pattern}`);
       return keys;
     } catch (error) {
       console.error(`❌ Failed to get keys for pattern: ${pattern}`, error.message);
-      if (!error.message.includes('ERR syntax error') && !error.message.includes('not a function')) {
+      if (!error.message.includes('ERR syntax error')) {
         sentryService.captureError(error, {
           component: 'cache_service',
           operation: 'getKeys',
@@ -316,13 +281,13 @@ export default function makeCache(redis) {
 
   async function flushPattern(pattern) {
     try {
-      const keys = await safeRedisCommand(async (client) => {
-        return await client.keys(pattern);
+      const keys = await safeRedisCommand(async () => {
+        return await redis.keys(pattern);
       }, 'flushPattern_keys');
       
       if (keys.length > 0) {
-        await safeRedisCommand(async (client) => {
-          await client.del(...keys);
+        await safeRedisCommand(async () => {
+          await redis.del(...keys);
         }, 'flushPattern_del');
         console.log(`🧹 Flushed ${keys.length} keys matching: ${pattern}`);
         return keys.length;
@@ -331,7 +296,7 @@ export default function makeCache(redis) {
       return 0;
     } catch (error) {
       console.error(`❌ Failed to flush pattern: ${pattern}`, error.message);
-      if (!error.message.includes('ERR syntax error') && !error.message.includes('not a function')) {
+      if (!error.message.includes('ERR syntax error')) {
         sentryService.captureError(error, {
           component: 'cache_service',
           operation: 'flushPattern',
@@ -344,8 +309,8 @@ export default function makeCache(redis) {
 
   async function getCacheInfo() {
     try {
-      const info = await safeRedisCommand(async (client) => {
-        return await client.info();
+      const info = await safeRedisCommand(async () => {
+        return await redis.info();
       }, 'getCacheInfo');
 
       const lines = info.split('\r\n');
@@ -360,14 +325,13 @@ export default function makeCache(redis) {
         }
       }
 
-      // Get key patterns distribution
       const commonPatterns = ['odds:*', 'games:*', 'sports:*', 'player_props:*', 'quota:*', 'lock:*'];
       const patternCounts = {};
       
       for (const pattern of commonPatterns) {
         try {
-          const keys = await safeRedisCommand(async (client) => {
-            return await client.keys(pattern);
+          const keys = await safeRedisCommand(async () => {
+            return await redis.keys(pattern);
           }, `getKeys_${pattern}`);
           patternCounts[pattern] = keys.length;
         } catch (error) {
@@ -375,11 +339,10 @@ export default function makeCache(redis) {
         }
       }
 
-      // Get memory usage
       let memoryData = {};
       try {
-        const memoryInfo = await safeRedisCommand(async (client) => {
-          return await client.info('memory');
+        const memoryInfo = await safeRedisCommand(async () => {
+          return await redis.info('memory');
         }, 'getMemoryInfo');
         
         const memoryLines = memoryInfo.split('\r\n');
@@ -413,7 +376,7 @@ export default function makeCache(redis) {
       };
     } catch (error) {
       console.error('❌ Failed to get cache info:', error.message);
-      if (!error.message.includes('ERR syntax error') && !error.message.includes('not a function')) {
+      if (!error.message.includes('ERR syntax error')) {
         sentryService.captureError(error, {
           component: 'cache_service',
           operation: 'getCacheInfo'
@@ -429,10 +392,10 @@ export default function makeCache(redis) {
   async function keyInfo(key) {
     try {
       const [exists, ttl, type, memory] = await Promise.all([
-        safeRedisCommand(async (client) => await client.exists(key), 'keyInfo_exists'),
-        safeRedisCommand(async (client) => await client.ttl(key), 'keyInfo_ttl'),
-        safeRedisCommand(async (client) => await client.type(key), 'keyInfo_type'),
-        safeRedisCommand(async (client) => await client.memory('USAGE', key).catch(() => null), 'keyInfo_memory')
+        safeRedisCommand(async () => await redis.exists(key), 'keyInfo_exists'),
+        safeRedisCommand(async () => await redis.ttl(key), 'keyInfo_ttl'),
+        safeRedisCommand(async () => await redis.type(key), 'keyInfo_type'),
+        safeRedisCommand(async () => await redis.memory('USAGE', key).catch(() => null), 'keyInfo_memory')
       ]);
       
       const result = {
@@ -460,13 +423,13 @@ export default function makeCache(redis) {
 
   async function increment(key, value = 1, ttlSec = null) {
     try {
-      const result = await safeRedisCommand(async (client) => {
-        return await client.incrby(key, value);
+      const result = await safeRedisCommand(async () => {
+        return await redis.incrby(key, value);
       }, 'increment');
       
       if (ttlSec && ttlSec > 0) {
-        await safeRedisCommand(async (client) => {
-          await client.expire(key, ttlSec);
+        await safeRedisCommand(async () => {
+          await redis.expire(key, ttlSec);
         }, 'increment_expire');
       }
       console.log(`➕ Incremented ${key} by ${value}, new value: ${result}`);
@@ -479,13 +442,13 @@ export default function makeCache(redis) {
 
   async function decrement(key, value = 1, ttlSec = null) {
     try {
-      const result = await safeRedisCommand(async (client) => {
-        return await client.decrby(key, value);
+      const result = await safeRedisCommand(async () => {
+        return await redis.decrby(key, value);
       }, 'decrement');
       
       if (ttlSec && ttlSec > 0) {
-        await safeRedisCommand(async (client) => {
-          await client.expire(key, ttlSec);
+        await safeRedisCommand(async () => {
+          await redis.expire(key, ttlSec);
         }, 'decrement_expire');
       }
       console.log(`➖ Decremented ${key} by ${value}, new value: ${result}`);
@@ -499,12 +462,12 @@ export default function makeCache(redis) {
   async function setWithTTL(key, value, ttlSec) {
     try {
       if (ttlSec && ttlSec > 0) {
-        await safeRedisCommand(async (client) => {
-          await client.set(key, value, 'EX', ttlSec);
+        await safeRedisCommand(async () => {
+          await redis.set(key, value, 'EX', ttlSec);
         }, 'setWithTTL');
       } else {
-        await safeRedisCommand(async (client) => {
-          await client.set(key, value);
+        await safeRedisCommand(async () => {
+          await redis.set(key, value);
         }, 'setWithoutTTL');
       }
       console.log(`💾 Set key ${key} with TTL ${ttlSec || 'none'}`);
@@ -518,8 +481,8 @@ export default function makeCache(redis) {
   async function getWithTTL(key) {
     try {
       const [value, ttl] = await Promise.all([
-        safeRedisCommand(async (client) => await client.get(key), 'getWithTTL_value'),
-        safeRedisCommand(async (client) => await client.ttl(key), 'getWithTTL_ttl')
+        safeRedisCommand(async () => await redis.get(key), 'getWithTTL_value'),
+        safeRedisCommand(async () => await redis.ttl(key), 'getWithTTL_ttl')
       ]);
       console.log(`🔍 Get with TTL for ${key}: value=${value ? 'exists' : 'null'}, ttl=${ttl}`);
       return { value, ttl };
@@ -534,19 +497,16 @@ export default function makeCache(redis) {
       const startTime = Date.now();
       const testKey = `health_check_${startTime}`;
       
-      // Test write
-      await safeRedisCommand(async (client) => {
-        await client.setex(testKey, 10, 'health_check_value');
+      await safeRedisCommand(async () => {
+        await redis.setex(testKey, 10, 'health_check_value');
       }, 'healthCheck_set');
       
-      // Test read
-      const value = await safeRedisCommand(async (client) => {
-        return await client.get(testKey);
+      const value = await safeRedisCommand(async () => {
+        return await redis.get(testKey);
       }, 'healthCheck_get');
       
-      // Test delete
-      await safeRedisCommand(async (client) => {
-        await client.del(testKey);
+      await safeRedisCommand(async () => {
+        await redis.del(testKey);
       }, 'healthCheck_del');
       
       const responseTime = Date.now() - startTime;
@@ -597,5 +557,4 @@ export default function makeCache(redis) {
   };
 }
 
-// Export utility functions for use elsewhere
 export { sleep, safeJsonParse };
