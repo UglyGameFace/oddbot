@@ -1,24 +1,18 @@
 // src/bot/handlers/quant.js
 
-import oddsService from '../../services/oddsService.js';
 import gamesService from '../../services/gamesService.js';
 
 export function registerQuant(bot) {
   bot.onText(/\/quant/, async (msg) => {
     const chatId = msg.chat.id;
 
-    // Try live odds first
-    let games = await oddsService.getSportOdds('americanfootball_nfl');
-
-    // Fallback to database if live empty
-    if (!games?.length) {
-      games = await gamesService.getGamesForSport('americanfootball_nfl');
-    }
+    // Use the new, centralized gamesService
+    const games = await gamesService.getGamesForSport('americanfootball_nfl');
 
     if (!games?.length) {
       return bot.sendMessage(
         chatId,
-        'Not enough game data to run quant analysis. Try fetching data with /cache or try again later.'
+        'Not enough game data to run quant analysis. Try fetching data with /cache_refresh or try again later.'
       );
     }
 
