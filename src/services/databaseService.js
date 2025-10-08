@@ -4,6 +4,8 @@ import env from '../config/env.js';
 import { sentryService } from './sentryService.js';
 import { COMPREHENSIVE_SPORTS } from '../config/sportDefinitions.js';
 import { GameEnhancementService } from './gameEnhancementService.js';
+// CRITICAL FIX: Import TimeoutError and withTimeout from asyncUtils.js
+import { withTimeout, TimeoutError } from '../utils/asyncUtils.js';
 
 const COMPREHENSIVE_FALLBACK_SPORTS = Object.entries(COMPREHENSIVE_SPORTS).map(([sport_key, data]) => ({
   sport_key,
@@ -39,8 +41,8 @@ function buildClient() {
 
 let supabaseClient = buildClient();
 
-const withTimeout = (p, ms, label) =>
-  Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error(`Timeout ${ms}ms: ${label}`)), ms))]);
+// NOTE: withTimeout is now imported from asyncUtils.js and not redefined here.
+// const withTimeout is removed
 
 class DatabaseService {
   get client() { 
@@ -125,9 +127,16 @@ class DatabaseService {
       return sports;
 
     } catch (error) {
-      console.error('❌ Supabase getDistinctSports error:', error.message);
-      console.log('🔄 Error fetching from DB, returning comprehensive default sports list.');
-      return COMPREHENSIVE_FALLBACK_SPORTS;
+      // FIX: Only handle TimeoutError gracefully by returning fallback. 
+      // All other errors (network/Supabase connection failures) must be thrown.
+      if (error instanceof TimeoutError) {
+        console.error('❌ Supabase getDistinctSports TIMEOUT, returning fallback:', error.message);
+        return COMPREHENSIVE_FALLBACK_SPORTS;
+      }
+      
+      // If it's any other error (network/Supabase being down), re-throw to fail the health check.
+      console.error('❌ Supabase getDistinctSports CRITICAL error:', error.message);
+      throw error; // Re-throw to make the HealthService fail.
     }
   }
 
@@ -161,8 +170,15 @@ class DatabaseService {
       return GameEnhancementService.enhanceGameData(data || [], sportKey, 'database');
 
     } catch (error) {
-      console.error(`❌ Supabase getUpcomingGames error for ${sportKey}:`, error.message);
-      return [];
+       // FIX: Only handle TimeoutError gracefully by returning empty array.
+       if (error instanceof TimeoutError) {
+        console.error(`❌ Supabase getUpcomingGames TIMEOUT for ${sportKey}:`, error.message);
+        return [];
+       }
+      
+       // If it's any other error (Supabase being down), re-throw to fail the health check.
+      console.error(`❌ Supabase getUpcomingGames CRITICAL error for ${sportKey}:`, error.message);
+      throw error; // Re-throw to make the HealthService fail.
     }
   }
 
@@ -204,7 +220,7 @@ class DatabaseService {
 
     } catch (error) {
       console.error(`❌ Database verified games fetch failed for ${sportKey}:`, error.message);
-      return [];
+      throw error;
     }
   }
 
@@ -223,8 +239,10 @@ class DatabaseService {
       const games = await this.getUpcomingGames(sportKey, hoursAhead);
       return games.length > 0;
     } catch (error) {
+      // NOTE: getUpcomingGames already handles TimeoutError, so only rethrow if 
+      // getUpcomingGames throws an unhandled critical error.
       console.error(`Error checking games for ${sportKey}:`, error);
-      return false;
+      throw error;
     }
   }
 
@@ -236,8 +254,9 @@ class DatabaseService {
       const games = await this.getUpcomingGames(sportKey, hoursAhead);
       return games.length;
     } catch (error) {
+      // NOTE: getUpcomingGames already handles TimeoutError.
       console.error(`Error counting games for ${sportKey}:`, error);
-      return 0;
+      throw error;
     }
   }
 
@@ -270,8 +289,14 @@ class DatabaseService {
       return null;
 
     } catch (error) {
-      console.error(`❌ Supabase getGameById error for ${eventId}:`, error.message);
-      return null;
+       // FIX: Only handle TimeoutError gracefully by returning null.
+       if (error instanceof TimeoutError) {
+        console.error(`❌ Supabase getGameById TIMEOUT for ${eventId}:`, error.message);
+        return null;
+       }
+
+      console.error(`❌ Supabase getGameById CRITICAL error for ${eventId}:`, error.message);
+      throw error; 
     }
   }
 
@@ -308,8 +333,14 @@ class DatabaseService {
       return GameEnhancementService.enhanceGameData(data || [], sportKey || 'mixed', 'database_search');
 
     } catch (error) {
-      console.error(`❌ Supabase searchGames error for "${query}":`, error.message);
-      return [];
+       // FIX: Only handle TimeoutError gracefully by returning empty array.
+       if (error instanceof TimeoutError) {
+        console.error(`❌ Supabase searchGames TIMEOUT for "${query}":`, error.message);
+        return [];
+       }
+       
+      console.error(`❌ Supabase searchGames CRITICAL error for "${query}":`, error.message);
+      throw error;
     }
   }
 
@@ -343,8 +374,14 @@ class DatabaseService {
       return GameEnhancementService.enhanceGameData(data || [], sportKey || 'mixed', 'database');
 
     } catch (error) {
-      console.error('❌ getActiveGames error:', error.message);
-      return [];
+       // FIX: Only handle TimeoutError gracefully by returning empty array.
+       if (error instanceof TimeoutError) {
+        console.error('❌ getActiveGames TIMEOUT:', error.message);
+        return [];
+       }
+
+      console.error('❌ getActiveGames CRITICAL error:', error.message);
+      throw error;
     }
   }
 
@@ -381,8 +418,14 @@ class DatabaseService {
       return data || [];
 
     } catch (error) {
-      console.error('❌ getRecentlyCompletedGames error:', error.message);
-      return [];
+       // FIX: Only handle TimeoutError gracefully by returning empty array.
+       if (error instanceof TimeoutError) {
+        console.error('❌ getRecentlyCompletedGames TIMEOUT:', error.message);
+        return [];
+       }
+
+      console.error('❌ getRecentlyCompletedGames CRITICAL error:', error.message);
+      throw error;
     }
   }
 
@@ -425,13 +468,19 @@ class DatabaseService {
       return { data, error: null };
 
     } catch (error) {
-      console.error('❌ Supabase upsert error:', error.message);
+       // FIX: Only handle TimeoutError gracefully.
+       if (error instanceof TimeoutError) {
+         console.error('❌ Supabase upsert TIMEOUT:', error.message);
+         return { data: null, error: new Error('Upsert Timeout') };
+       }
+       
+      console.error('❌ Supabase upsert CRITICAL error:', error.message);
       sentryService.captureError(error, { 
         component: 'database_service', 
         operation: 'upsertGames',
         game_count: gamesData.length
       });
-      return { data: null, error };
+      throw error;
     }
   }
 
@@ -449,14 +498,31 @@ class DatabaseService {
       }
 
       const [
-        { data: minData, error: minError },
-        { data: maxData, error: maxError },
-        { count, error: countError }
-      ] = await Promise.all([
+        minDataPromise,
+        maxDataPromise,
+        countPromise
+      ] = [
         queryBuilder.order('commence_time', { ascending: true }).limit(1),
         queryBuilder.order('commence_time', { ascending: false }).limit(1),
         queryBuilder
-      ]);
+      ];
+      
+      // FIX: Apply withTimeout to Promise.all to prevent hang
+      const results = await withTimeout(
+          Promise.all([
+            minDataPromise,
+            maxDataPromise,
+            countPromise
+          ]),
+          10000,
+          'getOddsDateRange'
+      );
+      
+      const [
+        { data: minData, error: minError },
+        { data: maxData, error: maxError },
+        { count, error: countError }
+      ] = results;
 
       if (minError || maxError || countError) throw minError || maxError || countError;
 
@@ -468,8 +534,14 @@ class DatabaseService {
       };
 
     } catch (error) {
-      console.error('❌ Supabase getOddsDateRange error:', error.message);
-      return { min_date: null, max_date: null, game_count: 0 };
+       // FIX: Only handle TimeoutError gracefully.
+       if (error instanceof TimeoutError) {
+         console.error('❌ Supabase getOddsDateRange TIMEOUT:', error.message);
+         return { min_date: null, max_date: null, game_count: 0 };
+       }
+
+      console.error('❌ Supabase getOddsDateRange CRITICAL error:', error.message);
+      throw error;
     }
   }
 
@@ -523,8 +595,8 @@ class DatabaseService {
       return Object.values(counts).sort((a, b) => b.total_games - a.total_games);
 
     } catch (error) {
-      console.error('❌ Supabase getSportGameCounts error:', error.message);
-      return [];
+      console.error('❌ Supabase getSportGameCounts CRITICAL error:', error.message);
+      throw error;
     }
   }
 
@@ -592,9 +664,9 @@ class DatabaseService {
       return user;
 
     } catch (error) {
-      console.error(`❌ Supabase findOrCreateUser error for ${telegramId}:`, error.message);
+      console.error(`❌ Supabase findOrCreateUser CRITICAL error for ${telegramId}:`, error.message);
       sentryService.captureError(error, { component: 'database_service', operation: 'findOrCreateUser' });
-      return null;
+      throw error;
     }
   }
 
@@ -628,9 +700,9 @@ class DatabaseService {
       return data;
 
     } catch (error) {
-      console.error(`❌ Supabase updateUserSettings error for ${telegramId}:`, error.message);
+      console.error(`❌ Supabase updateUserSettings CRITICAL error for ${telegramId}:`, error.message);
       sentryService.captureError(error, { component: 'database_service', operation: 'updateUserSettings' });
-      return null;
+      throw error;
     }
   }
 
@@ -655,8 +727,15 @@ class DatabaseService {
       return true;
 
     } catch (error) {
-      console.error('❌ Database connection test failed:', error.message);
-      return false;
+      // FIX: Only treat TimeoutError as a transient failure (return false), 
+      // but still let it be logged if necessary.
+      if (error instanceof TimeoutError) {
+         console.error('❌ Database connection test TIMEOUT:', error.message);
+         return false;
+      }
+      
+      console.error('❌ Database connection test FAILED:', error.message);
+      return false; // Return false for all other errors.
     }
   }
 
@@ -667,17 +746,24 @@ class DatabaseService {
     if (!this.client) return null;
     
     try {
+      // FIX: Apply withTimeout to Promise.all to prevent hang
+      const results = await withTimeout(
+          Promise.all([
+            this.client.from('games').select('*', { count: 'exact', head: true }),
+            this.client.from('users').select('*', { count: 'exact', head: true }),
+            this.client.from('games').select('sport_key', { count: 'exact', head: true }),
+            this.getOddsDateRange()
+          ]),
+          10000,
+          'getDatabaseStats'
+      );
+      
       const [
         gamesCount,
         usersCount,
         sportsCount,
         dateRange
-      ] = await Promise.all([
-        this.client.from('games').select('*', { count: 'exact', head: true }),
-        this.client.from('users').select('*', { count: 'exact', head: true }),
-        this.client.from('games').select('sport_key', { count: 'exact', head: true }),
-        this.getOddsDateRange()
-      ]);
+      ] = results;
 
       return {
         total_games: gamesCount.count || 0,
@@ -689,7 +775,20 @@ class DatabaseService {
       };
 
     } catch (error) {
-      console.error('❌ Database stats error:', error.message);
+      // FIX: Only handle TimeoutError gracefully.
+      if (error instanceof TimeoutError) {
+         console.error('❌ Database stats TIMEOUT:', error.message);
+         return {
+            total_games: 0,
+            total_users: 0,
+            total_sports: 0,
+            date_range: { min_date: null, max_date: null, game_count: 0 },
+            status: 'timeout',
+            error: error.message
+          };
+      }
+
+      console.error('❌ Database stats CRITICAL error:', error.message);
       return {
         total_games: 0,
         total_users: 0,
