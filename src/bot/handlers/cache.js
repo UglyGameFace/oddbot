@@ -405,7 +405,7 @@ class CacheHandler {
       return results;
 
     } catch (error) {
-      console.error(`❌ Failed to refresh ${sportKey} cache:`, error);
+      console.error(`❌ Failed to refresh ${sportKey} cache:`, error.message);
       
       results.endTime = new Date().toISOString();
       results.duration = Date.now() - startTime;
