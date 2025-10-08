@@ -13,7 +13,7 @@ const CACHE_TTL = {
   SPORTS: 300,
 };
 
-// Game enhancement service (simplified to avoid dependency)
+// --- HELPER CLASS DEFINITIONS (Inserted to fix "is not defined" errors) ---
 class GameEnhancementService {
   static enhanceGameData(games, sportKey, source) {
     if (!Array.isArray(games)) return [];
@@ -43,7 +43,7 @@ class GameEnhancementService {
   }
 }
 
-// Data quality service (simplified)
+// Data quality service (simplified stand-in for local use)
 class DataQualityService {
   static assessDataQuality(games) {
     if (!Array.isArray(games) || games.length === 0) {
@@ -72,6 +72,7 @@ class DataQualityService {
     };
   }
 }
+// -----------------------------------------------------------------------
 
 // Main Odds Service Class
 class OddsService {
@@ -337,8 +338,8 @@ class OddsService {
           throw error; // Throw critical rate limit error immediately
         }
         
-        // Log non-rate-limit errors
-        if (error?.response?.status !== 429 && !(error instanceof TimeoutError)) {
+        // Log non-timeout errors
+        if (!(error instanceof TimeoutError)) {
           sentryService.captureError(error, {
             component: 'odds_service_provider_failure',
             provider: provider.name,
