@@ -87,21 +87,19 @@ class ServiceHealthChecker {
   }
 
   static async checkDatabase() {
-    const checkStart = Date.now(); // FIX: Corrected Date.Now() to Date.now()
+    const checkStart = Date.now();
     
     try {
-      const connectionStart = Date.now(); // FIX: Corrected Date.Now() to Date.now()
+      const connectionStart = Date.now();
       const sports = await databaseService.getDistinctSports();
       const connectionTime = Date.now() - connectionStart;
 
-      const statsStart = Date.now(); // FIX: Corrected Date.Now() to Date.now()
+      const statsStart = Date.now();
       const dbStats = await databaseService.getDatabaseStats();
       const statsTime = Date.now() - statsStart;
 
-      const totalTime = Date.now() - checkStart; // FIX: Corrected Date.Now() to Date.now()
+      const totalTime = Date.now() - checkStart;
 
-      // Note: databaseService.getDistinctSports returns a fallback list if the client is null,
-      // which is why the check relies heavily on dbStats to be fully "healthy"
       return {
         healthy: Array.isArray(sports) && dbStats?.status === 'healthy',
         status: 'connected',
@@ -126,26 +124,22 @@ class ServiceHealthChecker {
         error: error.message,
         timestamp: new Date().toISOString(),
         latency: {
-          total: Date.now() - checkStart // FIX: Corrected Date.Now() to Date.now()
+          total: Date.now() - checkStart
         }
       };
     }
   }
 
-  // FIX: Added explicit error handling for network/API failures (AggregateError)
   static async checkOddsService() {
     const checkStart = Date.now();
     
     try {
       const oddsStart = Date.now();
-      
-      // Use withTimeout to catch request-level network hangs/failures
       const nbaOdds = await withTimeout(
         oddsService.getSportOdds('basketball_nba', { useCache: false }),
         HEALTH_CHECK_TIMEOUT,
         'OddsService_NBA'
       );
-      
       const oddsTime = Date.now() - oddsStart;
 
       const statusStart = Date.now();
@@ -177,7 +171,6 @@ class ServiceHealthChecker {
       };
 
     } catch (error) {
-      // Catch network errors (AggregateError) or API key issues
       return {
         healthy: false,
         status: 'unhealthy',
@@ -255,7 +248,7 @@ class ServiceHealthChecker {
 
       const healthStart = Date.now();
       const providerHealth = await rateLimitService.getAllProvidersHealth();
-      const healthTime = Date.now() - healthStart; // FIX: Corrected Date.Now() to Date.now()
+      const healthTime = Date.now() - healthStart;
 
       const totalTime = Date.now() - checkStart;
 
@@ -307,257 +300,7 @@ class ServiceHealthChecker {
   }
 }
 
-class HealthHistoryManager {
-  constructor() {
-    this.historyKey = 'health_check_history';
-    this.maxHistoryEntries = 100;
-  }
-
-  async saveHealthReport(healthReport) {
-    try {
-      const redis = await getRedisClient();
-      if (!redis) return false;
-
-      const reportWithId = {
-        ...healthReport,
-        id: `health_${Date.now()}`,
-        saved_at: new Date().toISOString()
-      };
-
-      await redis.lpush(this.historyKey, JSON.stringify(reportWithId));
-      await redis.ltrim(this.historyKey, 0, this.maxHistoryEntries - 1);
-      await redis.setex('health_report_current', CACHE_TTL_HEALTH, JSON.stringify(healthReport));
-
-      return true;
-    } catch (error) {
-      console.warn('Failed to save health report:', error);
-      return false;
-    }
-  }
-
-  async getHealthHistory(hours = 24) {
-    try {
-      const redis = await getRedisClient();
-      if (!redis) return { period_hours: hours, total_checks: 0, error: 'Redis not available' };
-
-      const recentChecks = await redis.lrange(this.historyKey, 0, Math.min(hours * 12, this.maxHistoryEntries));
-      
-      const parsedChecks = recentChecks
-        .map(check => {
-          try {
-            return JSON.parse(check);
-          } catch {
-            return null;
-          }
-        })
-        .filter(Boolean)
-        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-
-      return this.analyzeHealthHistory(parsedChecks, hours);
-
-    } catch (error) {
-      console.error('Health history retrieval failed:', error);
-      return {
-        period_hours: hours,
-        total_checks: 0,
-        error: error.message
-      };
-    }
-  }
-
-  analyzeHealthHistory(healthChecks, hours) {
-    if (healthChecks.length === 0) {
-      return {
-        period_hours: hours,
-        total_checks: 0,
-        statistics: { availability: 0, average_response_time: 0 },
-        trends: { trend: 'insufficient_data', confidence: 'low' }
-      };
-    }
-
-    const healthyChecks = healthChecks.filter(check => check.overall?.healthy);
-    const availability = (healthyChecks.length / healthChecks.length) * 100;
-    
-    const totalResponseTime = healthChecks.reduce((sum, check) => 
-      sum + (check.overall?.processing_time_ms || 0), 0
-    );
-    const averageResponseTime = totalResponseTime / healthChecks.length;
-
-    const trends = this.calculateHealthTrends(healthChecks);
-
-    const serviceStats = this.calculateServiceStatistics(healthChecks);
-
-    return {
-      period_hours: hours,
-      total_checks: healthChecks.length,
-      healthy_checks: healthyChecks.length,
-      unhealthy_checks: healthChecks.length - healthyChecks.length,
-      statistics: {
-        availability: Math.round(availability * 100) / 100,
-        average_response_time: Math.round(averageResponseTime),
-        p95_response_time: this.calculatePercentile(healthChecks.map(c => c.overall?.processing_time_ms || 0), 95),
-        p99_response_time: this.calculatePercentile(healthChecks.map(c => c.overall?.processing_time_ms || 0), 99)
-      },
-      trends,
-      service_statistics: serviceStats,
-      recent_checks: healthChecks.slice(0, 10)
-    };
-  }
-
-  calculateHealthTrends(healthChecks) {
-    if (healthChecks.length < 2) {
-      return { trend: 'insufficient_data', confidence: 'low' };
-    }
-
-    const recent = healthChecks.slice(0, 5);
-    const older = healthChecks.slice(5, 10);
-
-    const recentHealth = recent.filter(check => check.overall?.healthy).length / recent.length;
-    const olderHealth = older.filter(check => check.overall?.healthy).length / older.length;
-
-    let trend = 'stable';
-    if (recentHealth > olderHealth + 0.1) trend = 'improving';
-    if (recentHealth < olderHealth - 0.1) trend = 'deteriorating';
-
-    return {
-      trend,
-      recent_health: Math.round(recentHealth * 100),
-      previous_health: Math.round(olderHealth * 100),
-      confidence: healthChecks.length >= 10 ? 'high' : 'medium',
-      change_percentage: Math.round((recentHealth - olderHealth) * 100)
-    };
-  }
-
-  calculateServiceStatistics(healthChecks) {
-    const services = ['redis', 'database', 'odds', 'games', 'rate_limiting'];
-    const stats = {};
-
-    services.forEach(service => {
-      const serviceChecks = healthChecks.map(check => check.services?.[service]);
-      const healthyCount = serviceChecks.filter(s => s?.healthy).length;
-      
-      stats[service] = {
-        availability: Math.round((healthyCount / serviceChecks.length) * 100),
-        average_latency: Math.round(serviceChecks.reduce((sum, s) => sum + (s?.latency?.total || 0), 0) / serviceChecks.length),
-        total_checks: serviceChecks.length
-      };
-    });
-
-    return stats;
-  }
-
-  calculatePercentile(values, percentile) {
-    if (values.length === 0) return 0;
-    const sorted = values.sort((a, b) => a - b);
-    const index = (percentile / 100) * (sorted.length - 1);
-    const lower = Math.floor(index);
-    const upper = Math.ceil(index);
-    
-    if (lower === upper) return sorted[lower];
-    return sorted[lower] + (sorted[upper] - sorted[lower]) * (index - lower);
-  }
-}
-
-class HealthRecommendationsGenerator {
-  static generate(services) {
-    const recommendations = [];
-
-    if (!services.redis.healthy) {
-      recommendations.push({
-        service: 'redis',
-        priority: 'critical',
-        message: 'Redis connection failed',
-        action: 'Verify REDIS_URL environment variable and Redis server status',
-        impact: 'Caching and rate limiting will be disabled'
-      });
-    } else if (services.redis.metrics?.hit_rate < 0.8) {
-      recommendations.push({
-        service: 'redis',
-        priority: 'low',
-        message: 'Redis cache hit rate is low',
-        action: 'Consider increasing cache TTLs or reviewing cache keys',
-        impact: 'Reduced cache effectiveness'
-      });
-    }
-
-    if (!services.database.healthy) {
-      recommendations.push({
-        service: 'database',
-        priority: 'critical',
-        message: 'Database connection failed',
-        action: 'Verify SUPABASE_URL and SUPABASE_SERVICE_KEY environment variables',
-        impact: 'User data and game storage will be unavailable'
-      });
-    } else if (services.database.metrics?.total_games === 0) {
-      recommendations.push({
-        service: 'database',
-        priority: 'medium',
-        message: 'No games found in database',
-        action: 'Check game ingestion processes and API connections',
-        impact: 'Limited game data availability'
-      });
-    }
-
-    if (!services.odds.healthy) {
-      recommendations.push({
-        service: 'odds',
-        priority: 'high',
-        message: 'Odds service experiencing issues',
-        action: 'Check API keys for The Odds API and SportRadar',
-        impact: 'Live odds and player props may be unavailable'
-      });
-    } else if (services.odds.metrics?.providers_healthy === 0) {
-      recommendations.push({
-        service: 'odds',
-        priority: 'high',
-        message: 'All odds providers are unhealthy',
-        action: 'Verify API keys and provider status',
-        impact: 'No odds data available'
-      });
-    }
-
-    if (!services.games.healthy) {
-      recommendations.push({
-        service: 'games',
-        priority: 'medium',
-        message: 'Games service degraded',
-        action: 'Verify external API connections and cache status',
-        impact: 'Game schedules and sports lists may be incomplete'
-      });
-    }
-
-    const slowServices = Object.entries(services).filter(([_, service]) => 
-      service.latency?.total > 5000
-    );
-    
-    if (slowServices.length > 0) {
-      recommendations.push({
-        service: 'performance',
-        priority: 'medium',
-        message: `${slowServices.length} services are responding slowly`,
-        action: 'Investigate service performance and consider scaling',
-        impact: 'Reduced user experience and potential timeouts'
-      });
-    }
-
-    return recommendations.sort((a, b) => {
-      const priorityOrder = { critical: 3, high: 2, medium: 1, low: 0 };
-      return priorityOrder[b.priority] - priorityOrder[a.priority];
-    });
-  }
-}
-
 class EnhancedHealthService {
-  constructor() {
-    this.historyManager = new HealthHistoryManager();
-    this.serviceDependencies = {
-      redis: ['odds', 'games', 'rate-limiting', 'caching'],
-      database: ['user-data', 'game-storage', 'sports-metadata'],
-      odds: ['live-odds', 'player-props', 'sports-discovery'],
-      games: ['sports-list', 'game-schedules', 'live-scores']
-    };
-  }
-
   async getHealth(includeDetails = false) {
     const healthCheckId = `health_${Date.now()}`;
     console.log(`🩺 Starting comprehensive health check (${healthCheckId})...`);
@@ -565,228 +308,69 @@ class EnhancedHealthService {
     try {
       const startTime = Date.now();
       
-      const healthResults = await Promise.all([
+      const [redis, database, odds, games] = await Promise.all([
         ServiceHealthChecker.checkRedis(),
         ServiceHealthChecker.checkDatabase(),
         ServiceHealthChecker.checkOddsService(),
-        ServiceHealthChecker.checkGamesService(),
-        ServiceHealthChecker.checkRateLimitService()
+        ServiceHealthChecker.checkGamesService()
       ]);
 
       const processingTime = Date.now() - startTime;
-
-      const [redisHealth, databaseHealth, oddsHealth, gamesHealth, rateLimitHealth] = healthResults;
-
-      const criticalServices = [redisHealth, databaseHealth];
-      const allCriticalHealthy = criticalServices.every(service => service.healthy);
-      const degradedServices = healthResults.filter(service => !service.healthy);
-
-      const overallStatus = {
-        healthy: allCriticalHealthy,
-        status: allCriticalHealthy ? 
-          (degradedServices.length === 0 ? 'healthy' : 'degraded') : 
-          'unhealthy',
-        timestamp: new Date().toISOString(),
-        processing_time_ms: processingTime,
-        check_id: healthCheckId
-      };
+      const allHealthy = redis.healthy && database.healthy && odds.healthy && games.healthy;
 
       const healthReport = {
-        overall: overallStatus,
-        services: {
-          redis: redisHealth,
-          database: databaseHealth,
-          odds: oddsHealth,
-          games: gamesHealth,
-          rate_limiting: rateLimitHealth
+        overall: {
+          healthy: allHealthy,
+          status: allHealthy ? 'healthy' : 'degraded',
+          timestamp: new Date().toISOString(),
+          processing_time_ms: processingTime,
         },
-        dependencies: this.serviceDependencies,
-        recommendations: HealthRecommendationsGenerator.generate({
-          redis: redisHealth,
-          database: databaseHealth,
-          odds: oddsHealth,
-          games: gamesHealth,
-          rate_limiting: rateLimitHealth
-        })
+        services: {
+          redis,
+          database,
+          odds,
+          games,
+        },
       };
 
-      await this.historyManager.saveHealthReport(healthReport);
-
-      console.log(`✅ Health check completed in ${processingTime}ms - Status: ${overallStatus.status}`);
-      
-      return includeDetails ? healthReport : this.summarizeHealth(healthReport);
+      console.log(`✅ Health check completed in ${processingTime}ms - Status: ${healthReport.overall.status}`);
+      return this.summarizeHealth(healthReport);
 
     } catch (error) {
       console.error('❌ Health check failed:', error);
-      sentryService.captureError(error, { 
-        component: 'health_service', 
-        operation: 'getHealth',
-        healthCheckId 
-      });
-
-      return this.generateEmergencyHealthReport(error);
-    }
-  }
-
-  async getQuickHealth() {
-    try {
-      const [redisOk, databaseOk] = await Promise.all([
-        this.checkRedisBasic(),
-        this.checkDatabaseBasic()
-      ]);
-
-      return {
-        status: redisOk && databaseOk ? 'healthy' : 'unhealthy',
-        timestamp: new Date().toISOString(),
-        services: {
-          redis: redisOk,
-          database: databaseOk
-        }
-      };
-    } catch (error) {
-      return {
-        status: 'unhealthy',
-        timestamp: new Date().toISOString(),
-        error: error.message
-      };
-    }
-  }
-
-  async getServiceHealth(serviceName) {
-    const serviceCheckers = {
-      redis: () => ServiceHealthChecker.checkRedis(),
-      database: () => ServiceHealthChecker.checkDatabase(),
-      odds: () => ServiceHealthChecker.checkOddsService(),
-      games: () => ServiceHealthChecker.checkGamesService(),
-      'rate-limiting': () => ServiceHealthChecker.checkRateLimitService()
-    };
-
-    const checker = serviceCheckers[serviceName];
-    if (!checker) {
-      return {
-        healthy: false,
-        status: 'unknown_service',
-        error: `Unknown service: ${serviceName}`
-      };
-    }
-
-    try {
-      return await checker();
-    } catch (error) {
-      console.error(`Service health check failed for ${serviceName}:`, error);
-      return {
-        healthy: false,
-        status: 'check_failed',
-        error: error.message,
-        timestamp: new Date().toISOString()
-      };
-    }
-  }
-
-  async getHealthHistory(hours = 24) {
-    return await this.historyManager.getHealthHistory(hours);
-  }
-
-  async checkRedisBasic() {
-    try {
-      const redis = await getRedisClient();
-      if (!redis) return false;
-      const result = await redis.ping();
-      return result === 'PONG';
-    } catch (error) {
-      return false;
-    }
-  }
-
-  async checkDatabaseBasic() {
-    try {
-      // NOTE: databaseService.getDistinctSports returns a fallback if unconfigured
-      // but fails if the client is configured but connection fails.
-      const sports = await databaseService.getDistinctSports();
-      // A more robust check might be databaseService.testConnection() but relying on getDistinctSports is fine here.
-      return Array.isArray(sports);
-    } catch (error) {
-      return false;
+      sentryService.captureError(error, { component: 'health_service' });
+      return { ok: false, overall: { healthy: false, status: 'error', error: error.message } };
     }
   }
 
   summarizeHealth(healthReport) {
-    const { overall, services } = healthReport;
-    
     return {
-      status: overall.status,
-      healthy: overall.healthy,
-      timestamp: overall.timestamp,
-      processing_time_ms: overall.processing_time_ms,
-      services_health: {
-        redis: services.redis.healthy,
-        database: services.database.healthy,
-        odds: services.odds.healthy,
-        games: services.games.healthy,
-        rate_limiting: services.rate_limiting.healthy
-      },
-      degraded_services: Object.entries(services)
-        .filter(([_, service]) => !service.healthy)
-        .map(([name, _]) => name),
-      critical_issue: !services.redis.healthy || !services.database.healthy
+      ok: healthReport.overall.healthy,
+      ...healthReport.overall,
+      services: {
+        database: { ok: healthReport.services.database.healthy },
+        redis: { ok: healthReport.services.redis.healthy },
+        odds: { ok: healthReport.services.odds.healthy },
+        games: { ok: healthReport.services.games.healthy },
+      }
     };
   }
 
-  generateEmergencyHealthReport(error) {
-    return {
-      overall: {
-        healthy: false,
-        status: 'emergency',
-        timestamp: new Date().toISOString(),
-        error: error.message
-      },
-      services: {
-        redis: { healthy: false, status: 'unknown' },
-        database: { healthy: false, status: 'unknown' },
-        odds: { healthy: false, status: 'unknown' },
-        games: { healthy: false, status: 'unknown' },
-        rate_limiting: { healthy: false, status: 'unknown' }
-      },
-      emergency: true,
-      message: 'Health check system failure - manual investigation required'
-    };
+  async waitForReady(timeoutMs = 30000) {
+    const startTime = Date.now();
+    while (Date.now() - startTime < timeoutMs) {
+      const report = await this.getHealth();
+      if (report.ok) {
+        console.log(`✅ Health check passed: All services are ready.`);
+        return true; 
+      }
+      console.log(`⏳ Services not ready yet. Retrying...`);
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    console.error(`❌ Startup timeout of ${timeoutMs}ms reached. Services are still degraded.`);
+    return false;
   }
 }
 
 const healthServiceInstance = new EnhancedHealthService();
-
-// CRITICAL FIX: Define waitForReady directly on the exported instance to guarantee access
-healthServiceInstance.waitForReady = async function(timeoutMs = 30000) {
-    const startTime = Date.now();
-    const intervalMs = 2000; // Check every 2 seconds
-
-    while (Date.now() - startTime < timeoutMs) {
-      try {
-        // Use getHealth with details=false to get the summarized report
-        // 'this' refers to healthServiceInstance
-        const report = await this.getHealth(false);
-        
-        if (report.healthy) {
-          console.log(`✅ Health check passed: All services are ready.`);
-          return true; 
-        }
-
-        console.log(`⏳ Services not ready yet. Retrying in ${intervalMs}ms...`);
-        // Log degraded service names for better visibility
-        Object.entries(report.services_health)
-            .filter(([, isHealthy]) => !isHealthy)
-            .forEach(([name]) => console.log(`   - ❌ ${name} is DOWN`));
-
-        await new Promise(resolve => setTimeout(resolve, intervalMs));
-
-      } catch (error) {
-        console.error('❌ Error during startup health check:', error.message);
-        await new Promise(resolve => setTimeout(resolve, intervalMs));
-      }
-    }
-
-    console.error(`❌ Startup timeout of ${timeoutMs}ms reached. Services are still degraded.`);
-    return false;
-};
-
 export default healthServiceInstance;
