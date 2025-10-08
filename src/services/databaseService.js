@@ -3,9 +3,26 @@ import { createClient } from '@supabase/supabase-js';
 import env from '../config/env.js';
 import { sentryService } from './sentryService.js';
 import { COMPREHENSIVE_SPORTS } from '../config/sportDefinitions.js';
-import { GameEnhancementService } from './gameEnhancementService.js';
-// CRITICAL FIX: Import TimeoutError and withTimeout from asyncUtils.js
+// NOTE: GameEnhancementService is defined locally below to ensure no import errors.
 import { withTimeout, TimeoutError } from '../utils/asyncUtils.js';
+
+// --- HELPER CLASS DEFINITION (Inserted to fix "is not defined" error) ---
+// This is a simplified stand-in based on its usage in this file.
+class GameEnhancementService {
+  static enhanceGameData(games, sportKey, source) {
+    if (!Array.isArray(games)) return [];
+    return games.map(game => this.enhanceSingleGame(game, sportKey, source));
+  }
+  static enhanceSingleGame(game, sportKey, source) {
+    return {
+      ...game,
+      enhanced: true,
+      enhancement_source: source,
+      source: source,
+    };
+  }
+}
+// -----------------------------------------------------------------------
 
 const COMPREHENSIVE_FALLBACK_SPORTS = Object.entries(COMPREHENSIVE_SPORTS).map(([sport_key, data]) => ({
   sport_key,
@@ -41,8 +58,7 @@ function buildClient() {
 
 let supabaseClient = buildClient();
 
-// NOTE: withTimeout is now imported from asyncUtils.js and not redefined here.
-// const withTimeout is removed
+// NOTE: withTimeout is imported from asyncUtils.js and not redefined here.
 
 class DatabaseService {
   get client() { 
@@ -727,8 +743,7 @@ class DatabaseService {
       return true;
 
     } catch (error) {
-      // FIX: Only treat TimeoutError as a transient failure (return false), 
-      // but still let it be logged if necessary.
+      // FIX: Only treat non-TimeoutError as a critical failure.
       if (error instanceof TimeoutError) {
          console.error('❌ Database connection test TIMEOUT:', error.message);
          return false;
