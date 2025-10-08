@@ -284,7 +284,7 @@ class ServiceHealthChecker {
   }
 
   static parseRedisInfo(infoString) {
-    const lines = infoString.split('\r\n');
+    const lines = (infoString || '').split('\r\n');
     const info = {};
     
     for (const line of lines) {
@@ -301,57 +301,27 @@ class ServiceHealthChecker {
 }
 
 class EnhancedHealthService {
-  async getHealth(includeDetails = false) {
-    const healthCheckId = `health_${Date.now()}`;
-    console.log(`🩺 Starting comprehensive health check (${healthCheckId})...`);
+  async getHealth() {
+    const startTime = Date.now();
     
-    try {
-      const startTime = Date.now();
-      
-      const [redis, database, odds, games] = await Promise.all([
-        ServiceHealthChecker.checkRedis(),
-        ServiceHealthChecker.checkDatabase(),
-        ServiceHealthChecker.checkOddsService(),
-        ServiceHealthChecker.checkGamesService()
-      ]);
+    const [redis, database, odds, games] = await Promise.all([
+      ServiceHealthChecker.checkRedis(),
+      ServiceHealthChecker.checkDatabase(),
+      ServiceHealthChecker.checkOddsService(),
+      ServiceHealthChecker.checkGamesService()
+    ]);
 
-      const processingTime = Date.now() - startTime;
-      const allHealthy = redis.healthy && database.healthy && odds.healthy && games.healthy;
-
-      const healthReport = {
-        overall: {
-          healthy: allHealthy,
-          status: allHealthy ? 'healthy' : 'degraded',
-          timestamp: new Date().toISOString(),
-          processing_time_ms: processingTime,
-        },
-        services: {
-          redis,
-          database,
-          odds,
-          games,
-        },
-      };
-
-      console.log(`✅ Health check completed in ${processingTime}ms - Status: ${healthReport.overall.status}`);
-      return this.summarizeHealth(healthReport);
-
-    } catch (error) {
-      console.error('❌ Health check failed:', error);
-      sentryService.captureError(error, { component: 'health_service' });
-      return { ok: false, overall: { healthy: false, status: 'error', error: error.message } };
-    }
-  }
-
-  summarizeHealth(healthReport) {
+    const healthy = redis.healthy && database.healthy; // Core services
+    
     return {
-      ok: healthReport.overall.healthy,
-      ...healthReport.overall,
+      ok: healthy,
+      status: healthy ? 'healthy' : 'degraded',
+      processing_time_ms: Date.now() - startTime,
       services: {
-        database: { ok: healthReport.services.database.healthy },
-        redis: { ok: healthReport.services.redis.healthy },
-        odds: { ok: healthReport.services.odds.healthy },
-        games: { ok: healthReport.services.games.healthy },
+        redis: { ok: redis.healthy },
+        database: { ok: database.healthy },
+        odds: { ok: odds.healthy },
+        games: { ok: games.healthy },
       }
     };
   }
