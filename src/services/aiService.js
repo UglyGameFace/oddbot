@@ -208,60 +208,68 @@ class AIService {
   }
 
   async _callAIProvider(aiModel, prompt) {
-      const { GOOGLE_GEMINI_API_KEY, PERPLEXITY_API_KEY } = env;
-      let responseText;
-      let lastError = null;
+    const { GOOGLE_GEMINI_API_KEY, PERPLEXITY_API_KEY } = env;
+    let responseText;
 
-      if (aiModel === 'gemini' && GOOGLE_GEMINI_API_KEY) {
-          const modelsToTry = [
+    // --- Primary Provider: Gemini ---
+    if (GOOGLE_GEMINI_API_KEY) {
+        const modelsToTry = [
             GEMINI_MODELS.gemini,
             GEMINI_MODELS.gemini_fallback,
             GEMINI_MODELS.gemini_legacy
-          ];
+        ];
 
-          for (const modelName of modelsToTry) {
+        for (const modelName of modelsToTry) {
             try {
-              console.log(`🔄 Trying Gemini model: ${modelName}`);
-              const genAI = new GoogleGenerativeAI(GOOGLE_GEMINI_API_KEY);
-              const model = genAI.getGenerativeModel({ model: modelName });
-              const result = await model.generateContent(prompt);
-              responseText = result.response.text();
-              console.log(`✅ Success with Gemini model: ${modelName}`);
-              break;
+                console.log(`🔄 Trying Gemini model: ${modelName}`);
+                const genAI = new GoogleGenerativeAI(GOOGLE_GEMINI_API_KEY);
+                const model = genAI.getGenerativeModel({ model: modelName });
+                const result = await model.generateContent(prompt);
+                responseText = result.response.text();
+                console.log(`✅ Success with Gemini model: ${modelName}`);
+                break; // Exit loop on success
             } catch (modelError) {
-              lastError = modelError;
-              console.warn(`❌ Gemini model ${modelName} failed:`, modelError.message);
-              if (modelError.message.includes('API_KEY') || modelError.message.includes('401') || modelError.message.includes('403')) {
-                  throw new Error('Gemini API key invalid or expired');
-              }
+                console.warn(`❌ Gemini model ${modelName} failed:`, modelError.message);
+                // If it's an overload or temporary error, we'll allow it to fall through to Perplexity
+                if (modelError.message.includes('503') || modelError.message.includes('overloaded')) {
+                    continue; // Try the next Gemini model
+                }
+                // If it's a critical key error, throw immediately
+                if (modelError.message.includes('API_KEY') || modelError.message.includes('401') || modelError.message.includes('403')) {
+                    throw new Error('Gemini API key invalid or expired');
+                }
             }
-          }
+        }
+    }
 
-          if (!responseText) {
-            throw new Error(`All Gemini models failed. Last error: ${lastError?.message}`);
-          }
-      } else if (aiModel === 'perplexity' && PERPLEXITY_API_KEY) {
-          try {
+    // --- Fallback Provider: Perplexity ---
+    if (!responseText && PERPLEXITY_API_KEY) {
+        console.log('⚠️ Gemini failed or was unavailable, failing over to Perplexity...');
+        try {
             const response = await axios.post('https://api.perplexity.ai/chat/completions',
                 { model: GEMINI_MODELS.perplexity, messages: [{ role: 'user', content: prompt }] },
                 { headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}` }, timeout: WEB_TIMEOUT_MS }
             );
             responseText = response?.data?.choices?.[0]?.message?.content || '';
-          } catch (error) {
-              if (error.response?.status === 401 || error.response?.status === 403) {
-                  throw new Error('Perplexity API key invalid or expired');
-              }
-              throw new Error(`Perplexity API error: ${error.message}`);
-          }
-      } else { 
-          throw new Error(`${aiModel} API key not configured or model not available.`); 
-      }
+            console.log('✅ Success with Perplexity fallback');
+        } catch (error) {
+            if (error.response?.status === 401 || error.response?.status === 403) {
+                throw new Error('Perplexity API key invalid or expired');
+            }
+            // If both Gemini and Perplexity fail, we throw a final error
+            throw new Error(`Perplexity API fallback also failed: ${error.message}`);
+        }
+    }
 
-      const parsedJson = extractJSON(responseText);
-      if (!parsedJson) { 
-          throw new Error('AI response did not contain valid JSON.'); 
-      }
-      return parsedJson;
+    if (!responseText) {
+        throw new Error('All AI providers are currently unavailable.');
+    }
+
+    const parsedJson = extractJSON(responseText);
+    if (!parsedJson) {
+        throw new Error('AI response did not contain valid JSON.');
+    }
+    return parsedJson;
   }
   
   async _generateEliteContextParlay(sportKey, numLegs, mode, betType, options) {
