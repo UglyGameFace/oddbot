@@ -177,34 +177,45 @@ async function handleApiStatus(bot, chatId, messageId) {
 
   const statuses = {};
 
+  // Check Google Gemini
   try {
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${env.GOOGLE_GEMINI_API_KEY}`;
     const geminiRes = await axios.get(geminiUrl, { timeout: 5000 });
     statuses['Google Gemini'] = geminiRes.status === 200 ? '✅ Online' : '❌ Error';
   } catch (e) {
-    statuses['Google Gemini'] = '❌ Offline';
+    statuses['Google Gemini'] = `❌ Offline (${e.response?.status || 'Network Error'})`;
   }
 
+  // Check Perplexity AI
   try {
-    await axios.post('https://api.perplexity.ai/chat/completions', {}, {
-        headers: { Authorization: `Bearer ${env.PERPLEXITY_API_KEY}` },
-        timeout: 5000
-    });
+    await axios.post('https://api.perplexity.ai/chat/completions', 
+        { model: 'sonar-small-chat', messages: [{ role: 'user', content: 'test' }] }, 
+        { headers: { Authorization: `Bearer ${env.PERPLEXITY_API_KEY}` }, timeout: 5000 }
+    );
     statuses['Perplexity AI'] = '✅ Online';
   } catch (e) {
-    if (e.response && (e.response.status === 400 || e.response.status === 401)) {
-        statuses['Perplexity AI'] = '✅ Online';
+    if (e.response && (e.response.status === 401 || e.response.status === 429)) {
+        statuses['Perplexity AI'] = `❌ Auth/Limit (${e.response.status})`;
     } else {
-        statuses['Perplexity AI'] = '❌ Offline';
+        statuses['Perplexity AI'] = `❌ Offline (${e.response?.status || 'Network Error'})`;
     }
   }
 
+  // FIX: Smarter check for The Odds API
   try {
     const oddsUrl = `https://api.the-odds-api.com/v4/sports?apiKey=${env.THE_ODDS_API_KEY}`;
-    await axios.get(oddsUrl, { timeout: 5000 });
-    statuses['The Odds API'] = '✅ Online';
+    const response = await axios.get(oddsUrl, { timeout: 5000 });
+    if (response.status === 200) {
+        statuses['The Odds API'] = '✅ Online';
+    } else {
+        statuses['The Odds API'] = `❌ Error (${response.status})`;
+    }
   } catch (e) {
-    statuses['The Odds API'] = '❌ Offline';
+    if (e.response) {
+      statuses['The Odds API'] = `❌ Error (${e.response.status})`;
+    } else {
+      statuses['The Odds API'] = '❌ Offline (Network Error)';
+    }
   }
 
   let statusText = '*📡 API Status Report*\n\n';
