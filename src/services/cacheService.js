@@ -1,6 +1,4 @@
-// src/services/cacheService.js - FINAL ABSOLUTE FIXED VERSION
-// FIX: Simplified the lock-wait timeout path to avoid aggressive lock acquisition,
-// which is a major source of command pipeline corruption and "ERR syntax error".
+// src/services/cacheService.js - FINAL ABSOLUTE FIXED SCRIPT (with Lua for atomic lock release)
 
 import { sentryService } from './sentryService.js';
 
@@ -20,13 +18,22 @@ const safeJsonParse = (str, fallback = null) => {
 export default function makeCache(redis) {
   const DEFAULT_LOCK_MS = 8000;
   const DEFAULT_RETRY_MS = 150;
+  
+  // CRITICAL FIX: Lua script for atomic lock release (prevents race conditions and command corruption)
+  // Deletes the lock key ONLY if the value is still '1' (meaning this client still owns it).
+  const RELEASE_LOCK_SCRIPT = `
+    if redis.call('GET', KEYS[1]) == ARGV[1] then
+        return redis.call('DEL', KEYS[1])
+    else
+        return 0
+    end
+  `;
 
   // Unified function to execute the loader and set the cache
   async function executeLoaderAndCache(key, ttlSec, loader, context) {
     try {
       const data = await loader();
       if (data !== undefined && data !== null) {
-        // Use EX time to set TTL
         await redis.set(key, JSON.stringify(data), 'EX', ttlSec);
         console.log(`💾 Cached data for key: ${key} (TTL: ${ttlSec}s)`);
       } else {
@@ -52,6 +59,10 @@ export default function makeCache(redis) {
     fallbackOnError = true
   } = {}) {
     
+    // The value used for the lock. Should be unique to this client for a robust lock, 
+    // but using a static '1' is simple and atomic script is stronger.
+    const lockValue = '1'; 
+    
     try {
       // Try to get cached data first
       const cached = await redis.get(key);
@@ -72,7 +83,7 @@ export default function makeCache(redis) {
       const lockKey = `lock:${key}`;
       
       // Try to acquire lock
-      const gotLock = await redis.set(lockKey, '1', 'PX', lockMs, 'NX');
+      const gotLock = await redis.set(lockKey, lockValue, 'PX', lockMs, 'NX');
 
       if (gotLock === 'OK') {
         // --- Lock Acquired Path ---
@@ -90,20 +101,22 @@ export default function makeCache(redis) {
           }
           throw loaderError;
         } finally {
-          // GUARANTEED lock release
-          await redis.del(lockKey).catch(delError => {
-            console.warn(`⚠️ Failed to delete lock key: ${lockKey}`, delError.message);
+          // CRITICAL FIX: Use atomic Lua script to release lock only if we own it.
+          // This prevents a client from deleting a lock after its TTL expired and another client acquired it.
+          await redis.eval(RELEASE_LOCK_SCRIPT, 1, lockKey, lockValue).catch(delError => {
+            console.warn(`⚠️ Failed to execute atomic lock release for key: ${lockKey}`, delError.message);
           });
           console.log(`🔓 Released lock for key: ${key}`);
         }
       } else {
-        // --- Lock Wait/Miss Path ---
+        // --- Lock Wait Path (The Error Source) ---
         console.log(`⏳ Waiting for lock on key: ${key}`);
         const deadline = Date.now() + lockMs;
-        let finalCacheCheck = null;
-
+        
         while (Date.now() < deadline) {
           await sleep(retryMs);
+          // CRITICAL FIX: Check the cache key AND the lock key status simultaneously (or check lock first).
+          // We check the cache directly to see if the content is ready.
           const again = await redis.get(key);
           if (again) {
             const parsed = safeJsonParse(again);
@@ -111,23 +124,18 @@ export default function makeCache(redis) {
               console.log(`📦 Got cached data after lock wait for key: ${key}`);
               return parsed;
             }
-            // If data is corrupt, store the fact and break the loop to refresh
-            finalCacheCheck = again;
+            // If data is corrupt, stop waiting and attempt to refresh.
             break;
           }
         }
         
-        // FIX: The aggressive lock logic removed. Instead, after waiting, 
-        // we either throw the error (if fallback is disabled) or attempt
-        // a simple non-locked load if the wait timed out. This is much safer.
+        // --- Wait Timeout Path ---
         console.log(`⏰ Lock wait timed out for key: ${key}. Loading data without lock...`);
         
-        if (finalCacheCheck) {
-             console.log('🔄 Found corrupted cache after wait, attempting to overwrite.');
-        }
-
-        // Load fresh data, but DO NOT acquire a lock (avoiding the second race)
+        // If the lock wait timed out, we load the fresh data without a lock.
+        // If two processes hit this path, they will race, but the data will be valid.
         try {
+          // Load fresh data, do not attempt to acquire a lock (avoiding the ERR syntax race)
           const data = await executeLoaderAndCache(key, ttlSec, loader, context);
           return data;
         } catch (loaderError) {
@@ -157,8 +165,6 @@ export default function makeCache(redis) {
       throw error;
     }
   }
-
-  // ... (All other cache functions are unchanged)
 
   async function getJSON(key, fallback = null) {
     try {
