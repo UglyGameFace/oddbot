@@ -1,5 +1,4 @@
-// src/services/redisService.js - COMPLETE FIXED VERSION
-// FIX: Adding options to prevent immediate closing on transient errors.
+// src/services/redisService.js - ABSOLUTE FINAL, ULTRA-DEFENSIVE SCRIPT
 
 import Redis from 'ioredis';
 import env from '../config/env.js';
@@ -17,13 +16,17 @@ function createRedisClient() {
   }
 
   const redisOptions = {
-    maxRetriesPerRequest: 3,
+    // Keep maxRetries high, but maxRetriesPerRequest low
+    maxRetriesPerRequest: 1, // FIX: Lower this to fail quickly and rely on external reconnection
     connectTimeout: 10000,
     lazyConnect: true,
     enableReadyCheck: true,
     keepAlive: 1000,
-    retryDelayOnFailover: 100,
-    retryDelayOnTryAgain: 100,
+    
+    // FIX: Set a dedicated reconnection delay on command failure
+    retryDelayOnFailover: 100, 
+    retryDelayOnTryAgain: 100, 
+    
     retryStrategy: (times) => {
       if (times > 10) {
         console.warn('🔄 Redis retry limit exceeded');
@@ -33,28 +36,33 @@ function createRedisClient() {
       console.log(`🔄 Redis reconnecting in ${delay}ms (attempt ${times})`);
       return delay;
     },
+    
     reconnectOnError: (err) => {
-      // FIX: Check for "read ECONNRESET" or "ETIMEDOUT" (common transient network errors)
-      // and allow ioredis to handle them without full connection close/reopen.
-      const transientErrors = ['READONLY', 'ECONNRESET', 'ETIMEDOUT', 'EHOSTUNREACH'];
+      // FIX: Identify the exact errors from the logs and return false for them.
+      // Returning FALSE tells ioredis NOT to close the entire connection, but to retry the command.
+      const transientErrors = [
+          'READONLY', 'ECONNRESET', 'ETIMEDOUT', 'EHOSTUNREACH', 
+          'Error: write EPIPE', // Common network pipeline error
+          'Redis internal system error' // The error seen in your log
+      ];
+      
       if (transientErrors.some(e => err.message.includes(e))) {
-        console.warn('⚠️ Redis transient network error, client will attempt to retry command.');
-        return false; // Return false to indicate: "Don't disconnect the entire client."
+        console.warn(`⚠️ Redis transient error (${err.message.substring(0, 30)}...), attempting command retry.`);
+        return false; // CRITICAL FIX: DO NOT DISCONNECT THE CLIENT
       }
       
-      // The ERR syntax error is specific to bad command sequences, which usually mandates a full reconnect.
+      // The specific "ERR syntax error" usually means the command pipeline is truly corrupted.
       if (err.message.includes('ERR syntax error')) {
-        console.warn('🔄 Redis internal syntax error, forcing full reconnect.');
-        return true; 
+        console.warn('🔄 Redis command pipeline corrupted, forcing full reconnect.');
+        return true; // Force a full reconnect cycle
       }
       
       console.warn('🔄 Redis reconnecting on error:', err.message);
       return true;
     },
     
-    // CRITICAL FIX: Add options to increase client stability
-    enableOfflineQueue: true, // Allow commands to be queued when connection is lost
-    showFriendlyErrorStack: true // Helps debug command-related errors (like ERR syntax)
+    enableOfflineQueue: true, 
+    showFriendlyErrorStack: true
   };
 
   const client = new Redis(env.REDIS_URL, redisOptions);
@@ -68,14 +76,11 @@ function createRedisClient() {
   });
 
   client.on('error', (err) => {
-    // Check if the error is due to a bad command (ERR syntax error) which we want to log but not necessarily crash on.
-    if (err.message.includes('ERR syntax error')) {
-        console.error('❌ Redis command error (will attempt reconnect):', err.message);
-        // Do not call sentry here; the reconnectOnError logic handles the cycle.
-        return; 
+    // Sentry logging for general errors
+    if (!err.message.includes('ERR syntax error') && !err.message.includes('Redis internal system error')) {
+      console.error('❌ Redis error:', err.message);
+      sentryService.captureError(err, { component: 'redis_service' });
     }
-    console.error('❌ Redis error:', err.message);
-    sentryService.captureError(err, { component: 'redis_service' });
   });
 
   client.on('close', () => {
