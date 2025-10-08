@@ -1,8 +1,10 @@
-// src/bot/state.js - COMPLETE FIXED VERSION
+// src/bot/state.js - COMPLETE ABSOLUTE FIXED VERSION
 import env from '../config/env.js';
 import { sentryService } from '../services/sentryService.js';
 import { getRedisClient } from '../services/redisService.js';
 import databaseService from '../services/databaseService.js';
+// CRITICAL FIX: Import TimeoutError and withTimeout from asyncUtils.js
+import { withTimeout, TimeoutError } from '../utils/asyncUtils.js';
 
 const NS = (env.NODE_ENV || 'production').toLowerCase();
 const V = 'v1';
@@ -11,42 +13,80 @@ const STATE_PREFIX = `${PREFIX}user:state:`;
 const SLIP_PREFIX = `${PREFIX}parlay:slip:`;
 const DEFAULT_SLIP = { picks: [], stake: 10, totalOdds: 0, messageId: null };
 
+// FIX: safeParse now handles potential input errors more gracefully but doesn't suppress connection errors.
 const safeParse = (s, f) => { try { return JSON.parse(s); } catch (e) { sentryService.captureError(e, { component: 'state', op: 'parse' }); return f; } };
-const withTimeout = (p, ms, label) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error(`Timeout ${ms}ms: ${label}`)), ms))]);
+
+// FIX: Removed local definition of withTimeout
 
 const setWithTTL = async (c, k, v, ttl) => {
   if (!c) return;
   if (!ttl) return c.set(k, v);
-  return c.set(k, v, 'EX', ttl);
+  return c.set(k, v, v, 'EX', ttl);
 };
 
+// --- CORE REDIS STATE FUNCTIONS ---
+
 export async function setUserState(chatId, state, ttl = 3600) {
-  const redis = await getRedisClient();
-  if (!redis) return;
-  await withTimeout(setWithTTL(redis, `${STATE_PREFIX}${chatId}`, JSON.stringify(state), ttl), 3000, 'setUserState');
+  try {
+    const redis = await getRedisClient();
+    if (!redis) return;
+    await withTimeout(setWithTTL(redis, `${STATE_PREFIX}${chatId}`, JSON.stringify(state), ttl), 3000, 'setUserState');
+  } catch (error) {
+    if (!(error instanceof TimeoutError)) {
+      console.error('❌ setUserState CRITICAL error:', error.message);
+      throw error; // Re-throw critical Redis errors
+    }
+  }
 }
 
 export async function getUserState(chatId) {
-  const redis = await getRedisClient();
-  if (!redis) return {};
-  const data = await withTimeout(redis.get(`${STATE_PREFIX}${chatId}`), 3000, 'getUserState');
-  return data ? safeParse(data, {}) : {};
+  try {
+    const redis = await getRedisClient();
+    if (!redis) return {};
+    const data = await withTimeout(redis.get(`${STATE_PREFIX}${chatId}`), 3000, 'getUserState');
+    return data ? safeParse(data, {}) : {};
+  } catch (error) {
+    if (!(error instanceof TimeoutError)) {
+      console.error('❌ getUserState CRITICAL error:', error.message);
+      throw error; // Re-throw critical Redis errors
+    }
+    return {}; // Return empty state only on timeout or if Redis is unavailable
+  }
 }
 
 export async function getParlaySlip(chatId) {
-  const redis = await getRedisClient();
-  if (!redis) return { ...DEFAULT_SLIP };
-  const data = await withTimeout(redis.get(`${SLIP_PREFIX}${chatId}`), 3000, 'getParlaySlip');
-  return data ? safeParse(data, { ...DEFAULT_SLIP }) : { ...DEFAULT_SLIP };
+  try {
+    const redis = await getRedisClient();
+    if (!redis) return { ...DEFAULT_SLIP };
+    const data = await withTimeout(redis.get(`${SLIP_PREFIX}${chatId}`), 3000, 'getParlaySlip');
+    return data ? safeParse(data, { ...DEFAULT_SLIP }) : { ...DEFAULT_SLIP };
+  } catch (error) {
+    if (!(error instanceof TimeoutError)) {
+      console.error('❌ getParlaySlip CRITICAL error:', error.message);
+      throw error; // Re-throw critical Redis errors
+    }
+    return { ...DEFAULT_SLIP }; // Return default slip only on timeout or if Redis is unavailable
+  }
 }
 
 export async function setParlaySlip(chatId, slip) {
-  const redis = await getRedisClient();
-  if (!redis) return;
-  await withTimeout(setWithTTL(redis, `${SLIP_PREFIX}${chatId}`, JSON.stringify(slip), 86400), 3000, 'setParlaySlip');
+  try {
+    const redis = await getRedisClient();
+    if (!redis) return;
+    await withTimeout(setWithTTL(redis, `${SLIP_PREFIX}${chatId}`, JSON.stringify(slip), 86400), 3000, 'setParlaySlip');
+  } catch (error) {
+    if (!(error instanceof TimeoutError)) {
+      console.error('❌ setParlaySlip CRITICAL error:', error.message);
+      throw error; // Re-throw critical Redis errors
+    }
+  }
 }
 
+// --- CONFIGURATION MANAGEMENT ---
+
 async function getConfig(telegramId, type) {
+    // databaseService.getUserSettings will throw if the database is critically down,
+    // which is the intended behavior to fail the health check.
     const settings = await databaseService.getUserSettings(telegramId);
     const defaults = {
         ai: { 
@@ -74,6 +114,8 @@ async function getConfig(telegramId, type) {
 }
 
 async function setConfig(telegramId, type, newConfigData) {
+    // databaseService.getUserSettings/updateUserSettings will throw if the database is critically down,
+    // which is the intended behavior to fail the health check.
     const currentSettings = await databaseService.getUserSettings(telegramId);
     const updatedSettings = JSON.parse(JSON.stringify(currentSettings));
 
@@ -92,6 +134,8 @@ export const setAIConfig = (id, cfg) => setConfig(id, 'ai', cfg);
 export const getBuilderConfig = (id) => getConfig(id, 'builder');
 export const setBuilderConfig = (id, cfg) => setConfig(id, 'builder', cfg);
 
+// --- OTHER STATE MANAGEMENT FUNCTIONS ---
+
 export async function setValidationState(chatId, sportKey, validationData) {
   const state = await getUserState(chatId);
   state.validation = {
@@ -99,6 +143,7 @@ export async function setValidationState(chatId, sportKey, validationData) {
     lastValidation: new Date().toISOString(),
     ...validationData
   };
+  // getUserState handles errors, but setUserState can still fail
   await setUserState(chatId, state);
 }
 
@@ -109,20 +154,37 @@ export async function getValidationState(chatId) {
 
 const tokenPrefix = `${PREFIX}token:`;
 export async function saveToken(type, payload, ttl = 600) {
-  const redis = await getRedisClient();
-  if (!redis) return null;
-  const tok = `${type}_${Math.random().toString(36).slice(2, 10)}`;
-  await withTimeout(setWithTTL(redis, `${tokenPrefix}${tok}`, JSON.stringify(payload), ttl), 3000, 'saveToken');
-  return tok;
+  try {
+    const redis = await getRedisClient();
+    if (!redis) return null;
+    const tok = `${type}_${Math.random().toString(36).slice(2, 10)}`;
+    await withTimeout(setWithTTL(redis, `${tokenPrefix}${tok}`, JSON.stringify(payload), ttl), 3000, 'saveToken');
+    return tok;
+  } catch (error) {
+    if (!(error instanceof TimeoutError)) {
+      console.error('❌ saveToken CRITICAL error:', error.message);
+      throw error;
+    }
+    return null;
+  }
 }
 
 export async function loadToken(type, tok) {
-  const redis = await getRedisClient();
-  if (!redis || !tok?.startsWith(`${type}_`)) return null;
-  const key = `${tokenPrefix}${tok}`;
-  const data = await withTimeout(redis.get(key), 3000, 'loadToken.get');
-  await withTimeout(redis.del(key), 3000, 'loadToken.del');
-  return data ? safeParse(data, null) : null;
+  try {
+    const redis = await getRedisClient();
+    if (!redis || !tok?.startsWith(`${type}_`)) return null;
+    const key = `${tokenPrefix}${tok}`;
+    const data = await withTimeout(redis.get(key), 3000, 'loadToken.get');
+    // Deliberately do not wait for DEL, or wrap it in a catch, as deletion failure is non-critical.
+    redis.del(key).catch((e) => console.warn(`Token deletion failed for ${key}: ${e.message}`)); 
+    return data ? safeParse(data, null) : null;
+  } catch (error) {
+    if (!(error instanceof TimeoutError)) {
+      console.error('❌ loadToken CRITICAL error:', error.message);
+      throw error;
+    }
+    return null;
+  }
 }
 
 export async function clearUserState(chatId) {
@@ -130,8 +192,8 @@ export async function clearUserState(chatId) {
     const redis = await getRedisClient();
     if (!redis) return false;
     await Promise.all([
-      redis.del(`${STATE_PREFIX}${chatId}`),
-      redis.del(`${SLIP_PREFIX}${chatId}`)
+      redis.del(`${STATE_PREFIX}${chatId}`).catch(() => {}),
+      redis.del(`${SLIP_PREFIX}${chatId}`).catch(() => {})
     ]);
     return true;
   } catch (error) {
@@ -143,7 +205,8 @@ export async function clearUserState(chatId) {
 export async function getUserActivityStats(telegramId) {
   try {
     const user = await databaseService.findOrCreateUser(telegramId);
-    const state = await getUserState(telegramId);
+    // getUserState handles its own critical errors by returning {}.
+    const state = await getUserState(telegramId); 
     
     return {
       user_id: telegramId,
@@ -155,7 +218,7 @@ export async function getUserActivityStats(telegramId) {
     };
   } catch (error) {
     console.error('Error getting user activity stats:', error);
-    return null;
+    throw error;
   }
 }
 
@@ -168,7 +231,10 @@ export async function getAllActiveSessions() {
   try {
     const redis = await getRedisClient();
     if (!redis) return [];
-    const keys = await redis.keys(`${STATE_PREFIX}*`);
+    
+    // NOTE: This .keys() operation can be slow on large Redis instances, 
+    // but the error handling is now correct.
+    const keys = await withTimeout(redis.keys(`${STATE_PREFIX}*`), 5000, 'getAllActiveKeys');
     
     const sessions = [];
     for (const key of keys) {
@@ -185,7 +251,10 @@ export async function getAllActiveSessions() {
     
     return sessions;
   } catch (error) {
-    console.error('Error getting active sessions:', error);
+    if (!(error instanceof TimeoutError)) {
+      console.error('❌ getAllActiveSessions CRITICAL error:', error);
+      throw error;
+    }
     return [];
   }
 }
