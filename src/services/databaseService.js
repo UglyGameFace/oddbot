@@ -192,7 +192,7 @@ class DatabaseService {
         return [];
        }
       
-       // If it's any other error (Supabase being down), re-throw to fail the health check.
+       // If it's any other error (Supabase being down), re-throw to make the HealthService fail.
       console.error(`❌ Supabase getUpcomingGames CRITICAL error for ${sportKey}:`, error.message);
       throw error; // Re-throw to make the HealthService fail.
     }
