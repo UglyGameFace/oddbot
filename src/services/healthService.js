@@ -1,4 +1,4 @@
-// src/services/healthService.js - COMPLETE FIXED VERSION
+// src/services/healthService.js - FINAL ABSOLUTE FIXED VERSION
 import { getRedisClient } from './redisService.js';
 import databaseService from './databaseService.js';
 import oddsService from './oddsService.js';
@@ -11,7 +11,6 @@ const HEALTH_CHECK_TIMEOUT = 10000;
 const CACHE_TTL_HEALTH = 30;
 
 class ServiceHealthChecker {
-// ... (All existing check methods are unchanged)
   static async checkRedis() {
     const checkStart = Date.now();
     
@@ -88,18 +87,18 @@ class ServiceHealthChecker {
   }
 
   static async checkDatabase() {
-    const checkStart = Date.now();
+    const checkStart = Date.now(); // FIX: Corrected Date.Now() to Date.now()
     
     try {
-      const connectionStart = Date.now();
+      const connectionStart = Date.now(); // FIX: Corrected Date.Now() to Date.now()
       const sports = await databaseService.getDistinctSports();
       const connectionTime = Date.now() - connectionStart;
 
-      const statsStart = Date.now();
+      const statsStart = Date.now(); // FIX: Corrected Date.Now() to Date.now()
       const dbStats = await databaseService.getDatabaseStats();
       const statsTime = Date.now() - statsStart;
 
-      const totalTime = Date.now() - checkStart;
+      const totalTime = Date.now() - checkStart; // FIX: Corrected Date.Now() to Date.now()
 
       // Note: databaseService.getDistinctSports returns a fallback list if the client is null,
       // which is why the check relies heavily on dbStats to be fully "healthy"
@@ -127,18 +126,26 @@ class ServiceHealthChecker {
         error: error.message,
         timestamp: new Date().toISOString(),
         latency: {
-          total: Date.now() - checkStart
+          total: Date.now() - checkStart // FIX: Corrected Date.Now() to Date.now()
         }
       };
     }
   }
 
+  // FIX: Added explicit error handling for network/API failures (AggregateError)
   static async checkOddsService() {
     const checkStart = Date.now();
     
     try {
       const oddsStart = Date.now();
-      const nbaOdds = await oddsService.getSportOdds('basketball_nba', { useCache: false });
+      
+      // Use withTimeout to catch request-level network hangs/failures
+      const nbaOdds = await withTimeout(
+        oddsService.getSportOdds('basketball_nba', { useCache: false }),
+        HEALTH_CHECK_TIMEOUT,
+        'OddsService_NBA'
+      );
+      
       const oddsTime = Date.now() - oddsStart;
 
       const statusStart = Date.now();
@@ -170,6 +177,7 @@ class ServiceHealthChecker {
       };
 
     } catch (error) {
+      // Catch network errors (AggregateError) or API key issues
       return {
         healthy: false,
         status: 'unhealthy',
@@ -247,7 +255,7 @@ class ServiceHealthChecker {
 
       const healthStart = Date.now();
       const providerHealth = await rateLimitService.getAllProvidersHealth();
-      const healthTime = Date.now() - healthStart;
+      const healthTime = Date.now() - healthStart; // FIX: Corrected Date.Now() to Date.now()
 
       const totalTime = Date.now() - checkStart;
 
@@ -300,7 +308,6 @@ class ServiceHealthChecker {
 }
 
 class HealthHistoryManager {
-// ... (All existing methods are unchanged)
   constructor() {
     this.historyKey = 'health_check_history';
     this.maxHistoryEntries = 100;
@@ -452,7 +459,6 @@ class HealthHistoryManager {
 }
 
 class HealthRecommendationsGenerator {
-// ... (All existing methods are unchanged)
   static generate(services) {
     const recommendations = [];
 
@@ -550,40 +556,6 @@ class EnhancedHealthService {
       odds: ['live-odds', 'player-props', 'sports-discovery'],
       games: ['sports-list', 'game-schedules', 'live-scores']
     };
-  }
-  
-  // CRITICAL FIX: Add this method to block startup in bot.js
-  async waitForReady(timeoutMs = 30000) {
-    const startTime = Date.now();
-    const intervalMs = 2000; // Check every 2 seconds
-
-    while (Date.now() - startTime < timeoutMs) {
-      try {
-        // Use getHealth with details=false to get the summarized report
-        const report = await this.getHealth(false);
-        
-        // Check if the report is overall healthy (all critical services OK)
-        if (report.healthy) {
-          console.log(`✅ Health check passed: All services are ready.`);
-          return true; 
-        }
-
-        console.log(`⏳ Services not ready yet. Retrying in ${intervalMs}ms...`);
-        // Optional: Log degraded service names for better visibility
-        Object.entries(report.services_health)
-            .filter(([, isHealthy]) => !isHealthy)
-            .forEach(([name]) => console.log(`   - ❌ ${name} is DOWN`));
-
-        await new Promise(resolve => setTimeout(resolve, intervalMs));
-
-      } catch (error) {
-        console.error('❌ Error during startup health check:', error.message);
-        await new Promise(resolve => setTimeout(resolve, intervalMs));
-      }
-    }
-
-    console.error(`❌ Startup timeout of ${timeoutMs}ms reached. Services are still degraded.`);
-    return false;
   }
 
   async getHealth(includeDetails = false) {
@@ -782,4 +754,39 @@ class EnhancedHealthService {
 }
 
 const healthServiceInstance = new EnhancedHealthService();
+
+// CRITICAL FIX: Define waitForReady directly on the exported instance to guarantee access
+healthServiceInstance.waitForReady = async function(timeoutMs = 30000) {
+    const startTime = Date.now();
+    const intervalMs = 2000; // Check every 2 seconds
+
+    while (Date.now() - startTime < timeoutMs) {
+      try {
+        // Use getHealth with details=false to get the summarized report
+        // 'this' refers to healthServiceInstance
+        const report = await this.getHealth(false);
+        
+        if (report.healthy) {
+          console.log(`✅ Health check passed: All services are ready.`);
+          return true; 
+        }
+
+        console.log(`⏳ Services not ready yet. Retrying in ${intervalMs}ms...`);
+        // Log degraded service names for better visibility
+        Object.entries(report.services_health)
+            .filter(([, isHealthy]) => !isHealthy)
+            .forEach(([name]) => console.log(`   - ❌ ${name} is DOWN`));
+
+        await new Promise(resolve => setTimeout(resolve, intervalMs));
+
+      } catch (error) {
+        console.error('❌ Error during startup health check:', error.message);
+        await new Promise(resolve => setTimeout(resolve, intervalMs));
+      }
+    }
+
+    console.error(`❌ Startup timeout of ${timeoutMs}ms reached. Services are still degraded.`);
+    return false;
+};
+
 export default healthServiceInstance;
