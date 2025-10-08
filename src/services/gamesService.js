@@ -1,18 +1,79 @@
-// src/services/gamesService.js - COMPLETE FIXED VERSION
+// src/services/gamesService.js - ABSOLUTE FINAL SCRIPT
 import databaseService from './databaseService.js';
 import oddsService from './oddsService.js';
 import env from '../config/env.js';
 import { getRedisClient } from './redisService.js';
 import { COMPREHENSIVE_SPORTS } from '../config/sportDefinitions.js';
-import { GameEnhancementService } from './gameEnhancementService.js';
-import { DataQualityService } from './dataQualityService.js';
-import { withTimeout } from '../utils/asyncUtils.js';
+// NOTE: Helper classes GameEnhancementService and DataQualityService are defined below.
+import { withTimeout, TimeoutError } from '../utils/asyncUtils.js';
 
 const CACHE_TTL = {
   SPORTS_LIST: 300,
   GAMES_DATA: 120,
   ODDS_DATA: 60
 };
+
+// --- HELPER CLASS DEFINITIONS (Inserted to fix "is not defined" errors) ---
+class GameEnhancementService {
+  static enhanceGameData(games, sportKey, source) {
+    if (!Array.isArray(games)) return [];
+
+    return games.map((game) => ({
+      ...game,
+      enhanced: true,
+      enhancement_source: source,
+      last_enhanced: new Date().toISOString(),
+      has_odds: !!(game.bookmakers && game.bookmakers.length > 0),
+    }));
+  }
+
+  static filterGamesByTime(games, hoursAhead, includeLive = false) {
+    const now = new Date();
+    const cutoff = new Date(now.getTime() + hoursAhead * 60 * 60 * 1000);
+
+    return games.filter((game) => {
+      if (!game.commence_time) return false;
+
+      const gameTime = new Date(game.commence_time);
+      const isUpcoming = gameTime > now && gameTime <= cutoff;
+      const isLive = includeLive && game.status === 'live';
+
+      return isUpcoming || isLive;
+    });
+  }
+}
+
+// Data quality service (simplified stand-in for local use)
+class DataQualityService {
+  static assessDataQuality(games) {
+    if (!Array.isArray(games) || games.length === 0) {
+      return { score: 0, rating: 'poor', issues: ['no_data'] };
+    }
+
+    const totalGames = games.length;
+    const gamesWithOdds = games.filter(
+      (g) => g.bookmakers && g.bookmakers.length > 0
+    ).length;
+    const oddsRatio = gamesWithOdds / totalGames;
+
+    let score = Math.round(oddsRatio * 100);
+    let rating = 'excellent';
+
+    if (score < 20) rating = 'poor';
+    else if (score < 50) rating = 'fair';
+    else if (score < 80) rating = 'good';
+
+    return {
+      score,
+      rating,
+      games_with_odds: gamesWithOdds,
+      total_games: totalGames,
+      odds_coverage: oddsRatio,
+    };
+  }
+}
+// -----------------------------------------------------------------------
+
 
 class GamesService {
   constructor() {
@@ -37,23 +98,42 @@ class GamesService {
       console.log('🔄 Building comprehensive sports list...');
       
       let sports = [];
-      
+      let oddsFetchFailed = false;
+      let dbFetchFailed = false;
+
+      // ODDS SERVICE - Throw critical errors
       try {
-        const oddsSports = await oddsService.getAvailableSports();
+        const oddsSports = await withTimeout(oddsService.getAvailableSports(), 5000, 'OddsSportsFetch');
         sports = [...sports, ...oddsSports];
         console.log(`✅ Added ${oddsSports.length} sports from Odds API`);
       } catch (error) {
-        console.warn('❌ Odds API sports fetch failed:', error.message);
+        if (!(error instanceof TimeoutError)) {
+          console.warn('❌ Odds API sports fetch CRITICAL error:', error.message);
+          oddsFetchFailed = true;
+        } else {
+          console.warn('❌ Odds API sports fetch TIMEOUT.');
+        }
       }
 
+      // DATABASE SERVICE - Throw critical errors
       try {
-        const dbSports = await databaseService.getDistinctSports();
+        const dbSports = await withTimeout(databaseService.getDistinctSports(), 5000, 'DBSportsFetch');
         sports = [...sports, ...dbSports];
         console.log(`✅ Added ${dbSports.length} sports from database`);
       } catch (error) {
-        console.warn('❌ Database sports fetch failed:', error.message);
+        if (!(error instanceof TimeoutError)) {
+          console.warn('❌ Database sports fetch CRITICAL error:', error.message);
+          dbFetchFailed = true;
+        } else {
+          console.warn('❌ Database sports fetch TIMEOUT.');
+        }
       }
 
+      // Final Check: If BOTH critical dependencies failed non-transitively, throw the error
+      if (oddsFetchFailed && dbFetchFailed) {
+        throw new Error('All primary data sources failed to connect.');
+      }
+      
       const mappedSports = this._getSportsFromMapping();
       sports = [...sports, ...mappedSports];
       console.log(`✅ Added ${mappedSports.length} sports from comprehensive mapping`);
@@ -61,7 +141,7 @@ class GamesService {
       const enhancedSports = this._enhanceAndDeduplicateSports(sports);
       console.log(`🎉 Final sports list: ${enhancedSports.length} sports`);
 
-      if (redis) {
+      if (redis && enhancedSports.length > 0) {
         await redis.setex(cacheKey, CACHE_TTL.SPORTS_LIST, JSON.stringify(enhancedSports));
       }
       
@@ -69,6 +149,11 @@ class GamesService {
 
     } catch (error) {
       console.error('❌ Comprehensive sports fetch failed:', error);
+      // Re-throw critical errors for HealthService to catch
+      if (error.message.includes('All primary data sources failed') || !(error instanceof TimeoutError)) {
+        throw error; 
+      }
+      // Otherwise, return fallback as the transient error is managed.
       return this._getSportsFromMapping();
     }
   }
@@ -101,31 +186,41 @@ class GamesService {
       let source = 'unknown';
 
       if (includeOdds) {
+        // Propagate critical errors from oddsService.getSportOdds
         try {
-          const oddsGames = await oddsService.getSportOdds(sportKey, { 
+          const oddsGames = await withTimeout(oddsService.getSportOdds(sportKey, { 
             includeLive, 
             hoursAhead 
-          });
+          }), 8000, `OddsGamesFetch_${sportKey}`);
           if (oddsGames && oddsGames.length > 0) {
             games = oddsGames;
             source = 'odds_api';
             console.log(`✅ Found ${games.length} games from Odds API`);
           }
         } catch (error) {
-          console.warn(`❌ Odds API fetch failed for ${sportKey}:`, error.message);
+          if (!(error instanceof TimeoutError)) {
+             console.warn(`❌ Odds API fetch CRITICAL error for ${sportKey}:`, error.message);
+             throw error; // CRITICAL: Re-throw to fail the whole service if the provider is completely down.
+          }
+          console.warn(`❌ Odds API fetch TIMEOUT for ${sportKey}.`);
         }
       }
 
       if (games.length === 0) {
+        // Propagate critical errors from databaseService.getUpcomingGames
         try {
-          const dbGames = await databaseService.getUpcomingGames(sportKey, hoursAhead);
+          const dbGames = await withTimeout(databaseService.getUpcomingGames(sportKey, hoursAhead), 8000, `DBGamesFetch_${sportKey}`);
           if (dbGames && dbGames.length > 0) {
             games = dbGames;
             source = 'database';
             console.log(`✅ Found ${games.length} games from database`);
           }
         } catch (error) {
-          console.warn(`❌ Database fetch failed for ${sportKey}:`, error.message);
+           if (!(error instanceof TimeoutError)) {
+             console.warn(`❌ Database fetch CRITICAL error for ${sportKey}:`, error.message);
+             throw error; // CRITICAL: Re-throw to fail the whole service if DB is completely down.
+           }
+           console.warn(`❌ Database fetch TIMEOUT for ${sportKey}.`);
         }
       }
 
@@ -134,6 +229,7 @@ class GamesService {
 
       if (useCache && enhancedGames.length > 0) {
         const redis = await getRedisClient();
+        // If Redis is not available, this block is skipped, which is fine.
         if (redis) {
           await redis.setex(cacheKey, CACHE_TTL.GAMES_DATA, JSON.stringify(enhancedGames));
         }
@@ -142,8 +238,12 @@ class GamesService {
       return enhancedGames;
 
     } catch (error) {
-      console.error(`❌ Games fetch failed for ${sportKey}:`, error);
-      return [];
+      console.error(`❌ Games fetch CRITICAL failure for ${sportKey}:`, error);
+      // Re-throw all critical errors to fail the HealthService check
+      if (!(error instanceof TimeoutError)) {
+        throw error;
+      }
+      return []; // Return empty array on timeout
     }
   }
 
@@ -151,24 +251,33 @@ class GamesService {
     console.log(`🔍 Getting VERIFIED real games for ${sportKey} from games service...`);
     
     try {
+      // Apply withTimeout here to ensure the API/DB calls don't hang the check
       let realGames = [];
       
       try {
-        realGames = await oddsService.getSportOdds(sportKey, { 
+        realGames = await withTimeout(oddsService.getSportOdds(sportKey, { 
           useCache: false,
           hoursAhead: hours 
-        });
+        }), 6000, 'VerifiedOddsFetch');
         console.log(`✅ Odds API: ${realGames?.length || 0} real games`);
       } catch (error) {
+        if (!(error instanceof TimeoutError)) {
+          console.warn('❌ Odds API failed for verified games, re-throwing for health check...');
+          throw error;
+        }
         console.warn('❌ Odds API failed for verified games, trying database...');
       }
       
       if (!realGames || realGames.length === 0) {
         try {
-          realGames = await databaseService.getVerifiedRealGames(sportKey, hours);
+          realGames = await withTimeout(databaseService.getVerifiedRealGames(sportKey, hours), 6000, 'VerifiedDBFetch');
           console.log(`✅ Database: ${realGames?.length || 0} verified games`);
         } catch (error) {
-          console.warn('❌ Database verified games failed');
+           if (!(error instanceof TimeoutError)) {
+             console.warn('❌ Database verified games failed, re-throwing for health check...');
+             throw error;
+           }
+           console.warn('❌ Database verified games TIMEOUT.');
         }
       }
       
@@ -188,7 +297,11 @@ class GamesService {
       return upcomingGames;
       
     } catch (error) {
-      console.error('❌ Verified real games fetch failed:', error);
+      console.error('❌ Verified real games fetch CRITICAL failure:', error);
+      // Re-throw all critical errors to fail the HealthService check
+      if (!(error instanceof TimeoutError)) {
+        throw error;
+      }
       return [];
     }
   }
@@ -215,12 +328,14 @@ class GamesService {
       return liveGames;
 
     } catch (error) {
+      // getGamesForSport throws critical errors, so we re-throw if it wasn't a timeout
       console.error(`❌ Live games fetch failed for ${sportKey}:`, error);
-      return [];
+      throw error; 
     }
   }
 
   async searchGames(query, sportKey = null) {
+    // NOTE: This function's inner logic is fine, as getGamesForSport now handles error propagation.
     try {
       console.log(`🔍 Searching games for: "${query}"${sportKey ? ` in ${sportKey}` : ''}`);
       
@@ -252,7 +367,7 @@ class GamesService {
 
     } catch (error) {
       console.error('❌ Game search failed:', error);
-      return [];
+      throw error;
     }
   }
 
@@ -284,20 +399,11 @@ class GamesService {
       }
 
       try {
-        const testConnection = await databaseService.testConnection();
-        freshnessInfo.sources.database = {
-          status: testConnection ? 'active' : 'inactive',
-          last_checked: now.toISOString()
-        };
-        if (!testConnection) {
-          freshnessInfo.overall.status = 'degraded';
-        }
+        const testConnection = await withTimeout(databaseService.testConnection(), 3000, 'GamesDBTest');
+        freshnessInfo.sources.database = testConnection ? 'active' : 'inactive';
+        if (!testConnection) freshnessInfo.overall.status = 'degraded';
       } catch (error) {
-        freshnessInfo.sources.database = {
-          status: 'error',
-          last_error: error.message,
-          last_attempt: now.toISOString()
-        };
+        freshnessInfo.sources.database = 'error';
         freshnessInfo.overall.status = 'degraded';
       }
 
@@ -315,11 +421,7 @@ class GamesService {
 
     } catch (error) {
       console.error('❌ Data freshness check failed:', error);
-      return {
-        overall: { status: 'unknown', last_checked: new Date().toISOString() },
-        sources: {},
-        error: error.message
-      };
+      throw error;
     }
   }
 
@@ -432,7 +534,7 @@ class GamesService {
     }
 
     try {
-      const testConnection = await databaseService.testConnection();
+      const testConnection = await withTimeout(databaseService.testConnection(), 3000, 'GamesDBTest');
       status.sources.database = testConnection ? 'active' : 'inactive';
       if (!testConnection) status.status = 'degraded';
     } catch (error) {
