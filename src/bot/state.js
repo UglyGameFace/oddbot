@@ -18,7 +18,7 @@ const safeParse = (s, f) => { try { return JSON.parse(s); } catch (e) { sentrySe
 const setWithTTL = async (c, k, v, ttl) => {
   if (!c) return;
   if (!ttl) return c.set(k, v);
-  // FIX: Removed the duplicate 'v' argument.
+  // FIX APPLIED: Removed the duplicate 'v' argument to match SET key value EX seconds syntax.
   return c.set(k, v, 'EX', ttl); 
 };
 
