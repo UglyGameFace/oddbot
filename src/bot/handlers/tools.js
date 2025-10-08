@@ -205,15 +205,19 @@ async function handleApiStatus(bot, chatId, messageId) {
   try {
     const oddsUrl = `https://api.the-odds-api.com/v4/sports?apiKey=${env.THE_ODDS_API_KEY}`;
     const response = await axios.get(oddsUrl, { timeout: 5000 });
+    // A successful response to this endpoint is 200. Anything else is an issue.
     if (response.status === 200) {
         statuses['The Odds API'] = '✅ Online';
     } else {
         statuses['The Odds API'] = `❌ Error (${response.status})`;
     }
   } catch (e) {
+    // Axios throws for non-2xx responses, so we catch them here.
     if (e.response) {
+      // e.g., 401 Unauthorized (bad key), 429 (rate limit)
       statuses['The Odds API'] = `❌ Error (${e.response.status})`;
     } else {
+      // e.g., timeout, DNS error
       statuses['The Odds API'] = '❌ Offline (Network Error)';
     }
   }
