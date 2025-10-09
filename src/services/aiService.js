@@ -12,8 +12,8 @@ const WEB_TIMEOUT_MS = 30000;
 
 const GEMINI_MODELS = { 
   gemini: "gemini-2.5-flash",
-  gemini_fallback: "gemini-2.5-pro", 
-  gemini_legacy: "gemini-2.0-pro",
+  gemini_fallback: "gemini-1.5-pro", 
+  gemini_legacy: "gemini-1.0-pro",
   perplexity: "sonar-pro" 
 };
 
@@ -48,20 +48,15 @@ function extractJSON(text = '') {
     return null;
 }
 
-// CRITICAL FIX: Skip database entirely when API keys are expired
+// In your aiService.js - update buildEliteScheduleContext function:
+
 async function buildEliteScheduleContext(sportKey, hours) {
     try {
-        // Only try to get real games if we have valid API keys
-        const { THE_ODDS_API_KEY } = env;
-        if (!THE_ODDS_API_KEY || THE_ODDS_API_KEY.includes('expired') || THE_ODDS_API_KEY.length < 10) {
-            console.log('🎯 Using elite analyst mode - skipping API validation');
-            return `\n\n🎯 ELITE ANALYST MODE: Generating ${sportKey.toUpperCase()} parlay using fundamental analysis and matchup expertise.\n\nNOTE: Real-time validation skipped due to system maintenance. Relying on elite analytical framework.`;
-        }
-
-        // If we have valid API keys, try to get real schedule
+        // ALWAYS use web sources first - they work without API keys
         const realGames = await gamesService.getVerifiedRealGames(sportKey, hours);
+        
         if (realGames.length === 0) {
-            return `\n\n🎯 ELITE ANALYST MODE: No real-time ${sportKey} data available. Using fundamental analysis of typical matchups and team quality.`;
+            return `\n\n🎯 ELITE ANALYST MODE: No ${sportKey.toUpperCase()} games found in immediate schedule. Using fundamental analysis of typical matchups and team quality.`;
         }
 
         const gameList = realGames.slice(0, 15).map((game, index) => {
@@ -72,40 +67,38 @@ async function buildEliteScheduleContext(sportKey, hours) {
                 hour: '2-digit', 
                 minute: '2-digit' 
             });
-            return `${index + 1}. ${game.away_team} @ ${game.home_team} - ${timeStr}`;
+            return `${index + 1}. ${game.away_team} @ ${game.home_team} - ${timeStr} (Source: ${game.source || 'Verified'})`;
         }).join('\n');
 
-        return `\n\n📅 VERIFIED SCHEDULE (Next ${hours} hours):\n${gameList}\n\nBase your analysis on these real matchups.`;
+        return `\n\n📅 VERIFIED SCHEDULE FROM OFFICIAL SOURCES (Next ${hours} hours):\n${gameList}\n\n**BASE YOUR PARLAY ONLY ON THESE VERIFIED GAMES**`;
 
     } catch (error) {
         console.warn(`⚠️ Schedule context failed for ${sportKey}, using elite mode:`, error.message);
-        return `\n\n🎯 ELITE ANALYST MODE: System data temporarily limited. Generating parlay using fundamental sports analysis and matchup expertise.`;
+        return `\n\n🎯 ELITE ANALYST MODE: Generating ${sportKey.toUpperCase()} parlay using fundamental sports analysis and matchup expertise.`;
     }
 }
 
-// CRITICAL FIX: Skip validation when API keys are expired
+// Update eliteGameValidation to trust web sources:
 async function eliteGameValidation(sportKey, proposedLegs, hours) {
-    const { THE_ODDS_API_KEY } = env;
-    
-    // If API keys are expired, skip validation entirely
-    if (!THE_ODDS_API_KEY || THE_ODDS_API_KEY.includes('expired') || THE_ODDS_API_KEY.length < 10) {
-        console.log('🎯 Elite mode: Skipping game validation (API keys expired)');
-        return proposedLegs || [];
-    }
-
-    // Only validate if we have working API keys
     try {
         const realGames = await gamesService.getVerifiedRealGames(sportKey, hours);
-        if (realGames.length === 0) return proposedLegs || [];
+        if (realGames.length === 0) {
+            console.log('🎯 Elite mode: No web games found, using AI proposals');
+            return proposedLegs || [];
+        }
 
         const realGameMap = new Map();
         realGames.forEach(game => {
-            const key = `${(game.away_team || '').toLowerCase().trim()} @ ${(game.home_team || '').toLowerCase().trim()}`;
-            realGameMap.set(key, game);
+            // Create multiple keys for fuzzy matching
+            const exactKey = `${(game.away_team || '').toLowerCase().trim()} @ ${(game.home_team || '').toLowerCase().trim()}`;
+            const simpleKey = `${(game.away_team || '').toLowerCase().trim().replace(/\s+/g, ' ')} @ ${(game.home_team || '').toLowerCase().trim().replace(/\s+/g, ' ')}`;
+            
+            realGameMap.set(exactKey, game);
+            realGameMap.set(simpleKey, game);
         });
         
         return (proposedLegs || []).filter(leg => {
-            const gameKey = (leg.event || '').toLowerCase().trim();
+            const gameKey = (leg.event || '').toLowerCase().trim().replace(/\s+/g, ' ');
             return realGameMap.has(gameKey);
         });
     } catch (error) {
