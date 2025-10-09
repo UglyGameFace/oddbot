@@ -565,6 +565,42 @@ class QuantitativeService {
       };
     }
   }
+  
+  /**
+   * Placeholder for Monte Carlo simulation
+   * @param {Leg[]} legs
+   * @param {number} simulations
+   * @returns {Promise<object>}
+   */
+  async runMonteCarloSimulation(legs, simulations = 10000) {
+    // This is a placeholder for a more complex simulation.
+    // In a real implementation, you would:
+    // 1. Get the calibrated probability for each leg.
+    // 2. Run a loop for the number of simulations.
+    // 3. In each simulation, generate a random number for each leg and see if it "wins" based on its probability.
+    // 4. Count the number of times the entire parlay "wins".
+    // 5. Return the win percentage and other stats.
+    return {
+      message: "Monte Carlo simulation is not fully implemented yet.",
+      simulations,
+      estimatedWinProbability: 0,
+    };
+  }
+
+  /**
+   * Placeholder for processing user feedback
+   * @param {object} feedback
+   * @returns {Promise<boolean>}
+   */
+  async processFeedback(feedback) {
+    // This is a placeholder for a feedback mechanism.
+    // In a real implementation, you would:
+    // 1. Store the feedback in your database, linked to the parlay.
+    // 2. Use this feedback to fine-tune your prompts and models.
+    console.log("Feedback received:", feedback);
+    return true;
+  }
+
 
   /**
    * Enhanced evaluation with real game validation
@@ -696,78 +732,4 @@ class QuantitativeService {
     }
   }
 
-  generateSummary(calibratedEV, riskAssessment, recommendations, validationMetrics = null) {
-    const primaryRec = recommendations[0];
-    
-    let verdict = calibratedEV > 0 ? 'CONSIDER_BET' : 'AVOID_BET';
-    let confidence = riskAssessment.overallRisk === 'LOW' ? 'HIGH' : 'MEDIUM';
-    
-    // Adjust based on validation
-    if (validationMetrics && validationMetrics.validation_rate < 0.5) {
-      verdict = 'AVOID_BET';
-      confidence = 'LOW';
-    }
-    
-    return {
-      verdict,
-      confidence,
-      keyMetric: `Calibrated EV: ${calibratedEV.toFixed(2)}%`,
-      primaryRecommendation: primaryRec?.action || 'No specific recommendation',
-      riskLevel: riskAssessment.overallRisk,
-      validationStatus: validationMetrics?.data_quality || 'UNKNOWN'
-    };
-  }
-
-  calculateOverallRobustness(breakEvenAnalysis) {
-    const avgMargin = breakEvenAnalysis.reduce((sum, leg) => sum + leg.marginForError, 0) / breakEvenAnalysis.length;
-    if (avgMargin > 0.15) return 'HIGH';
-    if (avgMargin > 0.10) return 'MEDIUM';
-    if (avgMargin > 0.05) return 'LOW';
-    return 'VERY_LOW';
-  }
-
-  /**
-   * Quick evaluation for simple use cases
-   */
-  async quickEvaluate(legs, parlayDecimalOdds) {
-    try {
-      const fullAnalysis = await this.evaluateParlay(legs, parlayDecimalOdds);
-      
-      if (fullAnalysis.error) {
-        return fullAnalysis;
-      }
-
-      // Return simplified version
-      return {
-        verdict: fullAnalysis.summary.verdict,
-        confidence: fullAnalysis.summary.confidence,
-        calibratedEV: fullAnalysis.calibrated.evPercentage,
-        jointProbability: fullAnalysis.calibrated.jointProbability,
-        riskLevel: fullAnalysis.riskAssessment.overallRisk,
-        recommendedStake: fullAnalysis.staking.recommendedStake,
-        primaryRecommendation: fullAnalysis.summary.primaryRecommendation
-      };
-    } catch (error) {
-      console.error('❌ Quick evaluation failed:', error);
-      return {
-        error: `Quick evaluation failed: ${error.message}`,
-        verdict: 'ERROR',
-        confidence: 'LOW'
-      };
-    }
-  }
-}
-
-// Create and export singleton instance
-const quantitativeServiceInstance = new QuantitativeService();
-
-export default quantitativeServiceInstance;
-export { 
-  QuantitativeService,
-  ProbabilityCalculator,
-  LegProbabilityResolver,
-  RiskAssessmentEngine,
-  CalibrationEngine,
-  RecommendationEngine,
-  OptimalStructureAnalyzer
-};
+  generateSummary(calibratedEV, riskAssessment, recommendations
