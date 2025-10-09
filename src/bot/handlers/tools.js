@@ -1,4 +1,4 @@
-// src/bot/handlers/tools.js - CORRECTED AND VERIFIED
+// src/bot/handlers/tools.js - ENHANCED API STATUS CHECK
 
 import { getRedisClient } from '../../services/redisService.js';
 import databaseService from '../../services/databaseService.js';
@@ -198,31 +198,141 @@ async function handleApiStatus(bot, chatId, messageId) {
     }
   }
 
-  // FIX: Smarter check for The Odds API
+  // ENHANCED: Better check for The Odds API with actual data validation
   try {
     const oddsUrl = `https://api.the-odds-api.com/v4/sports?apiKey=${env.THE_ODDS_API_KEY}`;
     const response = await axios.get(oddsUrl, { timeout: 5000 });
-    // A successful response to this endpoint is 200. Anything else is an issue.
-    if (response.status === 200) {
-        statuses['The Odds API'] = '✅ Online';
+    
+    // More thorough validation
+    if (response.status === 200 && Array.isArray(response.data) && response.data.length > 0) {
+        statuses['The Odds API'] = '✅ Online (Data Available)';
+    } else if (response.status === 200) {
+        statuses['The Odds API'] = '⚠️ Online (No Sports Data)';
     } else {
         statuses['The Odds API'] = `❌ Error (${response.status})`;
     }
   } catch (e) {
-    // Axios throws for non-2xx responses, so we catch them here.
     if (e.response) {
-      // e.g., 401 Unauthorized (bad key), 429 (rate limit)
-      statuses['The Odds API'] = `❌ Error (${e.response.status})`;
+      if (e.response.status === 401) {
+        statuses['The Odds API'] = '❌ Invalid API Key (401)';
+      } else if (e.response.status === 429) {
+        statuses['The Odds API'] = '❌ Rate Limited (429)';
+      } else {
+        statuses['The Odds API'] = `❌ Error (${e.response.status})`;
+      }
     } else {
-      // e.g., timeout, DNS error
       statuses['The Odds API'] = '❌ Offline (Network Error)';
     }
   }
 
-  let statusText = '*📡 API Status Report*\n\n';
-  for (const [api, status] of Object.entries(statuses)) {
-    statusText += `• *${api}:* ${status}\n`;
+  // NEW: Check Sportradar API
+  try {
+    // Use a simple endpoint that should work with any valid Sportradar key
+    const sportradarUrl = `https://api.sportradar.com/nba/trial/v8/en/league/injuries.json?api_key=${env.SPORTRADAR_API_KEY}`;
+    const sportradarRes = await axios.get(sportradarUrl, { timeout: 5000 });
+    
+    if (sportradarRes.status === 200) {
+        statuses['Sportradar API'] = '✅ Online';
+    } else {
+        statuses['Sportradar API'] = `❌ Error (${sportradarRes.status})`;
+    }
+  } catch (e) {
+    if (e.response) {
+      if (e.response.status === 401 || e.response.status === 403) {
+        statuses['Sportradar API'] = '❌ Invalid API Key (401/403)';
+      } else if (e.response.status === 429) {
+        statuses['Sportradar API'] = '❌ Rate Limited (429)';
+      } else {
+        statuses['Sportradar API'] = `❌ Error (${e.response.status})`;
+      }
+    } else {
+      statuses['Sportradar API'] = '❌ Offline (Network Error)';
+    }
   }
+
+  // NEW: Check API-Sports (if configured)
+  if (env.APISPORTS_API_KEY) {
+    try {
+      const apiSportsUrl = 'https://v1.basketball.api-sports.io/status';
+      const apiSportsRes = await axios.get(apiSportsUrl, { 
+        headers: { 'x-apisports-key': env.APISPORTS_API_KEY },
+        timeout: 5000 
+      });
+      
+      if (apiSportsRes.status === 200) {
+        const data = apiSportsRes.data;
+        if (data.response && data.response.requests && data.response.requests.current < data.response.requests.limit_day) {
+          statuses['API-Sports'] = `✅ Online (${data.response.requests.current}/${data.response.requests.limit_day} used)`;
+        } else {
+          statuses['API-Sports'] = '⚠️ Online (Rate Limited)';
+        }
+      } else {
+        statuses['API-Sports'] = `❌ Error (${apiSportsRes.status})`;
+      }
+    } catch (e) {
+      if (e.response) {
+        if (e.response.status === 401) {
+          statuses['API-Sports'] = '❌ Invalid API Key (401)';
+        } else if (e.response.status === 429) {
+          statuses['API-Sports'] = '❌ Rate Limited (429)';
+        } else {
+          statuses['API-Sports'] = `❌ Error (${e.response.status})`;
+        }
+      } else {
+        statuses['API-Sports'] = '❌ Offline (Network Error)';
+      }
+    }
+  } else {
+    statuses['API-Sports'] = '🔴 Not Configured';
+  }
+
+  // NEW: Check Supabase
+  try {
+    const stats = await databaseService.getDatabaseStats();
+    if (stats && stats.status === 'healthy') {
+      statuses['Supabase Database'] = `✅ Online (${stats.total_games || 0} games)`;
+    } else {
+      statuses['Supabase Database'] = '❌ Unhealthy';
+    }
+  } catch (e) {
+    statuses['Supabase Database'] = `❌ Error: ${e.message}`;
+  }
+
+  // NEW: Check Redis
+  try {
+    const redis = await getRedisClient();
+    if (redis) {
+      const pingResult = await redis.ping();
+      if (pingResult === 'PONG') {
+        const dbsize = await redis.dbsize();
+        statuses['Redis Cache'] = `✅ Online (${dbsize} keys)`;
+      } else {
+        statuses['Redis Cache'] = '❌ Ping Failed';
+      }
+    } else {
+      statuses['Redis Cache'] = '❌ Not Connected';
+    }
+  } catch (e) {
+    statuses['Redis Cache'] = `❌ Error: ${e.message}`;
+  }
+
+  let statusText = '*📡 COMPREHENSIVE API STATUS REPORT*\n\n';
+  
+  // Group services by category
+  statusText += '*🤖 AI Services:*\n';
+  ['Google Gemini', 'Perplexity AI'].forEach(api => {
+    statusText += `• ${api}: ${statuses[api]}\n`;
+  });
+  
+  statusText += '\n*📊 Odds Data Providers:*\n';
+  ['The Odds API', 'Sportradar API', 'API-Sports'].forEach(api => {
+    statusText += `• ${api}: ${statuses[api]}\n`;
+  });
+  
+  statusText += '\n*💾 Infrastructure:*\n';
+  ['Supabase Database', 'Redis Cache'].forEach(api => {
+    statusText += `• ${api}: ${statuses[api]}\n`;
+  });
   
   await bot.editMessageText(statusText, {
     chat_id: chatId,
