@@ -1,4 +1,3 @@
-efault new StateManager();
 // src/bot/stateManager.js
 import { getRedisClient } from '../services/redisService.js';
 import { withTimeout, TimeoutError } from '../utils/asyncUtils.js';
