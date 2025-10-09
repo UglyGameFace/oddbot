@@ -1,5 +1,5 @@
-// src/services/redisService.js - COMPLETE REWRITE
-import { createClient } from 'redis';
+// src/services/redisService.js - CORRECTED FOR IOREDIS & PRESERVING ORIGINAL STRUCTURE
+import IORedis from 'ioredis';
 import env from '../config/env.js';
 import { sentryService } from './sentryService.js';
 
@@ -17,80 +17,73 @@ class RedisService {
   }
 
   async connect() {
-    // FIX: If already connecting, return the existing promise to avoid race conditions.
+    // If already connecting, return the existing promise to avoid race conditions.
     if (this.isConnecting) {
       console.log('🔄 Redis connection attempt already in progress...');
       return this.connectionPromise;
     }
 
+    if (this.client && this.client.status === 'ready') {
+        return Promise.resolve(this.client);
+    }
+
     this.isConnecting = true;
-    this.connectionPromise = new Promise(async (resolve, reject) => {
-      console.log('🔄 Attempting to connect to Redis...');
+    this.connectionPromise = new Promise((resolve) => {
+      console.log('🔄 Attempting to connect to Redis with ioredis...');
       
-      this.client = createClient({
-        url: env.REDIS_URL,
-        socket: {
-          connectTimeout: 8000,
-          reconnectStrategy: (retries) => {
-            // FIX: Implement exponential backoff for reconnection to avoid spamming.
-            if (retries > 10) {
-              console.error('❌ Redis: Max connection retries reached. Giving up.');
-              return new Error('Max retries reached');
-            }
-            // Wait 250ms, 500ms, 1s, 2s, 4s, etc.
-            const delay = Math.min(retries * 250, 5000); 
-            console.log(`🔌 Redis: Reconnecting in ${delay}ms (attempt ${retries + 1})`);
-            return delay;
-          }
-        }
+      const newClient = new IORedis(env.REDIS_URL, {
+        connectTimeout: 8000,
+        // ioredis has a robust built-in exponential backoff retry strategy
+        maxRetriesPerRequest: 5, 
+        lazyConnect: true // Explicitly connect
       });
 
-      this.client.on('error', (error) => {
+      newClient.on('error', (error) => {
         console.error('❌ Redis Client Error:', error.message);
-        // FIX: Capture critical Redis errors (e.g., auth failure) in Sentry
-        // but avoid capturing routine connection errors which are handled by reconnectStrategy.
-        if (error.code === 'ECONNREFUSED' || error.message.includes('AUTH')) {
+        if (error.code === 'ECONNREFUSED') {
           sentryService.captureError(error, { component: 'redis_service', operation: 'connection_error' });
         }
         this.connectionEstablished = false; // Mark as disconnected
       });
 
-      this.client.on('connect', () => console.log('🔄 Redis: connecting...'));
-      this.client.on('ready', () => {
+      newClient.on('connect', () => console.log('🔄 Redis: connecting...'));
+      
+      newClient.on('ready', () => {
         if (!this.connectionEstablished) {
           console.log('✅ Redis client connected and ready.');
           this.connectionEstablished = true;
+          this.client = newClient; // Assign client only when ready
           this.isConnecting = false;
           resolve(this.client);
         }
       });
-      this.client.on('reconnecting', () => console.log('🔄 Redis: reconnecting...'));
-      this.client.on('end', () => {
+
+      newClient.on('reconnecting', () => console.log('🔄 Redis: reconnecting...'));
+      
+      newClient.on('end', () => {
         console.warn('🟡 Redis connection closed.');
         this.connectionEstablished = false;
+        this.client = null; // Important to nullify on disconnection
       });
 
-      try {
-        await this.client.connect();
-      } catch (error) {
-        console.error('❌ Failed to establish initial Redis connection:', error.message);
-        this.isConnecting = false;
-        this.connectionEstablished = false;
-        // Do not resolve or reject, let the reconnectStrategy handle it.
-      }
+      newClient.connect().catch(err => {
+          console.error('❌ Failed to establish initial Redis connection:', err.message);
+          this.isConnecting = false;
+          // Let the robust retry strategy handle it from here.
+      });
     });
 
     return this.connectionPromise;
   }
 
   /**
-   * FIX: Centralized client retrieval with validation.
+   * Centralized client retrieval with validation.
    * Ensures the client is connected and ready before use.
    */
   async getClient() {
-    if (!this.client || !this.client.isOpen) {
+    if (!this.client || this.client.status !== 'ready') {
       if (env.REDIS_URL) {
-        await this.connect();
+        return this.connect(); // This will return the connection promise
       } else {
         return null; // Redis is disabled
       }
@@ -124,7 +117,7 @@ class RedisService {
    * Gracefully disconnect from Redis
    */
   async disconnect() {
-    if (this.client && this.client.isOpen) {
+    if (this.client) {
       try {
         await this.client.quit();
         console.log('✅ Redis client disconnected gracefully.');
@@ -154,8 +147,10 @@ class RedisService {
       const parsedInfo = {};
       info.split('\r\n').forEach(line => {
           if (line && !line.startsWith('#')) {
-              const parts = line.split(':');
-              parsedInfo[parts[0]] = parts[1];
+              const [key, value] = line.split(':');
+              if (key && value) {
+                parsedInfo[key] = value;
+              }
           }
       });
       
@@ -163,7 +158,7 @@ class RedisService {
         status: this.connectionEstablished ? 'connected' : 'disconnected',
         uptime_in_seconds: parsedInfo.uptime_in_seconds,
         used_memory_human: parsedInfo.used_memory_human,
-        total_keys: (await client.dbSize()),
+        total_keys: (await client.dbsize()),
         connected_clients: parsedInfo.connected_clients,
         redis_version: parsedInfo.redis_version,
         last_updated: new Date().toISOString()
@@ -178,4 +173,7 @@ class RedisService {
   }
 }
 
-export default new RedisService();
+const redisServiceInstance = new RedisService();
+// FIX: Export the instance directly and a getter function for compatibility
+export default redisServiceInstance;
+export const getRedisClient = () => redisServiceInstance.getClient();
