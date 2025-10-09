@@ -1,5 +1,4 @@
-// src/bot/handlers/tools.js - ENHANCED DATABASE STATS HANDLING
-
+// src/bot/handlers/tools.js - COMPLETE FIXED VERSION
 import { getRedisClient } from '../../services/redisService.js';
 import databaseService from '../../services/databaseService.js';
 import rateLimitService from '../../services/rateLimitService.js';
@@ -198,12 +197,11 @@ async function handleApiStatus(bot, chatId, messageId) {
     }
   }
 
-  // ENHANCED: Better check for The Odds API with actual data validation
+  // Check The Odds API
   try {
     const oddsUrl = `https://api.the-odds-api.com/v4/sports?apiKey=${env.THE_ODDS_API_KEY}`;
     const response = await axios.get(oddsUrl, { timeout: 5000 });
     
-    // More thorough validation
     if (response.status === 200 && Array.isArray(response.data) && response.data.length > 0) {
         statuses['The Odds API'] = '✅ Online (Data Available)';
     } else if (response.status === 200) {
@@ -225,9 +223,8 @@ async function handleApiStatus(bot, chatId, messageId) {
     }
   }
 
-  // NEW: Check Sportradar API
+  // Check Sportradar API
   try {
-    // Use a simple endpoint that should work with any valid Sportradar key
     const sportradarUrl = `https://api.sportradar.com/nba/trial/v8/en/league/injuries.json?api_key=${env.SPORTRADAR_API_KEY}`;
     const sportradarRes = await axios.get(sportradarUrl, { timeout: 5000 });
     
@@ -250,7 +247,7 @@ async function handleApiStatus(bot, chatId, messageId) {
     }
   }
 
-  // NEW: Check API-Sports (if configured)
+  // Check API-Sports
   if (env.APISPORTS_API_KEY) {
     try {
       const apiSportsUrl = 'https://v1.basketball.api-sports.io/status';
@@ -286,7 +283,7 @@ async function handleApiStatus(bot, chatId, messageId) {
     statuses['API-Sports'] = '🔴 Not Configured';
   }
 
-  // NEW: Check Supabase
+  // Check Supabase
   try {
     const stats = await databaseService.getDatabaseStats();
     if (stats && stats.status === 'healthy') {
@@ -298,7 +295,7 @@ async function handleApiStatus(bot, chatId, messageId) {
     statuses['Supabase Database'] = `❌ Error: ${e.message}`;
   }
 
-  // NEW: Check Redis
+  // Check Redis
   try {
     const redis = await getRedisClient();
     if (redis) {
@@ -318,7 +315,6 @@ async function handleApiStatus(bot, chatId, messageId) {
 
   let statusText = '*📡 COMPREHENSIVE API STATUS REPORT*\n\n';
   
-  // Group services by category
   statusText += '*🤖 AI Services:*\n';
   ['Google Gemini', 'Perplexity AI'].forEach(api => {
     statusText += `• ${api}: ${statuses[api]}\n`;
@@ -342,7 +338,6 @@ async function handleApiStatus(bot, chatId, messageId) {
   });
 }
 
-// FIXED: Enhanced database stats with better error handling
 async function handleDbStats(bot, chatId, messageId) {
     await bot.editMessageText('📊 Fetching database and API quota statistics...', { 
         chat_id: chatId, 
@@ -352,7 +347,6 @@ async function handleDbStats(bot, chatId, messageId) {
     try {
         let statsText = '';
         
-        // Database Game Counts - with error handling
         try {
             const stats = await databaseService.getSportGameCounts();
             statsText = '📊 *Database Game Counts*\n\n';
@@ -362,9 +356,8 @@ async function handleDbStats(bot, chatId, messageId) {
                 
                 stats.forEach(stat => {
                     const title = stat.sport_title || stat.sport_key || 'Unknown/Other';
-                    // FIX: Handle undefined game_count properly
-                    const count = stat.game_count !== undefined && stat.game_count !== null 
-                        ? stat.game_count 
+                    const count = stat.total_games !== undefined && stat.total_games !== null 
+                        ? stat.total_games 
                         : 0;
                     
                     if (count > 0) hasValidData = true;
@@ -385,7 +378,6 @@ async function handleDbStats(bot, chatId, messageId) {
             statsText += `_Error: ${dbError.message}_\n\n`;
         }
 
-        // API Quota Status - with enhanced error handling
         statsText += '\n📈 *API Quota Status (Live)*\n';
         statsText += '_Data reflects the last API call made by a worker._\n\n';
         
@@ -412,7 +404,6 @@ async function handleDbStats(bot, chatId, messageId) {
                     statsText += `  - Last Updated: ${lastUpdated}\n`;
                 } else {
                     statsText += '  - _No quota data recorded yet._\n';
-                    // Provide guidance based on provider
                     if (provider === 'theodds' && !env.THE_ODDS_API_KEY) {
                         statsText += '  - _THE_ODDS_API_KEY not configured_\n';
                     } else if (provider === 'sportradar' && !env.SPORTRADAR_API_KEY) {
@@ -432,7 +423,6 @@ async function handleDbStats(bot, chatId, messageId) {
             }
         }
 
-        // Add troubleshooting guidance if no data
         if (!hasQuotaData) {
             statsText += '\n🔧 *Troubleshooting:*\n';
             statsText += '• Use "Trigger Odds Ingestion" to populate data\n';
