@@ -11,10 +11,10 @@ const TZ = env.TIMEZONE || 'America/New_York';
 const WEB_TIMEOUT_MS = 30000;
 
 const GEMINI_MODELS = { 
-  gemini: "gemini-1.5-flash",
-  gemini_fallback: "gemini-1.5-pro", 
-  gemini_legacy: "gemini-1.0-pro",
-  perplexity: "sonar-large-32k-online" 
+  gemini: "gemini-2.5-flash",
+  gemini_fallback: "gemini-2.5-pro", 
+  gemini_legacy: "gemini-2.0-pro",
+  perplexity: "sonar-pro" 
 };
 
 function americanToDecimal(a) {
