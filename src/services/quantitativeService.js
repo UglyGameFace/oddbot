@@ -732,4 +732,78 @@ class QuantitativeService {
     }
   }
 
-  generateSummary(calibratedEV, riskAssessment, recommendations
+  generateSummary(calibratedEV, riskAssessment, recommendations, validationMetrics = null) {
+    const primaryRec = recommendations[0];
+    
+    let verdict = calibratedEV > 0 ? 'CONSIDER_BET' : 'AVOID_BET';
+    let confidence = riskAssessment.overallRisk === 'LOW' ? 'HIGH' : 'MEDIUM';
+    
+    // Adjust based on validation
+    if (validationMetrics && validationMetrics.validation_rate < 0.5) {
+      verdict = 'AVOID_BET';
+      confidence = 'LOW';
+    }
+    
+    return {
+      verdict,
+      confidence,
+      keyMetric: `Calibrated EV: ${calibratedEV.toFixed(2)}%`,
+      primaryRecommendation: primaryRec?.action || 'No specific recommendation',
+      riskLevel: riskAssessment.overallRisk,
+      validationStatus: validationMetrics?.data_quality || 'UNKNOWN'
+    };
+  }
+
+  calculateOverallRobustness(breakEvenAnalysis) {
+    const avgMargin = breakEvenAnalysis.reduce((sum, leg) => sum + leg.marginForError, 0) / breakEvenAnalysis.length;
+    if (avgMargin > 0.15) return 'HIGH';
+    if (avgMargin > 0.10) return 'MEDIUM';
+    if (avgMargin > 0.05) return 'LOW';
+    return 'VERY_LOW';
+  }
+
+  /**
+   * Quick evaluation for simple use cases
+   */
+  async quickEvaluate(legs, parlayDecimalOdds) {
+    try {
+      const fullAnalysis = await this.evaluateParlay(legs, parlayDecimalOdds);
+      
+      if (fullAnalysis.error) {
+        return fullAnalysis;
+      }
+
+      // Return simplified version
+      return {
+        verdict: fullAnalysis.summary.verdict,
+        confidence: fullAnalysis.summary.confidence,
+        calibratedEV: fullAnalysis.calibrated.evPercentage,
+        jointProbability: fullAnalysis.calibrated.jointProbability,
+        riskLevel: fullAnalysis.riskAssessment.overallRisk,
+        recommendedStake: fullAnalysis.staking.recommendedStake,
+        primaryRecommendation: fullAnalysis.summary.primaryRecommendation
+      };
+    } catch (error) {
+      console.error('❌ Quick evaluation failed:', error);
+      return {
+        error: `Quick evaluation failed: ${error.message}`,
+        verdict: 'ERROR',
+        confidence: 'LOW'
+      };
+    }
+  }
+}
+
+// Create and export singleton instance
+const quantitativeServiceInstance = new QuantitativeService();
+
+export default quantitativeServiceInstance;
+export { 
+  QuantitativeService,
+  ProbabilityCalculator,
+  LegProbabilityResolver,
+  RiskAssessmentEngine,
+  CalibrationEngine,
+  RecommendationEngine,
+  OptimalStructureAnalyzer
+};
