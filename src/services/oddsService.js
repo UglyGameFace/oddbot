@@ -1,7 +1,6 @@
 // src/services/oddsService.js - ABSOLUTE FINAL FIXED VERSION
-
 import env from '../config/env.js';
-import { getRedisClient } from './redisService.js'; // FIX: Use named import
+import redisService from './redisService.js'; // FIX: Import the service instance
 import { sentryService } from './sentryService.js';
 import { withTimeout, TimeoutError } from '../utils/asyncUtils.js'; 
 import makeCache from './cacheService.js';
@@ -94,9 +93,9 @@ class OddsService {
 
   async _getCache() {
     if (!this.cache) {
-      // FIX: Get actual Redis client instance, not the function
-      const redis = await getRedisClient();
-      this.cache = makeCache(redis);
+      // FIX: Use the imported redisService instance to get the client
+      const redisClient = await redisService.getClient();
+      this.cache = makeCache(redisClient);
     }
     return this.cache;
   }
@@ -118,7 +117,7 @@ class OddsService {
             return sports;
           } catch (error) {
              if (!(error instanceof TimeoutError)) {
-                console.warn('❌ The Odds API sports fetch CRITICAL error:', error.message);
+                console.error('❌ The Odds API sports fetch CRITICAL error:', error.message);
                 throw error;
              }
              console.warn('❌ The Odds API sports fetch TIMEOUT, falling back.');
@@ -136,10 +135,8 @@ class OddsService {
         operation: 'getAvailableSports',
       });
       
-      if (!(error instanceof TimeoutError)) {
-          throw error;
-      }
-
+      // FIX: Ensure fallback is still triggered on non-timeout critical errors
+      console.log('🔄 Critical error, using comprehensive sports list fallback');
       const { getAllSports } = await import('./sportsService.js');
       return getAllSports();
     }
@@ -170,16 +167,16 @@ class OddsService {
       });
     } catch (error) {
       console.error(`❌ Odds fetch failed for ${sportKey}:`, error.message);
-      sentryService.captureError(error, {
-        component: 'odds_service',
-        operation: 'getSportOdds',
-        sportKey,
-        options,
-      });
       if (!(error instanceof TimeoutError)) {
-          throw error;
+          sentryService.captureError(error, {
+            component: 'odds_service',
+            operation: 'getSportOdds',
+            sportKey,
+            options,
+          });
+          throw error; // Re-throw critical errors
       }
-      return [];
+      return []; // Return empty for timeouts
     }
   }
 
@@ -334,6 +331,21 @@ class OddsService {
     return [];
   }
 
+  // FIX: Added getUsage method for health checks
+  async getUsage() {
+    const theOddsProvider = this.providers.find((p) => p.name === 'theodds');
+    if (theOddsProvider && typeof theOddsProvider.fetchUsage === 'function') {
+      try {
+        return await withTimeout(theOddsProvider.fetchUsage(), 5000, 'TheOddsUsage');
+      } catch (error) {
+        console.error('❌ Failed to fetch usage stats from The Odds API:', error.message);
+        return { error: error.message };
+      }
+    }
+    console.warn('⚠️ No provider available to fetch usage stats.');
+    return { requests_remaining: 'N/A' };
+  }
+
   async getServiceStatus() {
     const status = {
       service: 'OddsService',
@@ -348,6 +360,9 @@ class OddsService {
     };
 
     try {
+      const usage = await this.getUsage();
+      status.statistics.usage = usage;
+      
       const freshness = await this.getDataFreshness();
       status.freshness = freshness;
 
@@ -357,6 +372,11 @@ class OddsService {
       status.statistics.test_games = testGames.length;
       status.statistics.data_quality =
         DataQualityService.assessDataQuality(testGames);
+        
+      if (usage.error || freshness.overall.status !== 'current' || testGames.length === 0) {
+        status.status = 'degraded';
+      }
+      
     } catch (error) {
       status.status = 'degraded';
       status.error = error.message;
