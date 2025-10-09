@@ -1,4 +1,5 @@
-// src/services/healthService.js - FINAL ABSOLUTE FIXED VERSION
+// src/services/healthService.js - FIXED VERSION (No Hardcoded NBA)
+
 import { getRedisClient } from './redisService.js';
 import databaseService from './databaseService.js';
 import oddsService from './oddsService.js';
@@ -130,39 +131,60 @@ class ServiceHealthChecker {
     }
   }
 
+  // FIXED: Remove hardcoded NBA - use dynamic sports
   static async checkOddsService() {
     const checkStart = Date.now();
     
     try {
-      const oddsStart = Date.now();
-      const nbaOdds = await withTimeout(
-        oddsService.getSportOdds('basketball_nba', { useCache: false }),
+      // Get available sports first
+      const sportsStart = Date.now();
+      const availableSports = await withTimeout(
+        oddsService.getAvailableSports(),
         HEALTH_CHECK_TIMEOUT,
-        'OddsService_NBA'
+        'OddsService_Sports'
       );
-      const oddsTime = Date.now() - oddsStart;
+      const sportsTime = Date.now() - sportsStart;
+
+      let testOdds = [];
+      let oddsTime = 0;
+      let testSport = null;
+
+      // Test with first available sport
+      if (availableSports && availableSports.length > 0) {
+        testSport = availableSports[0].sport_key;
+        const oddsStart = Date.now();
+        testOdds = await withTimeout(
+          oddsService.getSportOdds(testSport, { useCache: false }),
+          HEALTH_CHECK_TIMEOUT,
+          `OddsService_${testSport}`
+        );
+        oddsTime = Date.now() - oddsStart;
+      }
 
       const statusStart = Date.now();
       const serviceStatus = await oddsService.getServiceStatus();
       const statusTime = Date.now() - statusStart;
 
       const freshnessStart = Date.now();
-      const freshness = await oddsService.getDataFreshness('basketball_nba');
+      const freshness = await oddsService.getDataFreshness(testSport);
       const freshnessTime = Date.now() - freshnessStart;
 
       const totalTime = Date.now() - checkStart;
 
       return {
-        healthy: Array.isArray(nbaOdds) && serviceStatus?.status === 'healthy',
+        healthy: Array.isArray(testOdds) && serviceStatus?.status === 'healthy',
         status: serviceStatus?.status || 'unknown',
         latency: {
+          sports_fetch: sportsTime,
           odds_fetch: oddsTime,
           status_check: statusTime,
           freshness_check: freshnessTime,
           total: totalTime
         },
         metrics: {
-          games_available: nbaOdds?.length || 0,
+          sports_available: availableSports?.length || 0,
+          test_sport: testSport,
+          games_available: testOdds?.length || 0,
           data_freshness: freshness?.overall?.status || 'unknown',
           providers_healthy: Object.values(freshness?.providers || {}).filter(p => p.status === 'active').length,
           total_providers: Object.keys(freshness?.providers || {}).length
@@ -183,6 +205,7 @@ class ServiceHealthChecker {
     }
   }
 
+  // FIXED: Remove hardcoded NBA - use dynamic sports
   static async checkGamesService() {
     const checkStart = Date.now();
     
@@ -191,9 +214,17 @@ class ServiceHealthChecker {
       const sports = await gamesService.getAvailableSports();
       const sportsTime = Date.now() - sportsStart;
 
-      const gamesStart = Date.now();
-      const nbaGames = await gamesService.getGamesForSport('basketball_nba', { useCache: false });
-      const gamesTime = Date.now() - gamesStart;
+      let testGames = [];
+      let gamesTime = 0;
+      let testSport = null;
+
+      // Test with first available sport
+      if (sports && sports.length > 0) {
+        testSport = sports[0].sport_key;
+        const gamesStart = Date.now();
+        testGames = await gamesService.getGamesForSport(testSport, { useCache: false });
+        gamesTime = Date.now() - gamesStart;
+      }
 
       const statusStart = Date.now();
       const serviceStatus = await gamesService.getServiceStatus();
@@ -202,7 +233,7 @@ class ServiceHealthChecker {
       const totalTime = Date.now() - checkStart;
 
       return {
-        healthy: Array.isArray(sports) && Array.isArray(nbaGames) && serviceStatus?.status === 'healthy',
+        healthy: Array.isArray(sports) && Array.isArray(testGames) && serviceStatus?.status === 'healthy',
         status: serviceStatus?.status || 'unknown',
         latency: {
           sports_fetch: sportsTime,
@@ -212,7 +243,8 @@ class ServiceHealthChecker {
         },
         metrics: {
           total_sports: sports?.length || 0,
-          games_available: nbaGames?.length || 0,
+          test_sport: testSport,
+          games_available: testGames?.length || 0,
           cache_status: serviceStatus?.cache?.enabled ? 'enabled' : 'disabled',
           data_sources: Object.keys(serviceStatus?.sources || {}).filter(k => serviceStatus.sources[k] === 'active').length
         },
