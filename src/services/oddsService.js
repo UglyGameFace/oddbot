@@ -5,6 +5,8 @@ import { sentryService } from './sentryService.js';
 import { withTimeout, TimeoutError } from '../utils/asyncUtils.js'; 
 import makeCache from './cacheService.js';
 import { TheOddsProvider } from './providers/theOddsProvider.js';
+import { SportRadarProvider } from './providers/sportRadarProvider.js';
+// import { ApiSportsProvider } from './providers/apiSportsProvider.js'; // Placeholder for future implementation
 
 // Cache configuration
 const CACHE_TTL = {
@@ -75,21 +77,22 @@ class DataQualityService {
 // Main Odds Service Class
 class OddsService {
   constructor() {
-    this.providers = [
-      new TheOddsProvider(env.THE_ODDS_API_KEY),
-    ].filter((provider) => {
-      const hasKey = provider.apiKey && provider.apiKey.length > 0;
-      if (!hasKey) {
-        console.warn(
-          `⚠️ Excluding ${provider.name} provider - no API key configured`
-        );
-      }
-      return hasKey;
-    });
+    this.providers = [];
+    
+    if (env.THE_ODDS_API_KEY) {
+      this.providers.push(new TheOddsProvider(env.THE_ODDS_API_KEY));
+    }
+    if (env.SPORTRADAR_API_KEY) {
+      this.providers.push(new SportRadarProvider(env.SPORTRADAR_API_KEY));
+    }
+    // if (env.API_SPORTS_KEY) {
+    //   this.providers.push(new ApiSportsProvider(env.API_SPORTS_KEY));
+    // }
 
     this.providers.sort((a, b) => a.priority - b.priority);
     this.cache = null;
   }
+
 
   async _getCache() {
     if (!this.cache) {
