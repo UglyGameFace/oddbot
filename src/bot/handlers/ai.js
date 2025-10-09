@@ -162,7 +162,8 @@ export function registerAICallbacks(bot) {
           if (!sportKey || !numLegs) return;
           try {
               await safeEditMessage(chatId, message.message_id, `🔄 Switching to <b>${escapeHTML(selectedMode.toUpperCase())}</b> mode...`, { parse_mode: 'HTML' });
-              const parlay = await aiService.handleFallbackSelection(sportKey, numLegs, selectedMode, betType);
+              const userConfig = await getAIConfig(chatId);
+              const parlay = await aiService.handleFallbackSelection(sportKey, numLegs, selectedMode, betType, userConfig);
               await sendParlayResult(bot, chatId, parlay, state, selectedMode, message.message_id);
           } catch (error) {
               await safeEditMessage(chatId, message.message_id, `❌ Fallback failed: <code>${escapeHTML(error.message)}</code>`, { parse_mode: 'HTML' });
@@ -324,7 +325,11 @@ async function sendScheduleValidationError(bot, chatId, messageId, error) {
 // --- AI Request Execution & Result Formatting ---
 async function executeAiRequest(bot, chatId, messageId) {
     const state = await getUserState(chatId);
-    const { sportKey, numLegs, mode, betType, aiModel, includeProps, quantitativeMode } = state || {};
+    
+    // FETCH USER CONFIG
+    const userConfig = await getAIConfig(chatId); 
+
+    const { sportKey, numLegs, mode, betType, aiModel, quantitativeMode } = state || {};
 
     if (!sportKey || !numLegs || !mode || !betType) {
         return safeEditMessage(chatId, messageId, '❌ Incomplete selection. Please start over using /ai.');
@@ -339,9 +344,9 @@ async function executeAiRequest(bot, chatId, messageId) {
 
     try {
         const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, {
-            includeProps,
             quantitativeMode,
-            horizonHours: 72
+            horizonHours: 72,
+            userConfig // Pass the user's config to the AI service
         });
         
         // CRITICAL FIX: Check if this is a fallback response
