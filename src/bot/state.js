@@ -8,20 +8,19 @@ import StateManager from './stateManager.js';
 
 // --- CORE REDIS STATE FUNCTIONS ---
 
-export const {
-  setUserState,
-  getUserState,
-  getParlaySlip,
-  setParlaySlip,
-  setValidationState,
-  getValidationState,
-  saveToken,
-  loadToken,
-  clearUserState,
-  getUserActivityStats,
-  hasActiveAISession,
-  getAllActiveSessions,
-} = StateManager;
+// FIXED: Use the StateManager instance methods directly
+export const setUserState = StateManager.setUserState.bind(StateManager);
+export const getUserState = StateManager.getUserState.bind(StateManager);
+export const getParlaySlip = StateManager.getParlaySlip.bind(StateManager);
+export const setParlaySlip = StateManager.setParlaySlip.bind(StateManager);
+export const setValidationState = StateManager.setValidationState.bind(StateManager);
+export const getValidationState = StateManager.getValidationState.bind(StateManager);
+export const saveToken = StateManager.saveToken.bind(StateManager);
+export const loadToken = StateManager.loadToken.bind(StateManager);
+export const clearUserState = StateManager.clearUserState.bind(StateManager);
+export const getUserActivityStats = StateManager.getUserActivityStats.bind(StateManager);
+export const hasActiveAISession = StateManager.hasActiveAISession.bind(StateManager);
+export const getAllActiveSessions = StateManager.getAllActiveSessions.bind(StateManager);
 
 // --- CONFIGURATION MANAGEMENT ---
 
