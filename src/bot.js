@@ -178,6 +178,104 @@ async function registerAllCommands(bot) {
 
     // Set bot commands in Telegram UI
     await bot.setMyCommands(commands);
+
+   // Add this to your bot commands in bot.js (after the existing commands)
+
+// 🚨 NEW: API Diagnostics Command
+bot.onText(/^\/debug_api$/, async (msg) => {
+  const chatId = msg.chat.id;
+  console.log(`🎯 /debug_api command from ${chatId}`);
+  
+  try {
+    const sentMsg = await bot.sendMessage(chatId, '🔧 Running API diagnostics...', { parse_mode: 'Markdown' });
+    
+    let message = `🔧 *API Diagnostics Report*\\n\\n`;
+    
+    // Check environment
+    message += `*Environment:* ${env.NODE_ENV}\\n`;
+    message += `*App URL:* ${env.APP_URL ? '✅ Set' : '❌ Missing'}\\n\\n`;
+    
+    // Check API Keys
+    message += `*API Key Status:*\\n`;
+    message += `• Telegram Bot: ${env.TELEGRAM_BOT_TOKEN ? `✅ Set (${env.TELEGRAM_BOT_TOKEN.length} chars)` : '❌ MISSING'}\\n`;
+    message += `• The Odds API: ${env.THE_ODDS_API_KEY ? `✅ Set (${env.THE_ODDS_API_KEY.length} chars)` : '❌ MISSING'}\\n`;
+    message += `• SportRadar: ${env.SPORTRADAR_API_KEY ? `✅ Set (${env.SPORTRADAR_API_KEY.length} chars)` : '❌ MISSING'}\\n`;
+    message += `• API\\-Sports: ${env.APISPORTS_API_KEY ? `✅ Set (${env.APISPORTS_API_KEY.length} chars)` : '❌ MISSING'}\\n`;
+    message += `• Gemini AI: ${env.GOOGLE_GEMINI_API_KEY ? `✅ Set (${env.GOOGLE_GEMINI_API_KEY.length} chars)` : '❌ MISSING'}\\n`;
+    message += `• Perplexity: ${env.PERPLEXITY_API_KEY ? `✅ Set (${env.PERPLEXITY_API_KEY.length} chars)` : '❌ MISSING'}\\n\\n`;
+    
+    // Test Odds Service
+    try {
+      const oddsService = await import('./services/oddsService.js').then(m => m.default);
+      const providers = oddsService.providers || [];
+      
+      message += `*Odds Providers:* ${providers.length}\\n`;
+      providers.forEach(provider => {
+        message += `• ${provider.name}: ${provider.priority} priority\\n`;
+      });
+      
+      // Test sports list
+      const sports = await oddsService.getAvailableSports();
+      message += `\\n*Available Sports:* ${sports.length}\\n`;
+      
+      // Test NFL odds
+      const nflGames = await oddsService.getSportOdds('americanfootball_nfl', { useCache: false });
+      message += `*NFL Test Games:* ${nflGames.length}\\n`;
+      
+      if (nflGames.length === 0) {
+        message += `⚠️ *WARNING:* No NFL games found\\- API keys may be invalid\\n`;
+      }
+      
+    } catch (error) {
+      message += `❌ *Odds Service Test Failed:* ${error.message}\\n`;
+    }
+    
+    // Check Redis
+    try {
+      const redis = await import('./services/redisService.js').then(m => m.default);
+      const redisStatus = await redis.testConnection();
+      message += `\\n*Redis:* ${redisStatus.connected ? '✅ Connected' : '❌ Disconnected'}\\n`;
+    } catch (error) {
+      message += `\\n*Redis:* ❌ ${error.message}\\n`;
+    }
+    
+    // Check Database
+    try {
+      const db = await import('./services/databaseService.js').then(m => m.default);
+      const dbStatus = await db.testConnection();
+      message += `*Database:* ${dbStatus ? '✅ Connected' : '❌ Disconnected'}\\n`;
+    } catch (error) {
+      message += `*Database:* ❌ ${error.message}\\n`;
+    }
+    
+    message += `\\n*Next Steps:* Use /get_keys to get renewal links`;
+    
+    await bot.editMessageText(message, {
+      chat_id: chatId,
+      message_id: sentMsg.message_id,
+      parse_mode: 'MarkdownV2'
+    });
+    
+  } catch (error) {
+    console.error('Debug API command failed:', error);
+    await bot.sendMessage(chatId, `❌ Debug failed: ${error.message}`);
+  }
+});
+
+// 🚨 NEW: Get API Key Renewal Links
+bot.onText(/^\/get_keys$/, async (msg) => {
+  const chatId = msg.chat.id;
+  
+  const message = `🔑 *API Key Renewal Links*\\n\\n` +
+    `*The Odds API:*\\nhttps://the\\-odds\\-api\\.com/\\n\\n` +
+    `*SportRadar:*\\nhttps://sportradar\\.com/\\n\\n` + 
+    `*API\\-Sports:*\\nhttps://api\\-sports\\.io/\\n\\n` +
+    `*Google Gemini AI:*\\nhttps://aistudio\\.google\\.com/\\n\\n` +
+    `*Perplexity AI:*\\nhttps://www\\.perplexity\\.ai/\\n\\n` +
+    `*Instructions:*\\n1\\. Visit each link\\n2\\. Create account/login\\n3\\. Generate new API key\\n4\\. Update in Railway environment variables`;
+    
+  await bot.sendMessage(chatId, message, { parse_mode: 'MarkdownV2' });
+});
     
     // Global command logger
     bot.on('message', (msg) => {
