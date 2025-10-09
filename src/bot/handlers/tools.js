@@ -1,4 +1,4 @@
-// src/bot/handlers/tools.js - ENHANCED API STATUS CHECK
+// src/bot/handlers/tools.js - ENHANCED DATABASE STATS HANDLING
 
 import { getRedisClient } from '../../services/redisService.js';
 import databaseService from '../../services/databaseService.js';
@@ -342,38 +342,102 @@ async function handleApiStatus(bot, chatId, messageId) {
   });
 }
 
+// FIXED: Enhanced database stats with better error handling
 async function handleDbStats(bot, chatId, messageId) {
-    await bot.editMessageText('📊 Fetching database and API quota statistics...', { chat_id: chatId, message_id: messageId });
+    await bot.editMessageText('📊 Fetching database and API quota statistics...', { 
+        chat_id: chatId, 
+        message_id: messageId 
+    });
+    
     try {
-        const stats = await databaseService.getSportGameCounts();
-        let statsText = '📊 *Database Game Counts*\n\n';
-        if (stats && stats.length > 0) {
-            stats.forEach(stat => {
-                const title = stat.sport_title || 'Unknown/Other';
-                statsText += `• *${title}:* ${stat.game_count} games\n`;
-            });
-        } else {
-            statsText += 'No games found in the database. The ingestion worker may need to run.\n';
+        let statsText = '';
+        
+        // Database Game Counts - with error handling
+        try {
+            const stats = await databaseService.getSportGameCounts();
+            statsText = '📊 *Database Game Counts*\n\n';
+            
+            if (stats && stats.length > 0) {
+                let hasValidData = false;
+                
+                stats.forEach(stat => {
+                    const title = stat.sport_title || stat.sport_key || 'Unknown/Other';
+                    // FIX: Handle undefined game_count properly
+                    const count = stat.game_count !== undefined && stat.game_count !== null 
+                        ? stat.game_count 
+                        : 0;
+                    
+                    if (count > 0) hasValidData = true;
+                    
+                    statsText += `• *${title}:* ${count} games\n`;
+                });
+                
+                if (!hasValidData) {
+                    statsText += '_No games with valid counts found in database._\n';
+                }
+            } else {
+                statsText += 'No sports data found in the database.\n';
+            }
+        } catch (dbError) {
+            console.error('Database stats error:', dbError);
+            statsText = '📊 *Database Game Counts*\n\n';
+            statsText += '❌ Failed to fetch database stats.\n';
+            statsText += `_Error: ${dbError.message}_\n\n`;
         }
 
-        statsText += '\n📈 *API Quota Status (Live)*\n_Data reflects the last API call made by a worker._\n\n';
+        // API Quota Status - with enhanced error handling
+        statsText += '\n📈 *API Quota Status (Live)*\n';
+        statsText += '_Data reflects the last API call made by a worker._\n\n';
+        
         const providers = ['theodds', 'sportradar', 'apisports'];
+        let hasQuotaData = false;
+        
         for (const provider of providers) {
-            const quota = await rateLimitService.getProviderQuota(provider);
-            const providerName = provider.charAt(0).toUpperCase() + provider.slice(1);
-            statsText += `*${providerName}*:\n`;
-            if (quota) {
-                const remaining = quota.remaining ?? 'N/A';
-                const used = quota.used ?? 'N/A';
-                const limit = quota.limit ?? 'N/A';
-                const lastUpdated = quota.at ? new Date(quota.at).toLocaleTimeString() : 'Never';
-                statsText += `  - Remaining: ${remaining}\n`;
-                statsText += `  - Used: ${used}\n`;
-                statsText += `  - Limit/Window: ${limit}\n`;
-                statsText += `  - Last Updated: ${lastUpdated}\n`;
-            } else {
-                statsText += '  - _No data yet. Trigger odds ingestion to populate._\n';
+            try {
+                const quota = await rateLimitService.getProviderQuota(provider);
+                const providerName = provider.charAt(0).toUpperCase() + provider.slice(1);
+                statsText += `*${providerName}*:\n`;
+                
+                if (quota && (quota.remaining !== null || quota.used !== null)) {
+                    hasQuotaData = true;
+                    const remaining = quota.remaining ?? 'N/A';
+                    const used = quota.used ?? 'N/A';
+                    const limit = quota.limit ?? 'N/A';
+                    const lastUpdated = quota.at ? new Date(quota.at).toLocaleTimeString() : 'Never';
+                    const critical = quota.critical ? ' ⚠️' : '';
+                    
+                    statsText += `  - Remaining: ${remaining}${critical}\n`;
+                    statsText += `  - Used: ${used}\n`;
+                    statsText += `  - Limit/Window: ${limit}\n`;
+                    statsText += `  - Last Updated: ${lastUpdated}\n`;
+                } else {
+                    statsText += '  - _No quota data recorded yet._\n';
+                    // Provide guidance based on provider
+                    if (provider === 'theodds' && !env.THE_ODDS_API_KEY) {
+                        statsText += '  - _THE_ODDS_API_KEY not configured_\n';
+                    } else if (provider === 'sportradar' && !env.SPORTRADAR_API_KEY) {
+                        statsText += '  - _SPORTRADAR_API_KEY not configured_\n';
+                    } else if (provider === 'apisports' && !env.APISPORTS_API_KEY) {
+                        statsText += '  - _APISPORTS_API_KEY not configured_\n';
+                    } else {
+                        statsText += '  - _Trigger odds ingestion to populate._\n';
+                    }
+                }
+                statsText += '\n';
+            } catch (quotaError) {
+                console.error(`Quota check error for ${provider}:`, quotaError);
+                statsText += `*${provider}*:\n`;
+                statsText += '  - ❌ Error fetching quota data\n';
+                statsText += `  - _${quotaError.message}_\n\n`;
             }
+        }
+
+        // Add troubleshooting guidance if no data
+        if (!hasQuotaData) {
+            statsText += '\n🔧 *Troubleshooting:*\n';
+            statsText += '• Use "Trigger Odds Ingestion" to populate data\n';
+            statsText += '• Check API keys are configured correctly\n';
+            statsText += '• Verify worker logs for any errors\n';
         }
 
         await bot.editMessageText(statsText, {
