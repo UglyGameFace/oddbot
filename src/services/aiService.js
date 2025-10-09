@@ -11,10 +11,10 @@ const TZ = env.TIMEZONE || 'America/New_York';
 const WEB_TIMEOUT_MS = 30000;
 
 const GEMINI_MODELS = { 
-  gemini: "gemini-2.5-flash",
-  gemini_fallback: "gemini-2.5-pro", 
-  gemini_legacy: "gemini-1.5-pro",
-  perplexity: "sonar-pro" 
+  gemini: "gemini-1.5-flash",
+  gemini_fallback: "gemini-1.5-pro", 
+  gemini_legacy: "gemini-1.0-pro",
+  perplexity: "sonar-large-32k-online" 
 };
 
 function americanToDecimal(a) {
@@ -120,7 +120,7 @@ class AIService {
       console.log(`🎯 Starting ELITE parlay generation for ${sportKey}`);
       
       try {
-          // Use elite prompts for ALL modes
+          // Pass user config down to the generation methods
           if (mode === 'web') {
               return await this._generateEliteWebParlay(sportKey, numLegs, aiModel, betType, options);
           } else if (mode === 'live' || mode === 'db') {
@@ -150,12 +150,13 @@ class AIService {
       try {
           const scheduleContext = await buildEliteScheduleContext(sportKey, options.horizonHours || 72);
           
-          // USE ELITE PROMPT SERVICE
+          // USE ELITE PROMPT SERVICE, NOW WITH USER CONFIG
           const prompt = ElitePromptService.getWebResearchPrompt(
               sportKey, 
               numLegs, 
               betType, 
-              scheduleContext
+              scheduleContext,
+              options.userConfig // Pass user settings to the prompt
           );
           
           console.log(`🎯 Using elite prompt for ${sportKey}`);
@@ -289,7 +290,8 @@ class AIService {
           
           // Use elite prompt even for context-based parlays
           const prompt = ElitePromptService.getEliteParlayPrompt(sportKey, numLegs, betType, {
-              scheduleInfo: `${realGames.length} verified games available`
+              scheduleInfo: `${realGames.length} verified games available`,
+              userConfig: options.userConfig 
           });
           
           const aiResponse = await this._callAIProvider('gemini', prompt);
@@ -344,9 +346,9 @@ class AIService {
       return parlayData;
   }
 
-  async handleFallbackSelection(sportKey, numLegs, mode, betType) {
+  async handleFallbackSelection(sportKey, numLegs, mode, betType, userConfig = {}) {
     console.log(`🎯 Elite fallback selection: ${mode} for ${sportKey}`);
-    return this.generateParlay(sportKey, numLegs, mode, 'gemini', betType, { horizonHours: 72 });
+    return this.generateParlay(sportKey, numLegs, mode, 'gemini', betType, { horizonHours: 72, userConfig });
   }
 }
 
