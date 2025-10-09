@@ -1,4 +1,4 @@
-// src/config/env.js
+// src/config/env.js - UPDATED VERSION
 import dotenv from 'dotenv';
 import { cleanEnv, str, num, url, bool } from 'envalid';
 import * as Sentry from '@sentry/node';
@@ -29,7 +29,7 @@ const env = cleanEnv(process.env, {
   PERPLEXITY_API_KEY: str(),
   THE_ODDS_API_KEY: str(),
   SPORTRADAR_API_KEY: str(),
-  API_SPORTS_KEY: str(),
+  APISPORTS_API_KEY: str({ default: '' }), // FIXED: Changed from API_SPORTS_KEY to APISPORTS_API_KEY
 
   SENTRY_DSN: str({ default: '' }),
   SENTRY_ENVIRONMENT: str({ default: '' }),
@@ -47,7 +47,7 @@ const env = cleanEnv(process.env, {
   RATE_LIMIT_REQUESTS: num({ default: 100 }),
   RATE_LIMIT_TIME_WINDOW: num({ default: 900000 }),
   TELEGRAM_POLLING_INTERVAL: num({ default: 300 }),
-  REDIS_URL: str({ default: '' }), // FIXED: Changed from 'url' to 'str' and default to ''
+  REDIS_URL: str({ default: '' }),
   CACHE_TTL_DEFAULT: num({ default: 300 }),
   ENCRYPTION_KEY: str({ default: 'default-encryption-key-change-in-production' }),
   JWT_SECRET: str({ default: 'default-jwt-secret-change-in-production' }),
@@ -56,8 +56,8 @@ const env = cleanEnv(process.env, {
   WORKER_POOL_SIZE: num({ default: 4 }),
   DATABASE_POOL_SIZE: num({ default: 10 }),
   MAX_EVENT_LOOP_DELAY: num({ default: 1000 }),
-  ODDS_INGESTION_BATCH_SIZE: num({ default: 5 }), // New
-  ODDS_INGESTION_DELAY_MS: num({ default: 2000 }), // New
+  ODDS_INGESTION_BATCH_SIZE: num({ default: 5 }),
+  ODDS_INGESTION_DELAY_MS: num({ default: 2000 }),
   LOG_LEVEL: str({ choices: ['error','warn','info','debug','trace'], default: 'info' }),
   
   // Feature Flags
