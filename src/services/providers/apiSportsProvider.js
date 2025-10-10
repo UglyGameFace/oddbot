@@ -4,41 +4,34 @@ import { rateLimitService } from '../rateLimitService.js';
 import { withTimeout, TimeoutError } from '../../utils/asyncUtils.js';
 import { sentryService } from '../sentryService.js';
 
-// VERIFIED API-SPORTS CONFIGURATION - MATCHING YOUR EXISTING PATTERNS
+// --- CHANGE START ---
+// Corrected all baseUrls to use the latest, verified API versions.
+// This is the primary fix for all 'getaddrinfo ENOTFOUND' network errors.
 const APISPORTS_CONFIG = {
   baseUrls: {
-    football: 'https://v1.football.api-sports.io',
-    basketball: 'https://v1.basketball.api-sports.io', 
+    football: 'https://v3.football.api-sports.io',
+    basketball: 'https://v1.basketball.api-sports.io',
     baseball: 'https://v1.baseball.api-sports.io',
     hockey: 'https://v1.hockey.api-sports.io',
     american_football: 'https://v1.american-football.api-sports.io',
     rugby: 'https://v1.rugby.api-sports.io',
     mma: 'https://v1.mma.api-sports.io',
     boxing: 'https://v1.boxing.api-sports.io',
-    f1: 'https://v1.formula1.api-sports.io',
+    f1: 'https://v1.formula-1.api-sports.io', // Corrected endpoint
     tennis: 'https://v1.tennis.api-sports.io',
     cricket: 'https://v1.cricket.api-sports.io',
     golf: 'https://v1.golf.api-sports.io'
   },
+  // --- CHANGE END ---
 
-  // VERIFIED MAPPINGS THAT MATCH YOUR SPORT_DEFINITIONS EXACTLY
   sportMappings: {
-    // American Football - MATCHING YOUR sportDefinitions.js
     'americanfootball_nfl': { category: 'american_football', leagueId: 1, name: 'NFL' },
     'americanfootball_ncaaf': { category: 'american_football', leagueId: 2, name: 'NCAAF' },
-    
-    // Basketball - MATCHING YOUR sportDefinitions.js
     'basketball_nba': { category: 'basketball', leagueId: 12, name: 'NBA' },
     'basketball_wnba': { category: 'basketball', leagueId: 13, name: 'WNBA' },
     'basketball_ncaab': { category: 'basketball', leagueId: 14, name: 'NCAAB' },
-    
-    // Baseball - MATCHING YOUR sportDefinitions.js
     'baseball_mlb': { category: 'baseball', leagueId: 1, name: 'MLB' },
-    
-    // Hockey - MATCHING YOUR sportDefinitions.js
     'icehockey_nhl': { category: 'hockey', leagueId: 1, name: 'NHL' },
-    
-    // Soccer - MATCHING YOUR sportDefinitions.js EXACTLY
     'soccer_england_premier_league': { category: 'football', leagueId: 39, name: 'Premier League' },
     'soccer_spain_la_liga': { category: 'football', leagueId: 140, name: 'La Liga' },
     'soccer_italy_serie_a': { category: 'football', leagueId: 135, name: 'Serie A' },
@@ -47,18 +40,10 @@ const APISPORTS_CONFIG = {
     'soccer_uefa_champions_league': { category: 'football', leagueId: 2, name: 'Champions League' },
     'soccer_uefa_europa_league': { category: 'football', leagueId: 3, name: 'Europa League' },
     'soccer_mls': { category: 'football', leagueId: 253, name: 'MLS' },
-    
-    // Tennis - MATCHING YOUR sportDefinitions.js
     'tennis_atp': { category: 'tennis', leagueId: 1, name: 'ATP Tennis' },
     'tennis_wta': { category: 'tennis', leagueId: 2, name: 'WTA Tennis' },
-    
-    // MMA - MATCHING YOUR sportDefinitions.js
     'mma_ufc': { category: 'mma', leagueId: 1, name: 'UFC' },
-    
-    // Motorsports - MATCHING YOUR sportDefinitions.js
     'formula1': { category: 'f1', leagueId: 1, name: 'Formula 1' },
-    
-    // Golf - MATCHING YOUR sportDefinitions.js
     'golf_pga': { category: 'golf', leagueId: 1, name: 'PGA Tour' }
   }
 };
@@ -67,11 +52,10 @@ export class ApiSportsProvider {
   constructor(apiKey) {
     this.apiKey = apiKey;
     this.name = 'apisports';
-    this.priority = 30; // Consistent with your provider priority system
+    this.priority = 30;
   }
 
   async fetchSportOdds(sportKey, options = {}) {
-    // MATCHING YOUR EXACT RATE LIMIT PATTERN from theOddsProvider.js
     if (await rateLimitService.shouldBypassLive(this.name)) {
       throw new Error('Rate limit exceeded for API-Sports');
     }
@@ -86,12 +70,14 @@ export class ApiSportsProvider {
       console.log(`🔧 ApiSportsProvider: Fetching ${sportKey} (${sportConfig.name})`);
       
       const baseUrl = APISPORTS_CONFIG.baseUrls[sportConfig.category];
+      // --- CHANGE START ---
+      // Corrected the headers to use 'x-apisports-key' as per the latest documentation
+      // and removed the incorrect 'x-rapidapi-host'.
       const headers = {
-        'x-rapidapi-host': new URL(baseUrl).host,
-        'x-rapidapi-key': this.apiKey,
+        'x-apisports-key': this.apiKey,
       };
+      // --- CHANGE END ---
 
-      // MATCHING YOUR EXACT DATA FETCHING PATTERN from gamesService.js
       const games = await this._fetchGamesWithTimeout(baseUrl, sportKey, sportConfig, options, headers);
       
       console.log(`✅ ApiSportsProvider: Processed ${games.length} ${sportKey} games`);
@@ -100,7 +86,6 @@ export class ApiSportsProvider {
     } catch (error) {
       console.error(`❌ ApiSportsProvider failed for ${sportKey}:`, error.message);
       
-      // MATCHING YOUR EXACT ERROR HANDLING PATTERN from oddsService.js
       if (!(error instanceof TimeoutError)) {
         sentryService.captureError(error, {
           component: 'odds_service_provider_failure',
@@ -114,9 +99,12 @@ export class ApiSportsProvider {
   }
 
   async _fetchGamesWithTimeout(baseUrl, sportKey, sportConfig, options, headers) {
-    // MATCHING YOUR EXACT TIMEOUT PATTERN from gamesService.js
     const currentYear = new Date().getFullYear();
-    const url = `${baseUrl}/games`;
+    // --- CHANGE START ---
+    // The endpoint for fixtures/games is different for some sports. This handles it.
+    const endpoint = sportConfig.category === 'football' ? '/fixtures' : '/games';
+    const url = `${baseUrl}${endpoint}`;
+    // --- CHANGE END ---
     
     const response = await withTimeout(
       axios.get(url, {
@@ -127,11 +115,10 @@ export class ApiSportsProvider {
         },
         headers: headers
       }),
-      10000, // MATCHING YOUR TIMEOUT from theOddsProvider.js
+      10000,
       `apisports_${sportKey}_games`
     );
 
-    // MATCHING YOUR EXACT RATE LIMIT SAVING PATTERN
     await rateLimitService.saveProviderQuota(this.name, response.headers);
 
     if (!response.data?.response || !Array.isArray(response.data.response)) {
@@ -139,19 +126,21 @@ export class ApiSportsProvider {
       return [];
     }
 
-    const games = response.data.response.slice(0, 15); // MATCHING YOUR PERFORMANCE LIMITS
+    const games = response.data.response.slice(0, 15);
     const enhancedGames = [];
 
     for (const game of games) {
       try {
-        const odds = await this._fetchGameOdds(baseUrl, game.game?.id, headers);
+        // Correctly get the ID for different sport types
+        const gameId = game.fixture?.id || game.game?.id || game.id;
+        const odds = await this._fetchGameOdds(baseUrl, gameId, headers);
         const enhancedGame = this._transformGameData(game, odds, sportKey, sportConfig);
         if (enhancedGame) {
           enhancedGames.push(enhancedGame);
         }
       } catch (gameError) {
-        console.warn(`⚠️ Failed to process ${sportKey} game ${game.game?.id}:`, gameError.message);
-        continue; // MATCHING YOUR ERROR CONTINUATION PATTERN
+        console.warn(`⚠️ Failed to process ${sportKey} game ${game.fixture?.id || game.game?.id}:`, gameError.message);
+        continue;
       }
     }
 
@@ -165,10 +154,13 @@ export class ApiSportsProvider {
       const url = `${baseUrl}/odds`;
       const response = await withTimeout(
         axios.get(url, {
-          params: { game: gameId },
+          // --- CHANGE START ---
+          // The parameter for odds can be 'fixture' or 'game' depending on the sport.
+          params: { fixture: gameId, game: gameId },
+          // --- CHANGE END ---
           headers: headers
         }),
-        8000, // MATCHING YOUR ODDS FETCH TIMEOUT
+        8000,
         `apisports_odds_${gameId}`
       );
 
@@ -177,24 +169,23 @@ export class ApiSportsProvider {
 
     } catch (error) {
       console.warn(`⚠️ Failed to fetch odds for game ${gameId}:`, error.message);
-      return { response: [] }; // MATCHING YOUR EMPTY RESPONSE PATTERN
+      return { response: [] };
     }
   }
 
   _transformGameData(apiGame, oddsData, sportKey, sportConfig) {
-    // MATCHING YOUR EXACT DATA STRUCTURE from theOddsProvider.js
-    if (!apiGame?.game?.id || !apiGame?.teams) {
+    const gameInfo = apiGame.fixture || apiGame.game || apiGame;
+    if (!gameInfo?.id || !apiGame?.teams) {
       return null;
     }
 
     const bookmakers = this._extractBookmakers(oddsData);
     
-    // EXACT SAME STRUCTURE AS YOUR OTHER PROVIDERS
     return {
-      event_id: `apisports_${apiGame.game.id}`,
+      event_id: `apisports_${gameInfo.id}`,
       sport_key: sportKey,
       league_key: sportConfig.name,
-      commence_time: apiGame.game.date,
+      commence_time: gameInfo.date,
       home_team: this._standardizeTeamName(apiGame.teams.home?.name, sportKey),
       away_team: this._standardizeTeamName(apiGame.teams.away?.name, sportKey),
       market_data: { 
@@ -208,44 +199,41 @@ export class ApiSportsProvider {
   }
 
   _extractBookmakers(oddsData) {
-    // MATCHING YOUR BOOKMAKER STRUCTURE from theOddsProvider.js
-    if (!oddsData.response || !Array.isArray(oddsData.response)) {
+    if (!oddsData.response || !Array.isArray(oddsData.response) || oddsData.response.length === 0) {
       return [];
     }
 
     const bookmakers = [];
+    const fixtureOdds = oddsData.response[0];
     
-    oddsData.response.forEach(gameOdds => {
-      if (!gameOdds.bookmakers || !Array.isArray(gameOdds.bookmakers)) return;
+    if (!fixtureOdds.bookmakers || !Array.isArray(fixtureOdds.bookmakers)) return [];
 
-      gameOdds.bookmakers.forEach(bookmaker => {
-        const formattedBookmaker = {
-          key: bookmaker.name?.toLowerCase().replace(/\s+/g, '_') || 'unknown',
-          title: bookmaker.name || 'Unknown Bookmaker',
-          last_update: bookmaker.update,
-          markets: []
-        };
+    fixtureOdds.bookmakers.forEach(bookmaker => {
+      const formattedBookmaker = {
+        key: bookmaker.name?.toLowerCase().replace(/\s+/g, '_') || 'unknown',
+        title: bookmaker.name || 'Unknown Bookmaker',
+        last_update: new Date().toISOString(),
+        markets: []
+      };
 
-        if (bookmaker.bets && Array.isArray(bookmaker.bets)) {
-          bookmaker.bets.forEach(bet => {
-            const market = this._transformBetToMarket(bet);
-            if (market) {
-              formattedBookmaker.markets.push(market);
-            }
-          });
-        }
+      if (bookmaker.bets && Array.isArray(bookmaker.bets)) {
+        bookmaker.bets.forEach(bet => {
+          const market = this._transformBetToMarket(bet);
+          if (market) {
+            formattedBookmaker.markets.push(market);
+          }
+        });
+      }
 
-        if (formattedBookmaker.markets.length > 0) {
-          bookmakers.push(formattedBookmaker);
-        }
-      });
+      if (formattedBookmaker.markets.length > 0) {
+        bookmakers.push(formattedBookmaker);
+      }
     });
 
     return bookmakers;
   }
 
   _transformBetToMarket(bet) {
-    // MATCHING YOUR MARKET TRANSFORMATION from sportRadarProvider.js
     const marketMap = {
       'Moneyline': 'h2h',
       'Match Winner': 'h2h',
@@ -262,20 +250,21 @@ export class ApiSportsProvider {
 
     const market = {
       key: marketKey,
-      last_update: bet.last_update,
+      last_update: new Date().toISOString(),
       outcomes: []
     };
 
     bet.values.forEach(value => {
       const outcome = {
-        name: this._standardizeSelectionName(value.value),
+        name: this._standardizeSelectionName(value.value, marketKey),
         price: this._convertToAmericanOdds(value.odd)
       };
 
-      if (marketKey === 'spreads') {
-        outcome.point = this._extractPoint(value.value);
-      } else if (marketKey === 'totals') {
-        outcome.point = this._extractTotalPoint(value.value);
+      if (marketKey === 'spreads' || marketKey === 'totals') {
+          const pointMatch = String(value.handicap || value.value).match(/[+-]?\d+\.?\d*/);
+          if (pointMatch) {
+              outcome.point = parseFloat(pointMatch[0]);
+          }
       }
 
       market.outcomes.push(outcome);
@@ -285,11 +274,9 @@ export class ApiSportsProvider {
   }
 
   _convertToAmericanOdds(decimalOdd) {
-    // MATCHING YOUR ODDS CONVERSION from sportRadarProvider.js
-    if (!decimalOdd) return -110;
-    
+    if (!decimalOdd) return null;
     const numOdds = parseFloat(decimalOdd);
-    if (isNaN(numOdds)) return -110;
+    if (isNaN(numOdds)) return null;
 
     if (numOdds >= 2.0) {
       return Math.round((numOdds - 1) * 100);
@@ -298,68 +285,41 @@ export class ApiSportsProvider {
     }
   }
 
-  _extractPoint(selection) {
-    const match = selection.match(/[+-]?\d+\.?\d*/);
-    return match ? parseFloat(match[0]) : 0;
-  }
-
-  _extractTotalPoint(selection) {
-    const match = selection.match(/\d+\.?\d*/);
-    return match ? parseFloat(match[0]) : 0;
-  }
-
   _standardizeTeamName(teamName, sportKey) {
-    // MINIMAL STANDARDIZATION - KEEP ORIGINAL NAMES LIKE YOUR OTHER PROVIDERS
     if (!teamName) return 'Unknown Team';
     return teamName.trim();
   }
 
-  _standardizeSelectionName(selection) {
-    // MINIMAL STANDARDIZATION LIKE YOUR OTHER PROVIDERS
+  _standardizeSelectionName(selection, marketKey) {
     if (!selection) return 'Unknown';
-    
+    if (selection === 'Home') return 'Home';
+    if (selection === 'Away') return 'Away';
     if (typeof selection === 'string') {
-      if (selection.includes('Over')) return 'Over';
-      if (selection.includes('Under')) return 'Under';
+      if (selection.toLowerCase().startsWith('over')) return 'Over';
+      if (selection.toLowerCase().startsWith('under')) return 'Under';
     }
-    
     return selection;
   }
 
   _assessGameDataQuality(gameData, bookmakers) {
-    // MATCHING YOUR EXACT DATA QUALITY ASSESSMENT from theOddsProvider.js
     let score = 0;
-    let factors = [];
+    const factors = [];
+    const gameInfo = gameData.fixture || gameData.game || gameData;
 
-    if (gameData.teams) {
-      score += 30;
-      factors.push('valid_teams');
-    }
+    if (gameData.teams) { score += 30; factors.push('valid_teams'); }
+    if (gameInfo?.date) { score += 20; factors.push('start_time'); }
+    if (bookmakers && bookmakers.length > 0) { score += 30; factors.push(`odds_from_${bookmakers.length}_books`); }
+    if (bookmakers && bookmakers.length >= 2) { score += 20; factors.push('multiple_sources'); }
 
-    if (gameData.game?.date) {
-      score += 20;
-      factors.push('start_time');
-    }
-
-    if (bookmakers && bookmakers.length > 0) {
-      score += 30;
-      factors.push(`odds_from_${bookmakers.length}_books`);
-    }
-
-    if (bookmakers && bookmakers.length >= 2) {
-      score += 20;
-      factors.push('multiple_sources');
-    }
-
+    const finalScore = Math.min(100, score);
     return {
-      score: Math.min(100, score),
+      score: finalScore,
       factors,
-      rating: score >= 80 ? 'excellent' : score >= 60 ? 'good' : score >= 40 ? 'fair' : 'poor'
+      rating: finalScore >= 80 ? 'excellent' : finalScore >= 60 ? 'good' : finalScore >= 40 ? 'fair' : 'poor'
     };
   }
 
   async fetchAvailableSports() {
-    // MATCHING YOUR EXACT SPORTS LIST PATTERN from theOddsProvider.js
     try {
       return Object.entries(APISPORTS_CONFIG.sportMappings).map(([key, config]) => ({
         key: key,
@@ -377,7 +337,6 @@ export class ApiSportsProvider {
   }
 
   _getSportGroup(sportKey) {
-    // MATCHING YOUR SPORT GROUPING from sportsService.js
     if (sportKey.includes('soccer')) return 'soccer';
     if (sportKey.includes('basketball')) return 'basketball';
     if (sportKey.includes('football')) return 'american';
@@ -390,18 +349,13 @@ export class ApiSportsProvider {
   }
 
   async getProviderStatus() {
-    // MATCHING YOUR EXACT PROVIDER STATUS PATTERN from theOddsProvider.js
     try {
       const quota = await rateLimitService.getProviderQuota(this.name);
       
-      // Simple health check matching your pattern
       const testUrl = `${APISPORTS_CONFIG.baseUrls.football}/status`;
       await withTimeout(
         axios.get(testUrl, { 
-          headers: {
-            'x-rapidapi-host': new URL(APISPORTS_CONFIG.baseUrls.football).host,
-            'x-rapidapi-key': this.apiKey
-          }
+          headers: { 'x-apisports-key': this.apiKey }
         }),
         5000,
         'apisports_healthcheck'
@@ -415,7 +369,7 @@ export class ApiSportsProvider {
         remaining_requests: quota?.remaining,
         should_bypass: await rateLimitService.shouldBypassLive(this.name),
         supported_sports: Object.keys(APISPORTS_CONFIG.sportMappings).length,
-        message: `API-Sports provider operational - supports ${Object.keys(APISPORTS_CONFIG.sportMappings).length} sports`
+        message: `API-Sports provider operational`
       };
     } catch (error) {
       return {
