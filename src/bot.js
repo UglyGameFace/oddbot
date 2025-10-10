@@ -64,7 +64,6 @@ function validateEnvironment() {
     HAS_WEBHOOK_SECRET: !!WEBHOOK_SECRET
   });
   
-  // --- CHANGE START ---
   // Added a clear startup warning for missing API keys. This will make debugging much easier.
   if (env.API_KEY_STATUS.hasCriticalErrors) {
       console.error('🚨🚨🚨 CRITICAL API KEY ERRORS DETECTED! 🚨🚨🚨');
@@ -73,7 +72,6 @@ function validateEnvironment() {
       console.error('Use the /get_keys command in Telegram for renewal links.');
       console.error('🚨🚨🚨-----------------------------------------🚨🚨🚨');
   }
-  // --- CHANGE END ---
 }
 
 export async function safeEditMessage(chatId, messageId, text, options = {}) {
