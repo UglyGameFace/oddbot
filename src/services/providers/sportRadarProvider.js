@@ -5,7 +5,7 @@ import { rateLimitService } from '../rateLimitService.js';
 import { withTimeout } from '../../utils/asyncUtils.js';
 import { sentryService } from '../sentryService.js';
 
-const SPORTRADAR_BASE = 'https://api.sportradar.us/odds/v1/en/us/sports';
+const SPORTRADAR_BASE = 'https://api.sportradar.com/odds/v1/en/us/sports';
 
 export class SportRadarProvider {
   constructor(apiKey) {
