@@ -161,6 +161,7 @@ server = app.listen(PORT, HOST, () => {
 async function registerAllCommands(bot) {
   console.log('🔧 Starting comprehensive command registration...');
   try {
+    // Register all handler modules
     registerAI(bot);
     registerAnalytics(bot);
     registerCacheHandler(bot);
@@ -172,6 +173,7 @@ async function registerAllCommands(bot) {
     registerTools(bot);
     registerChat(bot);
     
+    // Set bot commands in Telegram UI
     const commands = [
       { command: 'ai', description: 'Launch the AI Parlay Builder' },
       { command: 'chat', description: 'Ask questions (compact chatbot)' },
@@ -185,6 +187,7 @@ async function registerAllCommands(bot) {
     ];
     await bot.setMyCommands(commands);
    
+    // API Diagnostics Command
     bot.onText(/^\/debug_api$/, async (msg) => {
       const chatId = msg.chat.id;
       console.log(`🎯 /debug_api command from ${chatId}`);
@@ -258,6 +261,7 @@ async function registerAllCommands(bot) {
       }
     });
 
+    // Get API Key Renewal Links
     bot.onText(/^\/get_keys$/, async (msg) => {
       const chatId = msg.chat.id;
       
@@ -271,7 +275,8 @@ async function registerAllCommands(bot) {
         
       await bot.sendMessage(chatId, message, { parse_mode: 'MarkdownV2' });
     });
-        
+    
+    // Global command logger
     bot.on('message', (msg) => {
       if (msg.text && msg.text.startsWith('/')) {
         console.log(`📨 Received command: ${msg.text} from ${msg.chat.id}`);
