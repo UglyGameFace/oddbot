@@ -1,4 +1,18 @@
 // src/config/sportDefinitions.js
+
+// --- CHANGE START ---
+// This new array defines which sports the background worker will pre-fetch.
+export const HIGH_PRIORITY_SPORTS = [
+  'americanfootball_nfl',
+  'basketball_nba',
+  'baseball_mlb',
+  'icehockey_nhl',
+  'soccer_england_premier_league',
+  'soccer_uefa_champions_league',
+  'mma_ufc'
+];
+// --- CHANGE END ---
+
 export const COMPREHENSIVE_SPORTS = {
   // American Football
   'americanfootball_nfl': { title: 'NFL', priority: 1, emoji: '🏈', group: 'American Football' },
