@@ -131,8 +131,6 @@ class ServiceHealthChecker {
     }
   }
 
-  // --- CHANGE START ---
-  // This function is now more resilient to API failures during startup.
   static async checkOddsService() {
     const checkStart = Date.now();
     
@@ -149,7 +147,6 @@ class ServiceHealthChecker {
       let oddsTime = 0;
       let testSport = null;
 
-      // CRITICAL FIX: Only run the test if sports are actually available.
       if (availableSports && availableSports.length > 0 && availableSports[0]?.sport_key) {
         testSport = availableSports[0].sport_key;
         const oddsStart = Date.now();
@@ -173,7 +170,6 @@ class ServiceHealthChecker {
 
       const totalTime = Date.now() - checkStart;
 
-      // An empty `testOdds` array is now an acceptable result if no sports are available.
       const isHealthy = Array.isArray(testOdds) && serviceStatus?.status === 'healthy';
 
       return {
@@ -210,7 +206,6 @@ class ServiceHealthChecker {
     }
   }
 
-  // This function is also made more resilient.
   static async checkGamesService() {
     const checkStart = Date.now();
     
@@ -223,7 +218,6 @@ class ServiceHealthChecker {
       let gamesTime = 0;
       let testSport = null;
       
-      // CRITICAL FIX: Ensure a valid sport is available before testing.
       if (sports && sports.length > 0 && sports[0]?.sport_key) {
         testSport = sports[0].sport_key;
         const gamesStart = Date.now();
@@ -272,7 +266,6 @@ class ServiceHealthChecker {
       };
     }
   }
-  // --- CHANGE END ---
 
   static async checkRateLimitService() {
     const checkStart = Date.now();
@@ -353,7 +346,7 @@ class EnhancedHealthService {
       ServiceHealthChecker.checkGamesService()
     ]);
 
-    const healthy = redis.healthy && database.healthy; // Core services
+    const healthy = redis.healthy && database.healthy;
     
     return {
       ok: healthy,
