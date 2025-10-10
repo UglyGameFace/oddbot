@@ -1,4 +1,4 @@
-// src/services/healthService.js - FIXED VERSION (No Hardcoded NBA)
+// src/services/healthService.js - COMPLETE RESILIENT VERSION
 
 import { getRedisClient } from './redisService.js';
 import databaseService from './databaseService.js';
@@ -131,12 +131,12 @@ class ServiceHealthChecker {
     }
   }
 
-  // FIXED: Remove hardcoded NBA - use dynamic sports
+  // --- CHANGE START ---
+  // This function is now more resilient to API failures during startup.
   static async checkOddsService() {
     const checkStart = Date.now();
     
     try {
-      // Get available sports first
       const sportsStart = Date.now();
       const availableSports = await withTimeout(
         oddsService.getAvailableSports(),
@@ -149,8 +149,8 @@ class ServiceHealthChecker {
       let oddsTime = 0;
       let testSport = null;
 
-      // Test with first available sport
-      if (availableSports && availableSports.length > 0) {
+      // CRITICAL FIX: Only run the test if sports are actually available.
+      if (availableSports && availableSports.length > 0 && availableSports[0]?.sport_key) {
         testSport = availableSports[0].sport_key;
         const oddsStart = Date.now();
         testOdds = await withTimeout(
@@ -159,20 +159,25 @@ class ServiceHealthChecker {
           `OddsService_${testSport}`
         );
         oddsTime = Date.now() - oddsStart;
+      } else {
+        console.warn("⚠️ Health Check: No available sports found from odds service to test against.");
       }
 
       const statusStart = Date.now();
       const serviceStatus = await oddsService.getServiceStatus();
       const statusTime = Date.now() - statusStart;
-
+      
       const freshnessStart = Date.now();
-      const freshness = await oddsService.getDataFreshness(testSport);
+      const freshness = testSport ? await oddsService.getDataFreshness(testSport) : null;
       const freshnessTime = Date.now() - freshnessStart;
 
       const totalTime = Date.now() - checkStart;
 
+      // An empty `testOdds` array is now an acceptable result if no sports are available.
+      const isHealthy = Array.isArray(testOdds) && serviceStatus?.status === 'healthy';
+
       return {
-        healthy: Array.isArray(testOdds) && serviceStatus?.status === 'healthy',
+        healthy: isHealthy,
         status: serviceStatus?.status || 'unknown',
         latency: {
           sports_fetch: sportsTime,
@@ -205,7 +210,7 @@ class ServiceHealthChecker {
     }
   }
 
-  // FIXED: Remove hardcoded NBA - use dynamic sports
+  // This function is also made more resilient.
   static async checkGamesService() {
     const checkStart = Date.now();
     
@@ -217,13 +222,15 @@ class ServiceHealthChecker {
       let testGames = [];
       let gamesTime = 0;
       let testSport = null;
-
-      // Test with first available sport
-      if (sports && sports.length > 0) {
+      
+      // CRITICAL FIX: Ensure a valid sport is available before testing.
+      if (sports && sports.length > 0 && sports[0]?.sport_key) {
         testSport = sports[0].sport_key;
         const gamesStart = Date.now();
         testGames = await gamesService.getGamesForSport(testSport, { useCache: false });
         gamesTime = Date.now() - gamesStart;
+      } else {
+         console.warn("⚠️ Health Check: No available sports found from games service to test against.");
       }
 
       const statusStart = Date.now();
@@ -232,8 +239,10 @@ class ServiceHealthChecker {
 
       const totalTime = Date.now() - checkStart;
 
+      const isHealthy = Array.isArray(sports) && Array.isArray(testGames) && serviceStatus?.status === 'healthy';
+
       return {
-        healthy: Array.isArray(sports) && Array.isArray(testGames) && serviceStatus?.status === 'healthy',
+        healthy: isHealthy,
         status: serviceStatus?.status || 'unknown',
         latency: {
           sports_fetch: sportsTime,
@@ -263,6 +272,7 @@ class ServiceHealthChecker {
       };
     }
   }
+  // --- CHANGE END ---
 
   static async checkRateLimitService() {
     const checkStart = Date.now();
