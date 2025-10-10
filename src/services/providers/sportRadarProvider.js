@@ -1,11 +1,13 @@
 // src/services/providers/sportRadarProvider.js
 import axios from 'axios';
-// FIXED: Import the named export correctly
 import { rateLimitService } from '../rateLimitService.js';
 import { withTimeout } from '../../utils/asyncUtils.js';
 import { sentryService } from '../sentryService.js';
 
+// --- CHANGE START ---
+// The API base URL has been changed from api.sportradar.us to the global endpoint.
 const SPORTRADAR_BASE = 'https://api.sportradar.com/odds/v1/en/us/sports';
+// --- CHANGE END ---
 
 export class SportRadarProvider {
   constructor(apiKey) {
@@ -83,11 +85,9 @@ export class SportRadarProvider {
   }
 
   extractMarketsFromEvent(event) {
-    // SportRadar has different market structure - convert to common format
     const markets = [];
     
     if (event?.odds) {
-      // Convert SportRadar odds to common format
       Object.entries(event.odds).forEach(([bookmaker, oddsData]) => {
         const bookmakerMarkets = {
           key: bookmaker,
@@ -95,7 +95,6 @@ export class SportRadarProvider {
           markets: []
         };
 
-        // Add moneyline markets if available
         if (oddsData.moneyline) {
           bookmakerMarkets.markets.push({
             key: 'h2h',
@@ -123,7 +122,7 @@ export class SportRadarProvider {
 
   assessGameDataQuality(game) {
     return {
-      score: 60, // SportRadar typically has good data quality but limited markets
+      score: 60,
       factors: ['sportradar_source', 'official_data'],
       rating: 'good'
     };
