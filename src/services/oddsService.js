@@ -7,7 +7,7 @@ import { withTimeout, TimeoutError } from '../utils/asyncUtils.js';
 import makeCache from './cacheService.js';
 import { TheOddsProvider } from './providers/theOddsProvider.js';
 import { SportRadarProvider } from './providers/sportRadarProvider.js';
-import { ApiSportsProvider } from './providers/apiSportsProvider.js'; // NEW: API-Sports is BACK!
+import { ApiSportsProvider } from './providers/apiSportsProvider.js';
 
 // Cache configuration
 const CACHE_TTL = {
@@ -75,17 +75,14 @@ class DataQualityService {
   }
 }
 
-// 🚨 NEW: Fallback Provider for when APIs fail
 class FallbackProvider {
   constructor() {
     this.name = 'fallback';
-    this.priority = 100; // Lowest priority
+    this.priority = 100;
   }
 
   async fetchSportOdds(sportKey, options = {}) {
     console.log(`🔄 Using FALLBACK provider for ${sportKey} (no real odds)`);
-    
-    // Return empty array - bot will use AI knowledge instead of real odds
     return [];
   }
 
@@ -105,12 +102,10 @@ class FallbackProvider {
   }
 }
 
-// Main Odds Service Class
 class OddsService {
   constructor() {
     this.providers = [];
     
-    // 🚨 UPDATED: Register ALL providers with validation
     if (env.THE_ODDS_API_KEY && !env.THE_ODDS_API_KEY.includes('expired') && env.THE_ODDS_API_KEY.length >= 20) {
       this.providers.push(new TheOddsProvider(env.THE_ODDS_API_KEY));
       console.log('✅ The Odds API provider registered');
@@ -132,7 +127,6 @@ class OddsService {
       console.warn('❌ API-Sports provider SKIPPED - invalid key');
     }
 
-    // 🚨 NEW: Always add fallback provider
     this.providers.push(new FallbackProvider());
     console.log('✅ Fallback provider registered');
 
@@ -150,15 +144,16 @@ class OddsService {
     return this.cache;
   }
 
-  // 🚨 UPDATED: Add sport key validation
   _validateSportKey(sportKey) {
     if (!sportKey || sportKey === 'undefined' || sportKey === 'null') {
       console.error('❌ CRITICAL: sportKey is undefined or invalid:', sportKey);
       throw new Error(`Invalid sport key: ${sportKey}`);
     }
     
-    // Basic validation for sport key format
-    const validSportPattern = /^[a-z]+_[a-z_]+$/;
+    // --- CHANGE START ---
+    // This regex is now more permissive to allow single-word sport keys like 'boxing'.
+    const validSportPattern = /^[a-z0-9_]+$/; 
+    // --- CHANGE END ---
     if (!validSportPattern.test(sportKey)) {
       console.warn(`⚠️ Suspicious sport key format: ${sportKey}`);
     }
@@ -175,9 +170,7 @@ class OddsService {
       return await cache.getOrSetJSON(cacheKey, CACHE_TTL.SPORTS, async () => {
         console.log('🔄 Fetching sports list from providers...');
 
-        // Try each provider in priority order
         for (const provider of this.providers) {
-          // Skip fallback provider for initial attempt
           if (provider.name === 'fallback') continue;
           
           try {
@@ -190,7 +183,6 @@ class OddsService {
             if (!(error instanceof TimeoutError)) {
               console.error(`❌ ${provider.name} sports fetch failed:`, error.message);
             }
-            // Continue to next provider
           }
         }
 
@@ -199,7 +191,7 @@ class OddsService {
         return getAllSports();
       });
     } catch (error) {
-      console.error('❌ Sports list fetch failed:', error);
+      console.error('❌ Sports list fetch failed:', error.message);
       sentryService.captureError(error, {
         component: 'odds_service',
         operation: 'getAvailableSports',
@@ -212,7 +204,6 @@ class OddsService {
   }
 
   async getSportOdds(sportKey, options = {}) {
-    // 🚨 NEW: Validate sport key first
     this._validateSportKey(sportKey);
     
     const {
@@ -247,7 +238,7 @@ class OddsService {
           options,
         });
       }
-      return []; // Return empty array instead of crashing
+      return [];
     }
   }
 
@@ -287,7 +278,7 @@ class OddsService {
       return liveGames;
     } catch (error) {
       console.error(`❌ Live games fetch failed for ${sportKey}:`, error);
-      return []; // Return empty instead of throwing
+      return [];
     }
   }
 
@@ -352,12 +343,9 @@ class OddsService {
 
   async _fetchSportOddsWithFallback(sportKey, options) {
     console.log(`🔄 Fetching odds for ${sportKey}...`);
-
-    // Enhanced validation
     this._validateSportKey(sportKey);
 
     let lastError = null;
-    let successfulProvider = null;
     
     for (const provider of this.providers) {
       try {
@@ -371,7 +359,6 @@ class OddsService {
 
         if (games && games.length > 0) {
           console.log(`✅ ${provider.name} returned ${games.length} games for ${sportKey}`);
-          successfulProvider = provider.name;
           return GameEnhancementService.enhanceGameData(games, sportKey, provider.name);
         }
 
@@ -380,16 +367,22 @@ class OddsService {
         lastError = error;
         console.error(`❌ ${provider.name} failed for ${sportKey}:`, error.message);
 
-        // Handle specific error cases
+        // --- CHANGE START ---
+        // This logic now correctly handles rate-limiting and other errors,
+        // allowing the bot to continue to the next provider.
         if (error?.response?.status === 401 || error?.response?.status === 403) {
           console.error(`🔐 ${provider.name} authentication failed - check API key`);
-          // Continue to next provider instead of breaking
-          continue;
+          continue; // Move to the next provider
         }
         
         if (error?.response?.status === 429) {
-          console.log(`🚫 ${provider.name} rate limited, stopping provider chain`);
-          throw error;
+          console.log(`🚫 ${provider.name} rate limited, trying next provider...`);
+          continue; // Move to the next provider
+        }
+        
+        if (error.code === 'ENOTFOUND') {
+            console.error(`🌐 Network error for ${provider.name}: Could not resolve hostname. Check DNS or network connection.`);
+            continue; // Move to the next provider
         }
         
         if (!(error instanceof TimeoutError)) {
@@ -399,6 +392,7 @@ class OddsService {
             sportKey,
           });
         }
+        // --- CHANGE END ---
       }
     }
 
@@ -407,11 +401,9 @@ class OddsService {
       console.error(`📋 Last error:`, lastError.message);
     }
     
-    // Return empty array instead of throwing to prevent service crashes
     return [];
   }
 
-  // FIXED: Remove hardcoded NBA from getUsage method
   async getUsage() {
     const theOddsProvider = this.providers.find((p) => p.name === 'theodds');
     if (theOddsProvider && typeof theOddsProvider.fetchUsage === 'function') {
@@ -426,7 +418,6 @@ class OddsService {
     return { requests_remaining: 'N/A' };
   }
 
-  // FIXED: Remove hardcoded NBA from getServiceStatus
   async getServiceStatus() {
     const status = {
       service: 'OddsService',
@@ -447,7 +438,6 @@ class OddsService {
       const freshness = await this.getDataFreshness();
       status.freshness = freshness;
 
-      // FIX: Test with first available sport instead of hardcoded NBA
       try {
         const availableSports = await this.getAvailableSports();
         if (availableSports && availableSports.length > 0) {
