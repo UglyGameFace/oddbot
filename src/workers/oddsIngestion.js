@@ -4,8 +4,12 @@ import DatabaseService from '../services/databaseService.js';
 import OddsService from '../services/oddsService.js';
 import { rateLimitService } from '../services/rateLimitService.js';
 import { sentryService } from '../services/sentryService.js';
-import gamesService from '../services/gamesService.js';
 import env from '../config/env.js';
+// --- CHANGE START ---
+// Import the high-priority list instead of the full gamesService
+import { HIGH_PRIORITY_SPORTS } from '../config/sportDefinitions.js';
+// --- CHANGE END ---
+
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ UNHANDLED REJECTION IN ODDS WORKER:', reason);
@@ -62,15 +66,18 @@ class OddsIngestionEngine {
     let totalUpsertedCount = 0;
 
     try {
-      const sportsToFetch = await gamesService.getAvailableSports();
+      // --- CHANGE START ---
+      // The worker now uses the predefined high-priority list instead of fetching all sports.
+      const sportsToFetch = HIGH_PRIORITY_SPORTS.map(key => ({ sport_key: key }));
+      // --- CHANGE END ---
       
       if (!sportsToFetch || !sportsToFetch.length) {
-        console.warn('⚠️ ODDS WORKER: Could not fetch the list of available sports. Cycle ending.');
+        console.warn('⚠️ ODDS WORKER: No high-priority sports configured. Cycle ending.');
         this.isJobRunning = false;
         return;
       }
       
-      console.log(`📋 Dynamically fetched ${sportsToFetch.length} sports to process.`);
+      console.log(`📋 Processing ${sportsToFetch.length} high-priority sports.`);
       const batchSize = env.ODDS_INGESTION_BATCH_SIZE || 5;
       const interBatchDelay = env.ODDS_INGESTION_DELAY_MS || 2000;
 
@@ -87,6 +94,7 @@ class OddsIngestionEngine {
         await Promise.all(batch.map(async (sport) => {
           try {
             console.log(`   📥 Fetching odds for ${sport.sport_key}...`);
+            // This call will now also update the cache for these popular sports
             const oddsForSport = await OddsService.getSportOdds(sport.sport_key, { useCache: false });
             
             if (oddsForSport && oddsForSport._headers) {
