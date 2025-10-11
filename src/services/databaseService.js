@@ -78,7 +78,7 @@ class DatabaseService {
     if (!this.client) return [];
     try {
       const { data, error } = await withTimeout(
-        this.client.rpc('get_sport_game_counts'), // Assuming a DB function for efficiency
+        this.client.rpc('get_sport_game_counts'),
         10000,
         'getSportGameCounts'
       );
@@ -124,12 +124,21 @@ class DatabaseService {
     try {
       console.log(`🔄 Upserting ${gamesData.length} games...`);
       
-      const gamesWithMetadata = gamesData.map(game => ({
-        ...game,
-        last_updated: new Date().toISOString(),
-        data_source: game.source || 'odds_api_ingestion'
-        // The 'checksum' property is no longer added.
-      }));
+      const gamesWithMetadata = gamesData.map(game => {
+        const safeGame = { ...game };
+        
+        delete safeGame.data_quality;
+        delete safeGame.enhanced;
+        delete safeGame.enhancement_source;
+        delete safeGame.last_enhanced;
+        delete safeGame.market_data;
+        
+        return {
+          ...safeGame,
+          last_updated: new Date().toISOString(),
+          data_source: game.source || 'odds_api_ingestion'
+        };
+      });
 
       const { data, error } = await withTimeout(
         this.client
@@ -143,7 +152,13 @@ class DatabaseService {
         `upsertGames_${gamesData.length}`
       );
 
-      if (error) throw error;
+      if (error) {
+        if (error.message.includes('column') && error.message.includes('does not exist')) {
+          console.warn('⚠️ Database schema mismatch, attempting fallback upsert...');
+          return await this._fallbackUpsert(gamesWithMetadata);
+        }
+        throw error;
+      }
 
       console.log(`✅ Successfully upserted ${data?.length || 0} games`);
       return { data, error: null };
@@ -161,6 +176,35 @@ class DatabaseService {
         game_count: gamesData.length
       });
       throw error;
+    }
+  }
+  
+  async _fallbackUpsert(gamesData) {
+    try {
+      console.log('🔄 Using fallback upsert with minimal fields...');
+      
+      const minimalGames = gamesData.map(game => ({
+        event_id: game.event_id,
+        sport_key: game.sport_key,
+        commence_time: game.commence_time,
+        home_team: game.home_team,
+        away_team: game.away_team,
+        last_updated: game.last_updated,
+        data_source: game.data_source
+      }));
+
+      const { data, error } = await this.client
+        .from('games')
+        .upsert(minimalGames, { onConflict: 'event_id' })
+        .select();
+
+      if (error) throw error;
+      
+      console.log(`✅ Fallback upsert completed: ${data?.length || 0} games`);
+      return { data, error: null };
+    } catch (fallbackError) {
+      console.error('❌ Fallback upsert also failed:', fallbackError.message);
+      return { data: null, error: fallbackError };
     }
   }
   
