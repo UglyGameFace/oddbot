@@ -4,62 +4,52 @@ import { rateLimitService } from '../rateLimitService.js';
 import { withTimeout } from '../../utils/asyncUtils.js';
 import { sentryService } from '../sentryService.js';
 
-// --- CHANGE START ---
-// The API base URL has been changed from api.sportradar.us to the global endpoint.
-const SPORTRADAR_BASE = 'https://api.sportradar.com/odds/v1/en/us/sports';
-// --- CHANGE END ---
+// This base URL now correctly points to the US Odds API v2, which matches your free trial.
+const SPORTRADAR_BASE = 'https://api.sportradar.us';
 
 export class SportRadarProvider {
   constructor(apiKey) {
     this.apiKey = apiKey;
     this.name = 'sportradar';
-    this.priority = 2;
+    this.priority = 20;
   }
 
   async fetchSportOdds(sportKey, options = {}) {
-    const radarSportKey = this.mapToSportRadarKey(sportKey);
-    const url = `${SPORTRADAR_BASE}/${radarSportKey}/schedule.json`;
-    
-    const response = await withTimeout(
-      axios.get(url, { 
-        params: { 
-          api_key: this.apiKey 
-        } 
-      }),
-      10000,
-      `sportradar_${sportKey}`
-    );
-
-    await rateLimitService.saveProviderQuota(this.name, response.headers);
-    return this.transformData(response.data?.sport_events, sportKey);
-  }
-
-  mapToSportRadarKey(sportKey) {
-    const mapping = {
-      'americanfootball_nfl': 'nfl',
-      'americanfootball_ncaaf': 'ncaafb',
-      'basketball_nba': 'nba',
-      'basketball_wnba': 'wnba',
-      'basketball_ncaab': 'ncaamb',
-      'baseball_mlb': 'mlb',
-      'icehockey_nhl': 'nhl',
-      'soccer_england_premier_league': 'epl'
-    };
-    return mapping[sportKey] || sportKey.split('_')[1] || 'nfl';
-  }
-
-  transformData(events, sportKey) {
-    if (!Array.isArray(events)) {
-      console.warn('⚠️ SportRadar returned non-array data');
+    const endpointConfig = this.getEndpointForSport(sportKey);
+    if (!endpointConfig) {
+      console.warn(`⚠️ SportRadar: No mapping found for sport key: ${sportKey}`);
       return [];
     }
 
-    return events.reduce((acc, event) => {
-      if (!event?.id || !event?.start_time) {
-        console.warn(`[Data Validation] Discarding invalid SportRadar event: ${event?.id}`);
-        return acc;
-      }
+    const url = `${SPORTRADAR_BASE}/${endpointConfig.path}`;
+    
+    try {
+        const response = await withTimeout(
+            axios.get(url, { params: { api_key: this.apiKey } }),
+            10000,
+            `sportradar_${sportKey}`
+        );
 
+        await rateLimitService.saveProviderQuota(this.name, response.headers);
+        return this.transformScheduleData(response.data?.sport_events, sportKey);
+    } catch (error) {
+        if (error.response?.status === 403) {
+            console.error(`❌ SportRadar 403 Forbidden: Your API key for the "${endpointConfig.name}" feed may not be active. Please verify your subscriptions on the Sportradar dashboard.`);
+        }
+        throw error;
+    }
+  }
+
+  getEndpointForSport(sportKey) {
+    // This mapping uses the specific endpoints for the free US odds packages.
+    const mapping = {
+      'americanfootball_nfl': { path: `us/odds/v2/en/sports/sr:sport:16/schedule.json`, name: 'US Football Odds' },
+      'basketball_nba': { path: `us/odds/v2/en/sports/sr:sport:1/schedule.json`, name: 'US Basketball Odds' },
+      'icehockey_nhl': { path: `us/odds/v2/en/sports/sr:sport:4/schedule.json`, name: 'US Hockey Odds' },
+      'baseball_mlb': { path: `us/odds/v2/en/sports/sr:sport:3/schedule.json`, name: 'US Baseball Odds' }
+    };
+    return mapping[sportKey];
+  }
       const title = event?.sport_event_context?.competition?.name || this.titleFromKey(sportKey);
       const competitors = event?.competitors || [];
       
