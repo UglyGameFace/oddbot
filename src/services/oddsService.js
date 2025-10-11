@@ -146,16 +146,14 @@ class OddsService {
 
   _validateSportKey(sportKey) {
     if (!sportKey || sportKey === 'undefined' || sportKey === 'null') {
-      console.error('❌ CRITICAL: sportKey is undefined or invalid:', sportKey);
-      throw new Error(`Invalid sport key: ${sportKey}`);
+      console.warn('⚠️ sportKey is undefined or invalid, using fallback');
+      return false;
     }
     
-    // --- CHANGE START ---
-    // This regex is now more permissive to allow single-word sport keys like 'boxing'.
-    const validSportPattern = /^[a-z0-9_]+$/; 
-    // --- CHANGE END ---
+    const validSportPattern = /^[a-z0-9_]+$/;
     if (!validSportPattern.test(sportKey)) {
       console.warn(`⚠️ Suspicious sport key format: ${sportKey}`);
+      return false;
     }
     
     return true;
@@ -204,7 +202,10 @@ class OddsService {
   }
 
   async getSportOdds(sportKey, options = {}) {
-    this._validateSportKey(sportKey);
+    if (!this._validateSportKey(sportKey)) {
+      console.warn(`⚠️ Invalid sport key ${sportKey}, returning empty array`);
+      return [];
+    }
     
     const {
       regions = 'us',
@@ -343,7 +344,9 @@ class OddsService {
 
   async _fetchSportOddsWithFallback(sportKey, options) {
     console.log(`🔄 Fetching odds for ${sportKey}...`);
-    this._validateSportKey(sportKey);
+    if (!this._validateSportKey(sportKey)) {
+      return [];
+    }
 
     let lastError = null;
     
@@ -367,22 +370,19 @@ class OddsService {
         lastError = error;
         console.error(`❌ ${provider.name} failed for ${sportKey}:`, error.message);
 
-        // --- CHANGE START ---
-        // This logic now correctly handles rate-limiting and other errors,
-        // allowing the bot to continue to the next provider.
         if (error?.response?.status === 401 || error?.response?.status === 403) {
           console.error(`🔐 ${provider.name} authentication failed - check API key`);
-          continue; // Move to the next provider
+          continue;
         }
         
         if (error?.response?.status === 429) {
           console.log(`🚫 ${provider.name} rate limited, trying next provider...`);
-          continue; // Move to the next provider
+          continue;
         }
         
         if (error.code === 'ENOTFOUND') {
             console.error(`🌐 Network error for ${provider.name}: Could not resolve hostname. Check DNS or network connection.`);
-            continue; // Move to the next provider
+            continue;
         }
         
         if (!(error instanceof TimeoutError)) {
@@ -392,7 +392,6 @@ class OddsService {
             sportKey,
           });
         }
-        // --- CHANGE END ---
       }
     }
 
@@ -441,19 +440,25 @@ class OddsService {
       try {
         const availableSports = await this.getAvailableSports();
         if (availableSports && availableSports.length > 0) {
-          const testSport = availableSports[0].sport_key;
-          const testGames = await this.getSportOdds(testSport, {
-            useCache: false,
-          });
-          status.statistics.test_games = testGames.length;
-          status.statistics.data_quality =
-            DataQualityService.assessDataQuality(testGames);
-          status.statistics.test_sport = testSport;
+          const testSport = availableSports[0]?.sport_key;
+          if (testSport && this._validateSportKey(testSport)) {
+            const testGames = await this.getSportOdds(testSport, {
+              useCache: false,
+            });
+            status.statistics.test_games = testGames.length;
+            status.statistics.data_quality =
+              DataQualityService.assessDataQuality(testGames);
+            status.statistics.test_sport = testSport;
+          } else {
+            status.statistics.test_games = 0;
+            status.statistics.data_quality = { score: 0, rating: 'invalid_test_sport' };
+          }
         } else {
           status.statistics.test_games = 0;
           status.statistics.data_quality = { score: 0, rating: 'no_sports' };
         }
       } catch (testError) {
+        console.warn('❌ Service status test failed:', testError.message);
         status.statistics.test_games = 0;
         status.statistics.data_quality = { score: 0, rating: 'test_failed', error: testError.message };
       }
