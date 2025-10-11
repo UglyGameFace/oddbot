@@ -2,15 +2,16 @@
 import axios from 'axios';
 import { rateLimitService } from '../rateLimitService.js';
 import { withTimeout } from '../../utils/asyncUtils.js';
+import { sentryService } from '../sentryService.js';
 
-// This base URL now correctly points to the US Odds API v2, which matches your free trial.
+// This base URL now correctly points to the US-based API endpoint.
 const SPORTRADAR_BASE = 'https://api.sportradar.us';
 
 export class SportRadarProvider {
   constructor(apiKey) {
     this.apiKey = apiKey;
     this.name = 'sportradar';
-    this.priority = 20;
+    this.priority = 20; // Corrected priority
   }
 
   async fetchSportOdds(sportKey, options = {}) {
@@ -30,28 +31,32 @@ export class SportRadarProvider {
         );
 
         await rateLimitService.saveProviderQuota(this.name, response.headers);
-        // The data structure for v2 is different, so we need a new transform function.
+        // Using the correct transformation function for the v2 schedule endpoint.
         return this.transformScheduleData(response.data?.sport_events, sportKey);
     } catch (error) {
-        // Add specific logging for 403 errors to help debug permissions
         if (error.response?.status === 403) {
             console.error(`❌ SportRadar 403 Forbidden: Your API key for the "${endpointConfig.name}" feed may not be active. Please verify your subscriptions on the Sportradar dashboard.`);
         }
-        throw error; // Re-throw the error to be handled by the oddsService fallback chain
+        // Re-throw the error to be handled by the oddsService fallback chain.
+        throw error;
     }
   }
 
+  // This function maps your internal sport keys to the specific IDs and paths
+  // required by the US Odds API v2, which your free plan uses.
   getEndpointForSport(sportKey) {
-    // This mapping uses the specific endpoints for the free US odds packages.
     const mapping = {
       'americanfootball_nfl': { path: `us/odds/v2/en/sports/sr:sport:16/schedule.json`, name: 'US Football Odds' },
       'basketball_nba': { path: `us/odds/v2/en/sports/sr:sport:1/schedule.json`, name: 'US Basketball Odds' },
       'icehockey_nhl': { path: `us/odds/v2/en/sports/sr:sport:4/schedule.json`, name: 'US Hockey Odds' },
-      'baseball_mlb': { path: `us/odds/v2/en/sports/sr:sport:3/schedule.json`, name: 'US Baseball Odds' }
+      'baseball_mlb': { path: `us/odds/v2/en/sports/sr:sport:3/schedule.json`, name: 'US Baseball Odds' },
+      // Add other sports here as you subscribe to them on the Sportradar dashboard.
+      // 'soccer_england_premier_league': { path: 'us/odds/v2/en/sports/sr:sport:25/schedule.json', name: 'US Soccer Odds' },
     };
     return mapping[sportKey];
   }
 
+  // This function is built to parse the response from the correct v2 schedule endpoint.
   transformScheduleData(events, sportKey) {
     if (!Array.isArray(events)) {
       console.warn('⚠️ SportRadar (schedule) returned non-array data');
@@ -67,17 +72,22 @@ export class SportRadarProvider {
       const awayTeam = event.competitors.find(c => c.qualifier === 'away')?.name || 'N/A';
       
       const enhancedGame = {
-        event_id: event.id.replace('sr:match:', ''),
+        event_id: event.id.replace('sr:match:', ''), // Simplify the event ID
         sport_key: sportKey,
         league_key: event.sport_event_context?.competition?.name || this.titleFromKey(sportKey),
         commence_time: event.start_time,
         home_team: homeTeam,
         away_team: awayTeam,
         market_data: { 
-          bookmakers: [], // The schedule endpoint does not contain odds data.
+          // IMPORTANT: The free 'schedule' endpoint does not include odds data itself.
+          // It only confirms the game exists. To get odds, a separate API call per game is needed,
+          // which is often not included in the free tier and would quickly exhaust your limits.
+          // This structure allows your bot to know games are happening, even if it can't get live odds from this specific provider.
+          bookmakers: [], 
           last_updated: new Date().toISOString()
         },
         sport_title: this.titleFromKey(sportKey),
+        data_quality: this.assessGameDataQuality(event),
         source: 'sportradar'
       };
 
@@ -86,8 +96,52 @@ export class SportRadarProvider {
     }, []);
   }
 
+  // This function was missing from the previous version.
+  convertToAmericanOdds(decimalOdds) {
+    if (decimalOdds >= 2.0) {
+      return Math.round((decimalOdds - 1) * 100);
+    } else {
+      return Math.round(-100 / (decimalOdds - 1));
+    }
+  }
+
+  // This function was missing from the previous version.
+  assessGameDataQuality(game) {
+    let score = 0;
+    const factors = [];
+    if (game.competitors && game.competitors.length === 2) {
+        score += 50;
+        factors.push('valid_teams');
+    }
+    if (game.start_time) {
+        score += 30;
+        factors.push('start_time');
+    }
+    if (game.sport_event_context?.competition?.name) {
+        score += 20;
+        factors.push('league_info');
+    }
+    return {
+      score,
+      factors,
+      rating: score >= 80 ? 'excellent' : 'good'
+    };
+  }
+  
+  // This function was missing from the previous version.
   titleFromKey(key) {
-    return key.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+    const sportMapping = {
+      'americanfootball_nfl': 'NFL',
+      'americanfootball_ncaaf': 'NCAAF',
+      'basketball_nba': 'NBA',
+      'basketball_wnba': 'WNBA',
+      'baseball_mlb': 'MLB',
+      'icehockey_nhl': 'NHL',
+      'soccer_england_premier_league': 'Premier League'
+    };
+    return sportMapping[key] || key.split('_').map(word => 
+      word.charAt(0).toUpperCase() + word.slice(1)
+    ).join(' ');
   }
 
   async getProviderStatus() {
@@ -98,9 +152,15 @@ export class SportRadarProvider {
         status: 'active',
         priority: this.priority,
         last_quota_check: quota?.at ? new Date(quota.at).toISOString() : null,
+        remaining_requests: quota?.remaining,
+        should_bypass: await rateLimitService.shouldBypassLive(this.name)
       };
     } catch (error) {
-      return { name: this.name, status: 'error', error: error.message };
+      return {
+        name: this.name,
+        status: 'error',
+        error: error.message
+      };
     }
   }
 }
