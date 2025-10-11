@@ -1,6 +1,6 @@
-// src/services/cacheService.js - ABSOLUTE FINAL FIXED VERSION
-
+// src/services/cacheService.js - COMPLETE BATTLE-READY VERSION
 import { sentryService } from './sentryService.js';
+import redisServiceInstance from './redisService.js';
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -9,69 +9,112 @@ const safeJsonParse = (str, fallback = null) => {
   try {
     return JSON.parse(str);
   } catch (error) {
-    console.warn('❌ JSON parse error:', error.message);
+    console.warn('❌ CacheService: JSON parse error:', error.message);
     return fallback;
   }
 };
 
-export default function makeCache(redis) {
-  const DEFAULT_LOCK_MS = 8000;
-  const DEFAULT_RETRY_MS = 150;
-  
-  const RELEASE_LOCK_SCRIPT = `
-    if redis.call('GET', KEYS[1]) == ARGV[1] then
-        return redis.call('DEL', KEYS[1])
-    else
-        return 0
-    end
-  `;
+class CacheService {
+  constructor() {
+    this.redis = null;
+    this.isInitialized = false;
+    this.initializationPromise = null;
+    this.DEFAULT_LOCK_MS = 8000;
+    this.DEFAULT_RETRY_MS = 150;
+    
+    this.RELEASE_LOCK_SCRIPT = `
+      if redis.call('GET', KEYS[1]) == ARGV[1] then
+          return redis.call('DEL', KEYS[1])
+      else
+          return 0
+      end
+    `;
 
-  // CRITICAL FIX: Check if Redis client is valid
-  function isValidRedisClient(client) {
-    return client && 
-           typeof client.get === 'function' && 
-           typeof client.set === 'function' &&
-           typeof client.del === 'function';
+    this.init();
   }
 
-  // CRITICAL FIX: Safe Redis command execution
-  async function safeRedisCommand(operation, context = 'redis_command') {
-    // Check if redis client is valid
-    if (!isValidRedisClient(redis)) {
-      console.warn(`⚠️ Invalid Redis client in ${context}, skipping operation`);
-      throw new Error('Redis client not available or invalid');
+  async init() {
+    if (this.isInitialized) return;
+    if (this.initializationPromise) return this.initializationPromise;
+
+    this.initializationPromise = new Promise(async (resolve) => {
+      console.log('🔄 CacheService: Initializing cache service...');
+      
+      try {
+        this.redis = await redisServiceInstance.getClient();
+        
+        if (!this.redis) {
+          console.warn('⚠️ CacheService: No Redis client available, operating in fallback mode');
+          this.isInitialized = true;
+          resolve();
+          return;
+        }
+
+        console.log('✅ CacheService: Successfully initialized with Redis');
+        this.isInitialized = true;
+        resolve();
+      } catch (error) {
+        console.error('❌ CacheService: Initialization failed:', error.message);
+        this.redis = null;
+        this.isInitialized = true;
+        resolve();
+      }
+    });
+
+    return this.initializationPromise;
+  }
+
+  async ensureInitialized() {
+    if (!this.isInitialized) {
+      await this.init();
+    }
+  }
+
+  isValidRedisClient() {
+    return this.redis && 
+           typeof this.redis.get === 'function' && 
+           typeof this.redis.set === 'function' &&
+           typeof this.redis.del === 'function';
+  }
+
+  async safeRedisCommand(operation, context = 'redis_command') {
+    await this.ensureInitialized();
+    
+    if (!this.isValidRedisClient()) {
+      console.warn(`⚠️ CacheService: Invalid Redis client in ${context}, skipping operation`);
+      throw new Error('Redis client not available');
     }
     
     try {
-      return await operation();
+      return await operation(this.redis);
     } catch (error) {
       if (!error.message.includes('ERR syntax error')) {
-        console.error(`❌ Redis command failed (${context}):`, error.message);
+        console.error(`❌ CacheService: Redis command failed (${context}):`, error.message);
         sentryService.captureError(error, {
           component: 'cache_service',
           operation: context
         });
       } else {
-        console.warn(`⚠️ Redis syntax error in ${context}:`, error.message);
+        console.warn(`⚠️ CacheService: Redis syntax error in ${context}:`, error.message);
       }
       throw error;
     }
   }
 
-  async function executeLoaderAndCache(key, ttlSec, loader, context) {
+  async executeLoaderAndCache(key, ttlSec, loader, context) {
     try {
       const data = await loader();
       if (data !== undefined && data !== null) {
-        await safeRedisCommand(async () => {
-          await redis.set(key, JSON.stringify(data), 'EX', ttlSec);
+        await this.safeRedisCommand(async (client) => {
+          await client.set(key, JSON.stringify(data), 'EX', ttlSec);
         }, 'set_cache_data');
-        console.log(`💾 Cached data for key: ${key} (TTL: ${ttlSec}s)`);
+        console.log(`💾 CacheService: Cached data for key: ${key} (TTL: ${ttlSec}s)`);
       } else {
-        console.warn(`⚠️ Loader returned null/undefined for key: ${key}`);
+        console.warn(`⚠️ CacheService: Loader returned null/undefined for key: ${key}`);
       }
       return data;
     } catch (loaderError) {
-      console.error(`❌ Loader failed for cache key: ${key}`, loaderError.message);
+      console.error(`❌ CacheService: Loader failed for cache key: ${key}`, loaderError.message);
       sentryService.captureError(loaderError, {
         component: 'cache_service',
         operation: 'getOrSetJSON_loader',
@@ -82,52 +125,53 @@ export default function makeCache(redis) {
     }
   }
 
-  async function getOrSetJSON(key, ttlSec, loader, { 
-    lockMs = DEFAULT_LOCK_MS, 
-    retryMs = DEFAULT_RETRY_MS,
+  async getOrSetJSON(key, ttlSec, loader, { 
+    lockMs = this.DEFAULT_LOCK_MS, 
+    retryMs = this.DEFAULT_RETRY_MS,
     context = {},
     fallbackOnError = true
   } = {}) {
     
+    await this.ensureInitialized();
     const lockValue = '1'; 
     
     try {
-      const cached = await safeRedisCommand(async () => {
-        return await redis.get(key);
+      const cached = await this.safeRedisCommand(async (client) => {
+        return await client.get(key);
       }, 'get_cached_data');
 
       if (cached) {
         try {
           const parsed = safeJsonParse(cached);
           if (parsed !== null) {
-            console.log(`📦 Cache HIT for key: ${key}`);
+            console.log(`📦 CacheService: Cache HIT for key: ${key}`);
             return parsed;
           }
         } catch (parseError) {
-          console.warn(`❌ Failed to parse cached JSON for key: ${key}`, parseError);
+          console.warn(`❌ CacheService: Failed to parse cached JSON for key: ${key}`, parseError);
         }
       }
 
-      console.log(`❌ Cache MISS for key: ${key}`);
+      console.log(`❌ CacheService: Cache MISS for key: ${key}`);
       const lockKey = `lock:${key}`;
       
       let gotLock;
       try {
-        gotLock = await safeRedisCommand(async () => {
-          return await redis.set(lockKey, lockValue, 'PX', lockMs, 'NX');
+        gotLock = await this.safeRedisCommand(async (client) => {
+          return await client.set(lockKey, lockValue, 'PX', lockMs, 'NX');
         }, 'acquire_lock');
       } catch (lockError) {
-        console.warn(`⚠️ Lock acquisition failed for ${key}, proceeding without lock:`, lockError.message);
+        console.warn(`⚠️ CacheService: Lock acquisition failed for ${key}, proceeding without lock:`, lockError.message);
         gotLock = null;
       }
 
       if (gotLock === 'OK') {
-        console.log(`🔒 Acquired lock for key: ${key}`);
+        console.log(`🔒 CacheService: Acquired lock for key: ${key}`);
         try {
-          return await executeLoaderAndCache(key, ttlSec, loader, context);
+          return await this.executeLoaderAndCache(key, ttlSec, loader, context);
         } catch (loaderError) {
           if (fallbackOnError && cached) {
-            console.log('🔄 Using cached data despite loader error');
+            console.log('🔄 CacheService: Using cached data despite loader error');
             const fallbackData = safeJsonParse(cached, null);
             if (fallbackData) {
               return fallbackData;
@@ -136,51 +180,51 @@ export default function makeCache(redis) {
           throw loaderError;
         } finally {
           try {
-            await safeRedisCommand(async () => {
-              await redis.eval(RELEASE_LOCK_SCRIPT, 1, lockKey, lockValue);
+            await this.safeRedisCommand(async (client) => {
+              await client.eval(this.RELEASE_LOCK_SCRIPT, 1, lockKey, lockValue);
             }, 'release_lock');
-            console.log(`🔓 Released lock for key: ${key}`);
+            console.log(`🔓 CacheService: Released lock for key: ${key}`);
           } catch (releaseError) {
-            console.warn(`⚠️ Failed to release lock for key: ${lockKey}`, releaseError.message);
+            console.warn(`⚠️ CacheService: Failed to release lock for key: ${lockKey}`, releaseError.message);
           }
         }
       } else {
-        console.log(`⏳ Waiting for lock on key: ${key}`);
+        console.log(`⏳ CacheService: Waiting for lock on key: ${key}`);
         const deadline = Date.now() + lockMs;
         
         while (Date.now() < deadline) {
           await sleep(retryMs);
           
           try {
-            const again = await safeRedisCommand(async () => {
-              return await redis.get(key);
+            const again = await this.safeRedisCommand(async (client) => {
+              return await client.get(key);
             }, 'lock_wait_check');
             
             if (again) {
               const parsed = safeJsonParse(again);
               if (parsed !== null) {
-                console.log(`📦 Got cached data after lock wait for key: ${key}`);
+                console.log(`📦 CacheService: Got cached data after lock wait for key: ${key}`);
                 return parsed;
               }
               break;
             }
           } catch (waitError) {
-            console.warn(`⚠️ Lock wait check failed, proceeding without lock:`, waitError.message);
+            console.warn(`⚠️ CacheService: Lock wait check failed, proceeding without lock:`, waitError.message);
             break;
           }
         }
         
-        console.log(`⏰ Lock wait timed out/failed for key: ${key}. Loading data without lock...`);
+        console.log(`⏰ CacheService: Lock wait timed out for key: ${key}. Loading data without lock...`);
         
         try {
-          const data = await executeLoaderAndCache(key, ttlSec, loader, context);
+          const data = await this.executeLoaderAndCache(key, ttlSec, loader, context);
           return data;
         } catch (loaderError) {
            throw loaderError;
         }
       }
     } catch (error) {
-      console.error(`❌ Cache operation failed for key: ${key}`, error.message);
+      console.error(`❌ CacheService: Cache operation failed for key: ${key}`, error.message);
       
       if (!error.message.includes('ERR syntax error')) {
         sentryService.captureError(error, {
@@ -193,10 +237,10 @@ export default function makeCache(redis) {
       
       if (fallbackOnError) {
         try {
-          console.log(`🔄 Fallback to direct loader for key: ${key}`);
+          console.log(`🔄 CacheService: Fallback to direct loader for key: ${key}`);
           return await loader();
         } catch (fallbackError) {
-          console.error(`❌ Fallback loader also failed for key: ${key}`, fallbackError.message);
+          console.error(`❌ CacheService: Fallback loader also failed for key: ${key}`, fallbackError.message);
           throw fallbackError;
         }
       }
@@ -204,50 +248,56 @@ export default function makeCache(redis) {
     }
   }
 
-  async function getJSON(key, fallback = null) {
+  async getJSON(key, fallback = null) {
+    await this.ensureInitialized();
+    
     try {
-      const cached = await safeRedisCommand(async () => {
-        return await redis.get(key);
+      const cached = await this.safeRedisCommand(async (client) => {
+        return await client.get(key);
       }, 'getJSON');
       const result = safeJsonParse(cached, fallback);
-      console.log(`🔍 Cache GET for ${key}: ${result ? 'HIT' : 'MISS'}`);
+      console.log(`🔍 CacheService: Cache GET for ${key}: ${result ? 'HIT' : 'MISS'}`);
       return result;
     } catch (error) {
-      console.error(`❌ Cache get failed for key: ${key}`, error.message);
+      console.error(`❌ CacheService: Cache get failed for key: ${key}`, error.message);
       return fallback;
     }
   }
 
-  async function setJSON(key, value, ttlSec = 3600) {
+  async setJSON(key, value, ttlSec = 3600) {
+    await this.ensureInitialized();
+    
     try {
       if (value === undefined || value === null) {
-        await safeRedisCommand(async () => {
-          await redis.del(key);
+        await this.safeRedisCommand(async (client) => {
+          await client.del(key);
         }, 'delete_key');
-        console.log(`🗑️ Deleted cache key: ${key}`);
+        console.log(`🗑️ CacheService: Deleted cache key: ${key}`);
         return true;
       }
       
-      await safeRedisCommand(async () => {
-        await redis.set(key, JSON.stringify(value), 'EX', ttlSec);
+      await this.safeRedisCommand(async (client) => {
+        await client.set(key, JSON.stringify(value), 'EX', ttlSec);
       }, 'setJSON');
-      console.log(`💾 Cache SET for ${key} (TTL: ${ttlSec}s)`);
+      console.log(`💾 CacheService: Cache SET for ${key} (TTL: ${ttlSec}s)`);
       return true;
     } catch (error) {
-      console.error(`❌ Cache set failed for key: ${key}`, error.message);
+      console.error(`❌ CacheService: Cache set failed for key: ${key}`, error.message);
       return false;
     }
   }
 
-  async function deleteKey(key) {
+  async deleteKey(key) {
+    await this.ensureInitialized();
+    
     try {
-      const result = await safeRedisCommand(async () => {
-        return await redis.del(key);
+      const result = await this.safeRedisCommand(async (client) => {
+        return await client.del(key);
       }, 'deleteKey');
-      console.log(`🗑️ Deleted cache key: ${key} (result: ${result})`);
+      console.log(`🗑️ CacheService: Deleted cache key: ${key} (result: ${result})`);
       return result > 0;
     } catch (error) {
-      console.error(`❌ Failed to delete cache key: ${key}`, error.message);
+      console.error(`❌ CacheService: Failed to delete cache key: ${key}`, error.message);
       if (!error.message.includes('ERR syntax error')) {
         sentryService.captureError(error, {
           component: 'cache_service',
@@ -259,15 +309,17 @@ export default function makeCache(redis) {
     }
   }
 
-  async function getKeys(pattern) {
+  async getKeys(pattern) {
+    await this.ensureInitialized();
+    
     try {
-      const keys = await safeRedisCommand(async () => {
-        return await redis.keys(pattern);
+      const keys = await this.safeRedisCommand(async (client) => {
+        return await client.keys(pattern);
       }, 'getKeys');
-      console.log(`🔍 Found ${keys.length} keys matching pattern: ${pattern}`);
+      console.log(`🔍 CacheService: Found ${keys.length} keys matching pattern: ${pattern}`);
       return keys;
     } catch (error) {
-      console.error(`❌ Failed to get keys for pattern: ${pattern}`, error.message);
+      console.error(`❌ CacheService: Failed to get keys for pattern: ${pattern}`, error.message);
       if (!error.message.includes('ERR syntax error')) {
         sentryService.captureError(error, {
           component: 'cache_service',
@@ -279,23 +331,25 @@ export default function makeCache(redis) {
     }
   }
 
-  async function flushPattern(pattern) {
+  async flushPattern(pattern) {
+    await this.ensureInitialized();
+    
     try {
-      const keys = await safeRedisCommand(async () => {
-        return await redis.keys(pattern);
+      const keys = await this.safeRedisCommand(async (client) => {
+        return await client.keys(pattern);
       }, 'flushPattern_keys');
       
       if (keys.length > 0) {
-        await safeRedisCommand(async () => {
-          await redis.del(...keys);
+        await this.safeRedisCommand(async (client) => {
+          await client.del(...keys);
         }, 'flushPattern_del');
-        console.log(`🧹 Flushed ${keys.length} keys matching: ${pattern}`);
+        console.log(`🧹 CacheService: Flushed ${keys.length} keys matching: ${pattern}`);
         return keys.length;
       }
-      console.log(`🔍 No keys found matching pattern: ${pattern}`);
+      console.log(`🔍 CacheService: No keys found matching pattern: ${pattern}`);
       return 0;
     } catch (error) {
-      console.error(`❌ Failed to flush pattern: ${pattern}`, error.message);
+      console.error(`❌ CacheService: Failed to flush pattern: ${pattern}`, error.message);
       if (!error.message.includes('ERR syntax error')) {
         sentryService.captureError(error, {
           component: 'cache_service',
@@ -307,10 +361,19 @@ export default function makeCache(redis) {
     }
   }
 
-  async function getCacheInfo() {
+  async getCacheInfo() {
+    await this.ensureInitialized();
+    
     try {
-      const info = await safeRedisCommand(async () => {
-        return await redis.info();
+      if (!this.isValidRedisClient()) {
+        return { 
+          status: 'redis_not_available',
+          timestamp: new Date().toISOString() 
+        };
+      }
+
+      const info = await this.safeRedisCommand(async (client) => {
+        return await client.info();
       }, 'getCacheInfo');
 
       const lines = info.split('\r\n');
@@ -330,8 +393,8 @@ export default function makeCache(redis) {
       
       for (const pattern of commonPatterns) {
         try {
-          const keys = await safeRedisCommand(async () => {
-            return await redis.keys(pattern);
+          const keys = await this.safeRedisCommand(async (client) => {
+            return await client.keys(pattern);
           }, `getKeys_${pattern}`);
           patternCounts[pattern] = keys.length;
         } catch (error) {
@@ -341,8 +404,8 @@ export default function makeCache(redis) {
 
       let memoryData = {};
       try {
-        const memoryInfo = await safeRedisCommand(async () => {
-          return await redis.info('memory');
+        const memoryInfo = await this.safeRedisCommand(async (client) => {
+          return await client.info('memory');
         }, 'getMemoryInfo');
         
         const memoryLines = memoryInfo.split('\r\n');
@@ -355,14 +418,14 @@ export default function makeCache(redis) {
           }
         }
       } catch (memoryError) {
-        console.warn('⚠️ Failed to get memory info:', memoryError.message);
+        console.warn('⚠️ CacheService: Failed to get memory info:', memoryError.message);
       }
 
       const totalKeys = Object.values(patternCounts).reduce((sum, count) => sum + count, 0);
       const hitRate = cacheInfo.keyspace_hits && cacheInfo.keyspace_misses ? 
         (parseInt(cacheInfo.keyspace_hits) / (parseInt(cacheInfo.keyspace_hits) + parseInt(cacheInfo.keyspace_misses))).toFixed(4) : 0;
 
-      console.log(`📊 Cache Info: ${totalKeys} total keys, hit rate: ${(hitRate * 100).toFixed(2)}%`);
+      console.log(`📊 CacheService: Cache Info - ${totalKeys} total keys, hit rate: ${(hitRate * 100).toFixed(2)}%`);
 
       return {
         ...cacheInfo,
@@ -372,10 +435,11 @@ export default function makeCache(redis) {
         memory_peak: memoryData.used_memory_peak_human || 'unknown',
         hit_rate: hitRate,
         hit_rate_percentage: `${(hitRate * 100).toFixed(2)}%`,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        redis_status: redisServiceInstance.isConnected() ? 'connected' : 'disconnected'
       };
     } catch (error) {
-      console.error('❌ Failed to get cache info:', error.message);
+      console.error('❌ CacheService: Failed to get cache info:', error.message);
       if (!error.message.includes('ERR syntax error')) {
         sentryService.captureError(error, {
           component: 'cache_service',
@@ -384,18 +448,29 @@ export default function makeCache(redis) {
       }
       return { 
         error: error.message,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        redis_status: 'error'
       };
     }
   }
 
-  async function keyInfo(key) {
+  async keyInfo(key) {
+    await this.ensureInitialized();
+    
     try {
+      if (!this.isValidRedisClient()) {
+        return {
+          exists: false,
+          error: 'Redis client not available',
+          timestamp: new Date().toISOString()
+        };
+      }
+
       const [exists, ttl, type, memory] = await Promise.all([
-        safeRedisCommand(async () => await redis.exists(key), 'keyInfo_exists'),
-        safeRedisCommand(async () => await redis.ttl(key), 'keyInfo_ttl'),
-        safeRedisCommand(async () => await redis.type(key), 'keyInfo_type'),
-        safeRedisCommand(async () => await redis.memory('USAGE', key).catch(() => null), 'keyInfo_memory')
+        this.safeRedisCommand(async (client) => await client.exists(key), 'keyInfo_exists'),
+        this.safeRedisCommand(async (client) => await client.ttl(key), 'keyInfo_ttl'),
+        this.safeRedisCommand(async (client) => await client.type(key), 'keyInfo_type'),
+        this.safeRedisCommand(async (client) => await client.memory('USAGE', key).catch(() => null), 'keyInfo_memory')
       ]);
       
       const result = {
@@ -408,11 +483,11 @@ export default function makeCache(redis) {
         timestamp: new Date().toISOString()
       };
 
-      console.log(`🔍 Key info for ${key}:`, result);
+      console.log(`🔍 CacheService: Key info for ${key}:`, result);
       return result;
 
     } catch (error) {
-      console.error(`❌ Failed to get key info for: ${key}`, error.message);
+      console.error(`❌ CacheService: Failed to get key info for: ${key}`, error.message);
       return {
         exists: false,
         error: error.message,
@@ -421,92 +496,115 @@ export default function makeCache(redis) {
     }
   }
 
-  async function increment(key, value = 1, ttlSec = null) {
+  async increment(key, value = 1, ttlSec = null) {
+    await this.ensureInitialized();
+    
     try {
-      const result = await safeRedisCommand(async () => {
-        return await redis.incrby(key, value);
+      const result = await this.safeRedisCommand(async (client) => {
+        return await client.incrby(key, value);
       }, 'increment');
       
       if (ttlSec && ttlSec > 0) {
-        await safeRedisCommand(async () => {
-          await redis.expire(key, ttlSec);
+        await this.safeRedisCommand(async (client) => {
+          await client.expire(key, ttlSec);
         }, 'increment_expire');
       }
-      console.log(`➕ Incremented ${key} by ${value}, new value: ${result}`);
+      console.log(`➕ CacheService: Incremented ${key} by ${value}, new value: ${result}`);
       return result;
     } catch (error) {
-      console.error(`❌ Failed to increment key: ${key}`, error.message);
+      console.error(`❌ CacheService: Failed to increment key: ${key}`, error.message);
       return null;
     }
   }
 
-  async function decrement(key, value = 1, ttlSec = null) {
+  async decrement(key, value = 1, ttlSec = null) {
+    await this.ensureInitialized();
+    
     try {
-      const result = await safeRedisCommand(async () => {
-        return await redis.decrby(key, value);
+      const result = await this.safeRedisCommand(async (client) => {
+        return await client.decrby(key, value);
       }, 'decrement');
       
       if (ttlSec && ttlSec > 0) {
-        await safeRedisCommand(async () => {
-          await redis.expire(key, ttlSec);
+        await this.safeRedisCommand(async (client) => {
+          await client.expire(key, ttlSec);
         }, 'decrement_expire');
       }
-      console.log(`➖ Decremented ${key} by ${value}, new value: ${result}`);
+      console.log(`➖ CacheService: Decremented ${key} by ${value}, new value: ${result}`);
       return result;
     } catch (error) {
-      console.error(`❌ Failed to decrement key: ${key}`, error.message);
+      console.error(`❌ CacheService: Failed to decrement key: ${key}`, error.message);
       return null;
     }
   }
 
-  async function setWithTTL(key, value, ttlSec) {
+  async setWithTTL(key, value, ttlSec) {
+    await this.ensureInitialized();
+    
     try {
       if (ttlSec && ttlSec > 0) {
-        await safeRedisCommand(async () => {
-          await redis.set(key, value, 'EX', ttlSec);
+        await this.safeRedisCommand(async (client) => {
+          await client.set(key, value, 'EX', ttlSec);
         }, 'setWithTTL');
       } else {
-        await safeRedisCommand(async () => {
-          await redis.set(key, value);
+        await this.safeRedisCommand(async (client) => {
+          await client.set(key, value);
         }, 'setWithoutTTL');
       }
-      console.log(`💾 Set key ${key} with TTL ${ttlSec || 'none'}`);
+      console.log(`💾 CacheService: Set key ${key} with TTL ${ttlSec || 'none'}`);
       return true;
     } catch (error) {
-      console.error(`❌ Failed to set with TTL for key: ${key}`, error.message);
+      console.error(`❌ CacheService: Failed to set with TTL for key: ${key}`, error.message);
       return false;
     }
   }
 
-  async function getWithTTL(key) {
+  async getWithTTL(key) {
+    await this.ensureInitialized();
+    
     try {
       const [value, ttl] = await Promise.all([
-        safeRedisCommand(async () => await redis.get(key), 'getWithTTL_value'),
-        safeRedisCommand(async () => await redis.ttl(key), 'getWithTTL_ttl')
+        this.safeRedisCommand(async (client) => await client.get(key), 'getWithTTL_value'),
+        this.safeRedisCommand(async (client) => await client.ttl(key), 'getWithTTL_ttl')
       ]);
-      console.log(`🔍 Get with TTL for ${key}: value=${value ? 'exists' : 'null'}, ttl=${ttl}`);
+      console.log(`🔍 CacheService: Get with TTL for ${key}: value=${value ? 'exists' : 'null'}, ttl=${ttl}`);
       return { value, ttl };
     } catch (error) {
-      console.error(`❌ Failed to get with TTL for key: ${key}`, error.message);
+      console.error(`❌ CacheService: Failed to get with TTL for key: ${key}`, error.message);
       return { value: null, ttl: -2 };
     }
   }
 
-  async function healthCheck() {
+  async healthCheck() {
+    await this.ensureInitialized();
+    
     try {
+      if (!this.isValidRedisClient()) {
+        return {
+          healthy: false,
+          error: 'Redis client not available',
+          timestamp: new Date().toISOString(),
+          details: {
+            write: false,
+            read: false,
+            delete: false
+          }
+        };
+      }
+
       const startTime = Date.now();
       const testKey = `health_check_${startTime}`;
       
-      await safeRedisCommand(async () => {
-        await redis.setex(testKey, 10, 'health_check_value');
+      await this.safeRedisCommand(async (client) => {
+        await client.setex(testKey, 10, 'health_check_value');
       }, 'healthCheck_set');
       
-      const value = await safeRedisCommand(async () => {
-        return await redis.get(testKey);
+      const value = await this.safeRedisCommand(async (client) => {
+        return await client.get(testKey);
       }, 'healthCheck_get');
       
-      await safeRedisCommand(async () => {
-        await redis.del(testKey);
+      await this.safeRedisCommand(async (client) => {
+        await client.del(testKey);
       }, 'healthCheck_del');
       
       const responseTime = Date.now() - startTime;
@@ -522,11 +620,11 @@ export default function makeCache(redis) {
         }
       };
 
-      console.log(`❤️ Cache health check: ${result.healthy ? 'HEALTHY' : 'UNHEALTHY'} (${responseTime}ms)`);
+      console.log(`❤️ CacheService: Health check: ${result.healthy ? 'HEALTHY' : 'UNHEALTHY'} (${responseTime}ms)`);
       return result;
 
     } catch (error) {
-      console.error('❌ Cache health check failed:', error.message);
+      console.error('❌ CacheService: Health check failed:', error.message);
       return {
         healthy: false,
         error: error.message,
@@ -540,21 +638,12 @@ export default function makeCache(redis) {
     }
   }
 
-  return { 
-    getOrSetJSON,
-    getJSON,
-    setJSON,
-    deleteKey,
-    getKeys,
-    flushPattern,
-    getCacheInfo,
-    keyInfo,
-    increment,
-    decrement,
-    setWithTTL,
-    getWithTTL,
-    healthCheck
-  };
+  isAvailable() {
+    return this.isInitialized && this.isValidRedisClient();
+  }
 }
 
+const cacheServiceInstance = new CacheService();
+
+export default cacheServiceInstance;
 export { sleep, safeJsonParse };
