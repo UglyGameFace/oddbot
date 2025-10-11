@@ -9,11 +9,10 @@ import { withTimeout, TimeoutError } from '../utils/asyncUtils.js';
 
 const CACHE_TTL = {
   SPORTS_LIST: 300,
-  GAMES_DATA: 120, // Reduced TTL for on-demand freshness
+  GAMES_DATA: 120,
   ODDS_DATA: 60
 };
 
-// NOTE: These helper classes are kept as-is to preserve original structure.
 class GameEnhancementService {
   static enhanceGameData(games, sportKey, source) {
     if (!Array.isArray(games)) return [];
@@ -88,55 +87,70 @@ class GamesService {
 
   async getAvailableSports() {
     const cacheKey = 'available_sports_comprehensive';
+    const lockKey = `${cacheKey}_lock`;
     
     try {
       const cache = await this._getCache();
       
+      const existingLock = await cache.get(lockKey);
+      if (existingLock) {
+        console.log('⏳ Sports cache is being built by another process, waiting...');
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        const cachedData = await cache.getJSON(cacheKey);
+        if (cachedData) return cachedData;
+      }
+      
       return await cache.getOrSetJSON(cacheKey, CACHE_TTL.SPORTS_LIST, async () => {
-        console.log('🔄 Building comprehensive sports list...');
+        await cache.set(lockKey, 'building', 30);
         
-        let sports = [];
-        let oddsFetchFailed = false;
-        let dbFetchFailed = false;
-
         try {
-          const oddsSports = await withTimeout(oddsService.getAvailableSports(), 5000, 'OddsSportsFetch');
-          sports = [...sports, ...oddsSports];
-          console.log(`✅ Added ${oddsSports.length} sports from Odds API`);
-        } catch (error) {
-          if (!(error instanceof TimeoutError)) {
-            console.error('❌ Odds API sports fetch CRITICAL error:', error.message);
-            oddsFetchFailed = true; 
-          } else {
-            console.warn('❌ Odds API sports fetch TIMEOUT.');
+          console.log('🔄 Building comprehensive sports list...');
+          
+          let sports = [];
+          let oddsFetchFailed = false;
+          let dbFetchFailed = false;
+
+          try {
+            const oddsSports = await withTimeout(oddsService.getAvailableSports(), 5000, 'OddsSportsFetch');
+            sports = [...sports, ...oddsSports];
+            console.log(`✅ Added ${oddsSports.length} sports from Odds API`);
+          } catch (error) {
+            if (!(error instanceof TimeoutError)) {
+              console.error('❌ Odds API sports fetch CRITICAL error:', error.message);
+              oddsFetchFailed = true; 
+            } else {
+              console.warn('❌ Odds API sports fetch TIMEOUT.');
+            }
           }
-        }
 
-        try {
-          const dbSports = await withTimeout(databaseService.getDistinctSports(), 5000, 'DBSportsFetch');
-          sports = [...sports, ...dbSports];
-          console.log(`✅ Added ${dbSports.length} sports from database`);
-        } catch (error) {
-          if (!(error instanceof TimeoutError)) {
-            console.error('❌ Database sports fetch CRITICAL error:', error.message);
-            dbFetchFailed = true; 
-          } else {
-            console.warn('❌ Database sports fetch TIMEOUT.');
+          try {
+            const dbSports = await withTimeout(databaseService.getDistinctSports(), 5000, 'DBSportsFetch');
+            sports = [...sports, ...dbSports];
+            console.log(`✅ Added ${dbSports.length} sports from database`);
+          } catch (error) {
+            if (!(error instanceof TimeoutError)) {
+              console.error('❌ Database sports fetch CRITICAL error:', error.message);
+              dbFetchFailed = true; 
+            } else {
+              console.warn('❌ Database sports fetch TIMEOUT.');
+            }
           }
-        }
 
-        if (oddsFetchFailed && dbFetchFailed) {
-          throw new Error('All primary data sources for sports failed to connect.');
-        }
-        
-        const mappedSports = this._getSportsFromMapping();
-        sports = [...sports, ...mappedSports];
-        console.log(`✅ Added ${mappedSports.length} sports from comprehensive mapping`);
+          if (oddsFetchFailed && dbFetchFailed) {
+            throw new Error('All primary data sources for sports failed to connect.');
+          }
+          
+          const mappedSports = this._getSportsFromMapping();
+          sports = [...sports, ...mappedSports];
+          console.log(`✅ Added ${mappedSports.length} sports from comprehensive mapping`);
 
-        const enhancedSports = this._enhanceAndDeduplicateSports(sports);
-        console.log(`🎉 Final sports list: ${enhancedSports.length} sports`);
-        
-        return enhancedSports;
+          const enhancedSports = this._enhanceAndDeduplicateSports(sports);
+          console.log(`🎉 Final sports list: ${enhancedSports.length} sports`);
+          
+          return enhancedSports;
+        } finally {
+          await cache.del(lockKey);
+        }
       });
 
     } catch (error) {
@@ -149,9 +163,6 @@ class GamesService {
     }
   }
 
-  // --- CHANGE START ---
-  // This method is now simplified to handle both scheduled and on-demand fetching
-  // through the same elegant caching mechanism.
   async getGamesForSport(sportKey, options = {}) {
     const {
       includeOdds = true,
@@ -172,11 +183,10 @@ class GamesService {
 
         if (includeOdds) {
           try {
-            // This is the main data fetching call
             const oddsGames = await withTimeout(oddsService.getSportOdds(sportKey, { 
               includeLive, 
               hoursAhead,
-              useCache: false // Ensure this loader always fetches fresh data from the odds service
+              useCache: false
             }), 8000, `OddsGamesFetch_${sportKey}`);
             
             if (oddsGames && oddsGames.length > 0) {
@@ -189,7 +199,6 @@ class GamesService {
           }
         }
 
-        // Fallback to database if odds API fails or returns no games
         if (games.length === 0) {
           try {
             const dbGames = await withTimeout(databaseService.getUpcomingGames(sportKey, hoursAhead), 8000, `DBGamesFetch_${sportKey}`);
@@ -209,12 +218,8 @@ class GamesService {
       };
 
       if (useCache) {
-        // This handles both cases:
-        // 1. HIGH-PRIORITY: The worker keeps this cache warm, so this should be a HIT.
-        // 2. ON-DEMAND: This will be a MISS, triggering `fetchAndProcessGames` and caching the result.
         return await cache.getOrSetJSON(cacheKey, CACHE_TTL.GAMES_DATA, fetchAndProcessGames);
       } else {
-        // Bypassing cache for an explicit refresh
         console.log(`🔄 Bypassing cache for ${sportKey} games...`);
         return await fetchAndProcessGames();
       }
@@ -224,13 +229,11 @@ class GamesService {
       if (!(error instanceof TimeoutError)) {
         throw error;
       }
-      return []; // Return empty array only on timeout
+      return [];
     }
   }
-  // --- CHANGE END ---
 
   async getVerifiedRealGames(sportKey, hours = 72) {
-    // ... (This function remains unchanged as it will now benefit from the updated getGamesForSport)
     console.log(`🔍 Getting VERIFIED real games for ${sportKey} from games service...`);
     
     try {
@@ -285,7 +288,6 @@ class GamesService {
     }
   }
 
-  // ... (the rest of your gamesService.js file remains unchanged)
   async getLiveGames(sportKey, options = {}) {
     const {
       includeOdds = true,
