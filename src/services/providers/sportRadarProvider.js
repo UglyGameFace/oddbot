@@ -2,7 +2,6 @@
 import axios from 'axios';
 import { rateLimitService } from '../rateLimitService.js';
 import { withTimeout } from '../../utils/asyncUtils.js';
-import { sentryService } from '../sentryService.js';
 
 // This base URL now correctly points to the US Odds API v2, which matches your free trial.
 const SPORTRADAR_BASE = 'https://api.sportradar.us';
@@ -31,12 +30,14 @@ export class SportRadarProvider {
         );
 
         await rateLimitService.saveProviderQuota(this.name, response.headers);
+        // The data structure for v2 is different, so we need a new transform function.
         return this.transformScheduleData(response.data?.sport_events, sportKey);
     } catch (error) {
+        // Add specific logging for 403 errors to help debug permissions
         if (error.response?.status === 403) {
             console.error(`❌ SportRadar 403 Forbidden: Your API key for the "${endpointConfig.name}" feed may not be active. Please verify your subscriptions on the Sportradar dashboard.`);
         }
-        throw error;
+        throw error; // Re-throw the error to be handled by the oddsService fallback chain
     }
   }
 
@@ -50,22 +51,33 @@ export class SportRadarProvider {
     };
     return mapping[sportKey];
   }
-      const title = event?.sport_event_context?.competition?.name || this.titleFromKey(sportKey);
-      const competitors = event?.competitors || [];
+
+  transformScheduleData(events, sportKey) {
+    if (!Array.isArray(events)) {
+      console.warn('⚠️ SportRadar (schedule) returned non-array data');
+      return [];
+    }
+
+    return events.reduce((acc, event) => {
+      if (!event?.id || !event?.start_time || !event?.competitors) {
+        return acc;
+      }
+
+      const homeTeam = event.competitors.find(c => c.qualifier === 'home')?.name || 'N/A';
+      const awayTeam = event.competitors.find(c => c.qualifier === 'away')?.name || 'N/A';
       
       const enhancedGame = {
-        event_id: `sr_${event.id}`,
+        event_id: event.id.replace('sr:match:', ''),
         sport_key: sportKey,
-        league_key: title,
+        league_key: event.sport_event_context?.competition?.name || this.titleFromKey(sportKey),
         commence_time: event.start_time,
-        home_team: competitors.find(c => c.qualifier === 'home')?.name || 'N/A',
-        away_team: competitors.find(c => c.qualifier === 'away')?.name || 'N/A',
+        home_team: homeTeam,
+        away_team: awayTeam,
         market_data: { 
-          bookmakers: this.extractMarketsFromEvent(event),
+          bookmakers: [], // The schedule endpoint does not contain odds data.
           last_updated: new Date().toISOString()
         },
-        sport_title: title,
-        data_quality: this.assessGameDataQuality(event),
+        sport_title: this.titleFromKey(sportKey),
         source: 'sportradar'
       };
 
@@ -74,63 +86,8 @@ export class SportRadarProvider {
     }, []);
   }
 
-  extractMarketsFromEvent(event) {
-    const markets = [];
-    
-    if (event?.odds) {
-      Object.entries(event.odds).forEach(([bookmaker, oddsData]) => {
-        const bookmakerMarkets = {
-          key: bookmaker,
-          title: bookmaker,
-          markets: []
-        };
-
-        if (oddsData.moneyline) {
-          bookmakerMarkets.markets.push({
-            key: 'h2h',
-            outcomes: Object.entries(oddsData.moneyline).map(([team, price]) => ({
-              name: team,
-              price: this.convertToAmericanOdds(price)
-            }))
-          });
-        }
-
-        markets.push(bookmakerMarkets);
-      });
-    }
-
-    return markets;
-  }
-
-  convertToAmericanOdds(decimalOdds) {
-    if (decimalOdds >= 2.0) {
-      return Math.round((decimalOdds - 1) * 100);
-    } else {
-      return Math.round(-100 / (decimalOdds - 1));
-    }
-  }
-
-  assessGameDataQuality(game) {
-    return {
-      score: 60,
-      factors: ['sportradar_source', 'official_data'],
-      rating: 'good'
-    };
-  }
-
   titleFromKey(key) {
-    const sportMapping = {
-      'americanfootball_nfl': 'NFL',
-      'americanfootball_ncaaf': 'NCAAF',
-      'basketball_nba': 'NBA',
-      'basketball_wnba': 'WNBA',
-      'baseball_mlb': 'MLB',
-      'icehockey_nhl': 'NHL',
-      'soccer_england_premier_league': 'Premier League'
-    };
-    return sportMapping[key] || key.split('_').map(word => 
-      word.charAt(0).toUpperCase() + word.slice(1)
-    ).join(' ');
+    return key.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
   }
 
   async getProviderStatus() {
@@ -138,18 +95,12 @@ export class SportRadarProvider {
       const quota = await rateLimitService.getProviderQuota(this.name);
       return {
         name: this.name,
-        status: quota ? 'active' : 'unknown',
+        status: 'active',
         priority: this.priority,
         last_quota_check: quota?.at ? new Date(quota.at).toISOString() : null,
-        remaining_requests: quota?.remaining,
-        should_bypass: await rateLimitService.shouldBypassLive(this.name)
       };
     } catch (error) {
-      return {
-        name: this.name,
-        status: 'error',
-        error: error.message
-      };
+      return { name: this.name, status: 'error', error: error.message };
     }
   }
 }
