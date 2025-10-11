@@ -4,14 +4,13 @@ import { rateLimitService } from '../rateLimitService.js';
 import { withTimeout } from '../../utils/asyncUtils.js';
 import { sentryService } from '../sentryService.js';
 
-// This base URL now correctly points to the US-based API endpoint.
 const SPORTRADAR_BASE = 'https://api.sportradar.us';
 
 export class SportRadarProvider {
   constructor(apiKey) {
     this.apiKey = apiKey;
     this.name = 'sportradar';
-    this.priority = 20; // Corrected priority
+    this.priority = 20;
   }
 
   async fetchSportOdds(sportKey, options = {}) {
@@ -31,32 +30,28 @@ export class SportRadarProvider {
         );
 
         await rateLimitService.saveProviderQuota(this.name, response.headers);
-        // Using the correct transformation function for the v2 schedule endpoint.
         return this.transformScheduleData(response.data?.sport_events, sportKey);
     } catch (error) {
         if (error.response?.status === 403) {
             console.error(`❌ SportRadar 403 Forbidden: Your API key for the "${endpointConfig.name}" feed may not be active. Please verify your subscriptions on the Sportradar dashboard.`);
         }
-        // Re-throw the error to be handled by the oddsService fallback chain.
         throw error;
     }
   }
 
-  // This function maps your internal sport keys to the specific IDs and paths
-  // required by the US Odds API v2, which your free plan uses.
   getEndpointForSport(sportKey) {
     const mapping = {
       'americanfootball_nfl': { path: `us/odds/v2/en/sports/sr:sport:16/schedule.json`, name: 'US Football Odds' },
       'basketball_nba': { path: `us/odds/v2/en/sports/sr:sport:1/schedule.json`, name: 'US Basketball Odds' },
       'icehockey_nhl': { path: `us/odds/v2/en/sports/sr:sport:4/schedule.json`, name: 'US Hockey Odds' },
       'baseball_mlb': { path: `us/odds/v2/en/sports/sr:sport:3/schedule.json`, name: 'US Baseball Odds' },
-      // Add other sports here as you subscribe to them on the Sportradar dashboard.
-      // 'soccer_england_premier_league': { path: 'us/odds/v2/en/sports/sr:sport:25/schedule.json', name: 'US Soccer Odds' },
+      'soccer_england_premier_league': { path: `us/odds/v2/en/sports/sr:sport:25/schedule.json`, name: 'US Soccer Odds' },
+      'soccer_uefa_champions_league': { path: `us/odds/v2/en/sports/sr:sport:27/schedule.json`, name: 'UEFA Champions League' },
+      'mma_ufc': { path: `us/odds/v2/en/sports/sr:sport:38/schedule.json`, name: 'UFC MMA' }
     };
     return mapping[sportKey];
   }
 
-  // This function is built to parse the response from the correct v2 schedule endpoint.
   transformScheduleData(events, sportKey) {
     if (!Array.isArray(events)) {
       console.warn('⚠️ SportRadar (schedule) returned non-array data');
@@ -72,17 +67,13 @@ export class SportRadarProvider {
       const awayTeam = event.competitors.find(c => c.qualifier === 'away')?.name || 'N/A';
       
       const enhancedGame = {
-        event_id: event.id.replace('sr:match:', ''), // Simplify the event ID
+        event_id: event.id.replace('sr:match:', ''),
         sport_key: sportKey,
         league_key: event.sport_event_context?.competition?.name || this.titleFromKey(sportKey),
         commence_time: event.start_time,
         home_team: homeTeam,
         away_team: awayTeam,
         market_data: { 
-          // IMPORTANT: The free 'schedule' endpoint does not include odds data itself.
-          // It only confirms the game exists. To get odds, a separate API call per game is needed,
-          // which is often not included in the free tier and would quickly exhaust your limits.
-          // This structure allows your bot to know games are happening, even if it can't get live odds from this specific provider.
           bookmakers: [], 
           last_updated: new Date().toISOString()
         },
@@ -96,7 +87,6 @@ export class SportRadarProvider {
     }, []);
   }
 
-  // This function was missing from the previous version.
   convertToAmericanOdds(decimalOdds) {
     if (decimalOdds >= 2.0) {
       return Math.round((decimalOdds - 1) * 100);
@@ -105,7 +95,6 @@ export class SportRadarProvider {
     }
   }
 
-  // This function was missing from the previous version.
   assessGameDataQuality(game) {
     let score = 0;
     const factors = [];
@@ -128,7 +117,6 @@ export class SportRadarProvider {
     };
   }
   
-  // This function was missing from the previous version.
   titleFromKey(key) {
     const sportMapping = {
       'americanfootball_nfl': 'NFL',
