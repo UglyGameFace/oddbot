@@ -1,4 +1,4 @@
-// src/services/aiService.js - UPDATED FOR QUANTUM PROMPT ENGINE
+// src/services/aiService.js - UPDATED TO PRIORITIZE PERPLEXITY AI
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import axios from 'axios';
 import env from '../config/env.js';
@@ -9,11 +9,10 @@ import { ElitePromptService } from './elitePromptService.js';
 const TZ = env.TIMEZONE || 'America/New_York';
 const WEB_TIMEOUT_MS = 30000;
 
-const GEMINI_MODELS = { 
-  gemini: "gemini-1.5-flash",
-  gemini_fallback: "gemini-1.5-pro", 
-  gemini_legacy: "gemini-pro",
-  perplexity: "sonar-large-32k-online" 
+const AI_MODELS = { 
+  gemini: "gemini-2.0-flash",
+  gemini_fallback: "gemini-2.0-pro", 
+  perplexity: "sonar-pro" 
 };
 
 function americanToDecimal(a) {
@@ -37,12 +36,12 @@ function extractJSON(text = '') {
     const jsonBlockRegex = /```json\s*([\s\S]+?)\s*```/;
     const match = text.match(jsonBlockRegex);
     if (match && match[1]) {
-        try { return JSON.parse(match[1]); } catch (e) { }
+        try { return JSON.parse(match[1]); } catch (e) { /* ignore */ }
     }
     const start = text.indexOf('{');
     const end = text.lastIndexOf('}');
     if (start !== -1 && end > start) {
-        try { return JSON.parse(text.substring(start, end + 1)); } catch (e) { }
+        try { return JSON.parse(text.substring(start, end + 1)); } catch (e) { /* ignore */ }
     }
     return null;
 }
@@ -54,25 +53,15 @@ async function buildEliteScheduleContext(sportKey, hours) {
             console.log('🎯 Using elite analyst mode - skipping API validation');
             return `\n\n🎯 ELITE ANALYST MODE: Generating ${sportKey.toUpperCase()} parlay using fundamental analysis and matchup expertise.\n\nNOTE: Real-time validation skipped due to system maintenance. Relying on elite analytical framework.`;
         }
-
         const realGames = await gamesService.getVerifiedRealGames(sportKey, hours);
         if (realGames.length === 0) {
             return `\n\n🎯 ELITE ANALYST MODE: No real-time ${sportKey} data available. Using fundamental analysis of typical matchups and team quality.`;
         }
-
         const gameList = realGames.slice(0, 15).map((game, index) => {
-            const timeStr = new Date(game.commence_time).toLocaleString('en-US', { 
-                timeZone: TZ, 
-                month: 'short', 
-                day: 'numeric', 
-                hour: '2-digit', 
-                minute: '2-digit' 
-            });
+            const timeStr = new Date(game.commence_time).toLocaleString('en-US', { timeZone: TZ, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
             return `${index + 1}. ${game.away_team} @ ${game.home_team} - ${timeStr}`;
         }).join('\n');
-
         return `\n\n📅 VERIFIED SCHEDULE (Next ${hours} hours):\n${gameList}\n\nBase your analysis on these real matchups.`;
-
     } catch (error) {
         console.warn(`⚠️ Schedule context failed for ${sportKey}, using elite mode:`, error.message);
         return `\n\n🎯 ELITE ANALYST MODE: System data temporarily limited. Generating parlay using fundamental sports analysis and matchup expertise.`;
@@ -81,22 +70,18 @@ async function buildEliteScheduleContext(sportKey, hours) {
 
 async function eliteGameValidation(sportKey, proposedLegs, hours) {
     const { THE_ODDS_API_KEY } = env;
-    
     if (!THE_ODDS_API_KEY || THE_ODDS_API_KEY.includes('expired') || THE_ODDS_API_KEY.length < 10) {
         console.log('🎯 Elite mode: Skipping game validation (API keys expired)');
         return proposedLegs || [];
     }
-
     try {
         const realGames = await gamesService.getVerifiedRealGames(sportKey, hours);
         if (realGames.length === 0) return proposedLegs || [];
-
         const realGameMap = new Map();
         realGames.forEach(game => {
             const key = `${(game.away_team || '').toLowerCase().trim()} @ ${(game.home_team || '').toLowerCase().trim()}`;
             realGameMap.set(key, game);
         });
-        
         return (proposedLegs || []).filter(leg => {
             const gameKey = (leg.event || '').toLowerCase().trim();
             return realGameMap.has(gameKey);
@@ -108,20 +93,79 @@ async function eliteGameValidation(sportKey, proposedLegs, hours) {
 }
 
 class AIService {
-  // --- PARLAY GENERATION ---
+  _ensureLegsHaveOdds(legs) {
+    if (!Array.isArray(legs)) return [];
+    return legs.map(leg => {
+      const hasPrice = leg && leg.odds && Number.isFinite(Number(leg.odds.american));
+      if (hasPrice) {
+        leg.odds.decimal = americanToDecimal(leg.odds.american);
+        return leg;
+      }
+      console.warn(`⚠️ AI failed to provide odds for leg: "${leg.selection}". Defaulting to -110.`);
+      return {
+        ...leg,
+        odds: { american: -110, decimal: americanToDecimal(-110), implied_probability: 0.524 },
+        quantum_analysis: { ...leg.quantum_analysis, analytical_basis: `(Odds defaulted to -110) ${leg.quantum_analysis?.analytical_basis || 'No rationale provided.'}` }
+      };
+    });
+  }
+
+  async _callAIProvider(aiModel, prompt) {
+      const { GOOGLE_GEMINI_API_KEY, PERPLEXITY_API_KEY } = env;
+      let responseText;
+
+      // --- CHANGE START: Prioritize Perplexity if chosen or Gemini fails ---
+      if (aiModel === 'perplexity' || !GOOGLE_GEMINI_API_KEY) {
+          if (!PERPLEXITY_API_KEY) throw new Error('Perplexity API key is not configured.');
+          console.log(`🔄 Calling AI Provider: Perplexity`);
+          try {
+              const response = await axios.post('https://api.perplexity.ai/chat/completions',
+                  { model: AI_MODELS.perplexity, messages: [{ role: 'user', content: prompt }] },
+                  { headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}` }, timeout: WEB_TIMEOUT_MS }
+              );
+              responseText = response?.data?.choices?.[0]?.message?.content || '';
+          } catch (error) {
+              if (error.response?.status === 401 || error.response?.status === 403) throw new Error('Perplexity API key invalid or expired');
+              throw new Error(`Perplexity API error: ${error.message}`);
+          }
+      } else { // Try Gemini
+          console.log(`🔄 Calling AI Provider: Gemini`);
+          let lastError = null;
+          const modelsToTry = [AI_MODELS.gemini, AI_MODELS.gemini_fallback];
+          for (const modelName of modelsToTry) {
+              try {
+                  console.log(`  - Trying Gemini model: ${modelName}`);
+                  const genAI = new GoogleGenerativeAI(GOOGLE_GEMINI_API_KEY);
+                  const model = genAI.getGenerativeModel({ model: modelName });
+                  const result = await model.generateContent(prompt);
+                  responseText = result.response.text();
+                  console.log(`  ✅ Success with Gemini model: ${modelName}`);
+                  break; // Exit loop on success
+              } catch (modelError) {
+                  lastError = modelError;
+                  console.warn(`  ❌ Gemini model ${modelName} failed:`, modelError.message);
+                  if (modelError.message.includes('API key') || modelError.message.includes('not supported')) {
+                      throw new Error(`Gemini API Error: ${modelError.message}`); // Fail fast on critical errors
+                  }
+              }
+          }
+          if (!responseText) throw new Error(`All Gemini models failed. Last error: ${lastError?.message}`);
+      }
+      // --- CHANGE END ---
+
+      const parsedJson = extractJSON(responseText);
+      if (!parsedJson) throw new Error('AI response did not contain valid JSON.');
+      return parsedJson;
+  }
 
   async generateParlay(sportKey, numLegs, mode, aiModel, betType, options) {
       const requestId = `quantum_${sportKey}_${Date.now()}`;
       console.log(`🎯 Starting QUANTUM parlay generation for ${sportKey}`);
-      
       try {
           if (mode === 'web') {
               return await this._generateWebParlay(sportKey, numLegs, aiModel, betType, options);
-          } else if (mode === 'live' || mode === 'db') {
-              return await this._generateContextParlay(sportKey, numLegs, mode, betType, options);
-          } else {
-              return await this._generateWebParlay(sportKey, numLegs, aiModel, betType, options);
           }
+          return await this._generateContextParlay(sportKey, numLegs, mode, betType, options);
       } catch (error) {
           console.error(`❌ QUANTUM parlay generation failed for ${requestId}:`, error.message);
           try {
@@ -133,179 +177,66 @@ class AIService {
       }
   }
 
-  // --- HELPER METHODS ---
-
-  _ensureLegsHaveOdds(legs) {
-    if (!Array.isArray(legs)) return [];
-    return legs.map(leg => {
-      const hasPrice = leg && leg.odds && Number.isFinite(Number(leg.odds.american));
-      if (hasPrice) {
-        leg.odds.decimal = americanToDecimal(leg.odds.american);
-        return leg;
-      }
-      
-      console.warn(`⚠️ AI failed to provide odds for leg: "${leg.selection}". Defaulting to -110.`);
-      return {
-        ...leg,
-        odds: {
-            american: -110,
-            decimal: americanToDecimal(-110),
-            implied_probability: 0.524
-        },
-        quantum_analysis: {
-            ...leg.quantum_analysis,
-            analytical_basis: `(Odds defaulted to -110) ${leg.quantum_analysis?.analytical_basis || 'No rationale provided.'}`
-        }
-      };
-    });
-  }
-
-  // --- PARLAY GENERATION MODES ---
-
   async _generateWebParlay(sportKey, numLegs, aiModel, betType, options) {
-      const requestId = `quantum_web_${sportKey}_${Date.now()}`;
-      console.log(`🔍 Starting QUANTUM web research for ${sportKey}`);
+      const scheduleContext = await buildEliteScheduleContext(sportKey, options.horizonHours || 72);
+      const prompt = ElitePromptService.getWebResearchPrompt(sportKey, numLegs, betType, { scheduleInfo: scheduleContext });
+      const parlayData = await this._callAIProvider(aiModel, prompt);
       
-      try {
-          const scheduleContext = await buildEliteScheduleContext(sportKey, options.horizonHours || 72);
-          const prompt = ElitePromptService.getWebResearchPrompt(sportKey, numLegs, betType, { scheduleInfo: scheduleContext });
-          
-          const parlayData = await this._callAIProvider(aiModel, prompt);
-          
-          if (!parlayData.legs || !Array.isArray(parlayData.legs)) {
-              throw new Error('AI response lacked valid parlay structure');
-          }
-
-          parlayData.legs = this._ensureLegsHaveOdds(parlayData.legs);
-
-          const validatedLegs = await eliteGameValidation(sportKey, parlayData.legs, options.horizonHours || 72);
-          parlayData.legs = validatedLegs.length > 0 ? validatedLegs.slice(0, numLegs) : parlayData.legs.slice(0, numLegs);
-          
-          parlayData.parlay_price_decimal = parlayDecimal(parlayData.legs);
-          parlayData.parlay_price_american = decimalToAmerican(parlayData.parlay_price_decimal);
-          
-          try {
-            parlayData.quantitative_analysis = await quantitativeService.evaluateParlay(parlayData.legs, parlayData.parlay_price_decimal);
-          } catch (qError) {
-            console.warn('Quantum quantitative analysis failed:', qError.message);
-            parlayData.quantitative_analysis = { note: 'Advanced analysis temporarily limited', riskAssessment: { overallRisk: 'CALCULATED' } };
-          }
-          
-          parlayData.research_metadata = { requestId, quantum_mode: true, real_games_validated: validatedLegs.length > 0, prompt_strategy: 'quantum_web' };
-          
-          return parlayData;
-          
-      } catch (error) {
-          console.error(`❌ QUANTUM web research failed for ${requestId}:`, error.message);
-          throw error;
-      }
-  }
-
-  async _generateContextParlay(sportKey, numLegs, mode, betType, options) {
-      try {
-          const { THE_ODDS_API_KEY } = env;
-          if (mode === 'db' && (!THE_ODDS_API_KEY || THE_ODDS_API_KEY.includes('expired'))) {
-              console.warn('🎯 Skipping database mode - API keys expired, using quantum fallback');
-              return await this._generateFallbackParlay(sportKey, numLegs, betType);
-          }
-
-          const realGames = await gamesService.getVerifiedRealGames(sportKey, options.horizonHours || 72);
-          if (realGames.length < numLegs) {
-              console.warn(`⚠️ Insufficient quantum games for ${sportKey}, using fallback`);
-              return await this._generateFallbackParlay(sportKey, numLegs, betType);
-          }
-          
-          const prompt = ElitePromptService.getEliteParlayPrompt(sportKey, numLegs, betType, { scheduleInfo: `${realGames.length} verified games available` });
-          const parlayData = await this._callAIProvider('gemini', prompt);
-          
-          parlayData.legs = this._ensureLegsHaveOdds(parlayData.legs);
-          
-          parlayData.legs = parlayData.legs.slice(0, Math.min(numLegs, realGames.length));
-          parlayData.parlay_price_decimal = parlayDecimal(parlayData.legs);
-          parlayData.parlay_price_american = decimalToAmerican(parlayData.parlay_price_decimal);
-          
-          try {
-            parlayData.quantitative_analysis = await quantitativeService.evaluateParlay(parlayData.legs, parlayData.parlay_price_decimal);
-          } catch (error) {
-            parlayData.quantitative_analysis = { note: 'Analysis complete' };
-          }
-          
-          parlayData.research_metadata = { mode, quantum_mode: true, games_used: parlayData.legs.length, prompt_strategy: 'quantum_context' };
-          
-          return parlayData;
-      } catch (error) {
-          console.error(`❌ QUANTUM context parlay failed for ${sportKey}:`, error.message);
-          return await this._generateFallbackParlay(sportKey, numLegs, betType);
-      }
-  }
-
-  async _generateFallbackParlay(sportKey, numLegs, betType) {
-      console.log(`🎯 Generating QUANTUM fallback for ${sportKey}`);
-      
-      const prompt = ElitePromptService.getFallbackPrompt(sportKey, numLegs, betType);
-      const parlayData = await this._callAIProvider('gemini', prompt);
+      if (!parlayData.legs || !Array.isArray(parlayData.legs)) throw new Error('AI response lacked valid parlay structure');
       
       parlayData.legs = this._ensureLegsHaveOdds(parlayData.legs);
+      const validatedLegs = await eliteGameValidation(sportKey, parlayData.legs, options.horizonHours || 72);
+      parlayData.legs = validatedLegs.length > 0 ? validatedLegs.slice(0, numLegs) : parlayData.legs.slice(0, numLegs);
       
       parlayData.parlay_price_decimal = parlayDecimal(parlayData.legs);
       parlayData.parlay_price_american = decimalToAmerican(parlayData.parlay_price_decimal);
       
-      parlayData.research_metadata = {
-          quantum_mode: true,
-          fallback_used: true,
-          prompt_strategy: 'quantum_fallback',
-          note: 'Generated using fundamental analysis without real-time data'
-      };
+      try {
+        parlayData.quantitative_analysis = await quantitativeService.evaluateParlay(parlayData.legs, parlayData.parlay_price_decimal);
+      } catch (qError) {
+        console.warn('Quantum quantitative analysis failed:', qError.message);
+        parlayData.quantitative_analysis = { note: 'Advanced analysis temporarily limited', riskAssessment: { overallRisk: 'CALCULATED' } };
+      }
       
+      parlayData.research_metadata = { quantum_mode: true, real_games_validated: validatedLegs.length > 0, prompt_strategy: 'quantum_web' };
       return parlayData;
   }
 
-  async _callAIProvider(aiModel, prompt) {
-      const { GOOGLE_GEMINI_API_KEY, PERPLEXITY_API_KEY } = env;
-      let responseText;
-      let lastError = null;
-
-      if (aiModel === 'gemini' && GOOGLE_GEMINI_API_KEY) {
-          const modelsToTry = [GEMINI_MODELS.gemini, GEMINI_MODELS.gemini_fallback, GEMINI_MODELS.gemini_legacy];
-          for (const modelName of modelsToTry) {
-            try {
-              console.log(`🔄 Trying Gemini model: ${modelName}`);
-              const genAI = new GoogleGenerativeAI(GOOGLE_GEMINI_API_KEY);
-              const model = genAI.getGenerativeModel({ model: modelName });
-              const result = await model.generateContent(prompt);
-              responseText = result.response.text();
-              console.log(`✅ Success with Gemini model: ${modelName}`);
-              break;
-            } catch (modelError) {
-              lastError = modelError;
-              console.warn(`❌ Gemini model ${modelName} failed:`, modelError.message);
-              if (modelError.message.includes('API_KEY') || modelError.message.includes('401') || modelError.message.includes('403')) {
-                  throw new Error('Gemini API key invalid or expired');
-              }
-            }
-          }
-          if (!responseText) throw new Error(`All Gemini models failed. Last error: ${lastError?.message}`);
-
-      } else if (aiModel === 'perplexity' && PERPLEXITY_API_KEY) {
-          try {
-            const response = await axios.post('https://api.perplexity.ai/chat/completions',
-                { model: GEMINI_MODELS.perplexity, messages: [{ role: 'user', content: prompt }] },
-                { headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}` }, timeout: WEB_TIMEOUT_MS }
-            );
-            responseText = response?.data?.choices?.[0]?.message?.content || '';
-          } catch (error) {
-              if (error.response?.status === 401 || error.response?.status === 403) {
-                  throw new Error('Perplexity API key invalid or expired');
-              }
-              throw new Error(`Perplexity API error: ${error.message}`);
-          }
-      } else { 
-          throw new Error(`${aiModel} API key not configured or model not available.`); 
+  async _generateContextParlay(sportKey, numLegs, mode, betType, options) {
+      const { THE_ODDS_API_KEY } = env;
+      if (mode === 'db' && (!THE_ODDS_API_KEY || THE_ODDS_API_KEY.includes('expired'))) {
+          console.warn('🎯 Skipping database mode - API keys expired, using quantum fallback');
+          return await this._generateFallbackParlay(sportKey, numLegs, betType);
       }
+      const realGames = await gamesService.getVerifiedRealGames(sportKey, options.horizonHours || 72);
+      if (realGames.length < numLegs) {
+          console.warn(`⚠️ Insufficient quantum games for ${sportKey}, using fallback`);
+          return await this._generateFallbackParlay(sportKey, numLegs, betType);
+      }
+      const prompt = ElitePromptService.getEliteParlayPrompt(sportKey, numLegs, betType, { scheduleInfo: `${realGames.length} verified games available` });
+      const parlayData = await this._callAIProvider('gemini', prompt);
+      parlayData.legs = this._ensureLegsHaveOdds(parlayData.legs);
+      parlayData.legs = parlayData.legs.slice(0, Math.min(numLegs, realGames.length));
+      parlayData.parlay_price_decimal = parlayDecimal(parlayData.legs);
+      parlayData.parlay_price_american = decimalToAmerican(parlayData.parlay_price_decimal);
+      try {
+        parlayData.quantitative_analysis = await quantitativeService.evaluateParlay(parlayData.legs, parlayData.parlay_price_decimal);
+      } catch (error) {
+        parlayData.quantitative_analysis = { note: 'Analysis complete' };
+      }
+      parlayData.research_metadata = { mode, quantum_mode: true, games_used: parlayData.legs.length, prompt_strategy: 'quantum_context' };
+      return parlayData;
+  }
 
-      const parsedJson = extractJSON(responseText);
-      if (!parsedJson) throw new Error('AI response did not contain valid JSON.');
-      return parsedJson;
+  async _generateFallbackParlay(sportKey, numLegs, betType) {
+      console.log(`🎯 Generating QUANTUM fallback for ${sportKey}`);
+      const prompt = ElitePromptService.getFallbackPrompt(sportKey, numLegs, betType);
+      const parlayData = await this._callAIProvider('gemini', prompt); // Fallback can still use Gemini if available
+      parlayData.legs = this._ensureLegsHaveOdds(parlayData.legs);
+      parlayData.parlay_price_decimal = parlayDecimal(parlayData.legs);
+      parlayData.parlay_price_american = decimalToAmerican(parlayData.parlay_price_decimal);
+      parlayData.research_metadata = { quantum_mode: true, fallback_used: true, prompt_strategy: 'quantum_fallback', note: 'Generated using fundamental analysis without real-time data' };
+      return parlayData;
   }
 
   async handleFallbackSelection(sportKey, numLegs, mode, betType) {
