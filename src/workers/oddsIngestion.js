@@ -18,6 +18,18 @@ process.on('unhandledRejection', (reason, promise) => {
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Add this to your odds ingestion worker - DISABLED_SPORTS array
+const DISABLED_SPORTS = [
+  'soccer_england_premier_league',
+  'soccer_uefa_champions_league', 
+  'mma_ufc'
+];
+
+// Then filter sports before processing
+const sportsToProcess = highPrioritySports.filter(sport => 
+  !DISABLED_SPORTS.includes(sport.sport_key)
+);
+
 class OddsIngestionEngine {
   constructor() {
     this.isJobRunning = false;
