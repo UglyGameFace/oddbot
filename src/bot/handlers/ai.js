@@ -27,20 +27,6 @@ function pageOf(arr, page) {
   return arr.slice(start, start + PAGE_SIZE);
 }
 
-function formatLocalIfPresent(utcDateString, timezone) {
-    if (!utcDateString) return null;
-    try {
-        const date = new Date(utcDateString);
-        return new Intl.DateTimeFormat('en-US', {
-        timeZone: timezone,
-        year: 'numeric', month: 'short', day: '2-digit',
-        hour: '2-digit', minute: '2-digit'
-        }).format(date);
-    } catch (e) {
-        return utcDateString; // Fallback to original string on error
-    }
-}
-
 async function getCachedSports() {
   const now = Date.now();
   if (sportsCache && sportsCacheTime && (now - sportsCacheTime) < CACHE_DURATION) {
@@ -82,7 +68,7 @@ export function registerAI(bot) {
         numLegs: 3, 
         mode: 'web', 
         betType: 'mixed',
-        aiModel: 'gemini',
+        aiModel: 'perplexity', // Default to perplexity for quick command
         quantitativeMode: 'conservative'
       });
       await executeAiRequest(bot, chatId);
@@ -160,8 +146,7 @@ export function registerAICallbacks(bot) {
           if (!sportKey || !numLegs) return;
           try {
               await safeEditMessage(chatId, message.message_id, `🔄 Switching to <b>${escapeHTML(selectedMode.toUpperCase())}</b> mode...`, { parse_mode: 'HTML' });
-              const userConfig = await getAIConfig(chatId);
-              const parlay = await aiService.handleFallbackSelection(sportKey, numLegs, selectedMode, betType, userConfig);
+              const parlay = await aiService.handleFallbackSelection(sportKey, numLegs, selectedMode, betType);
               await sendParlayResult(bot, chatId, parlay, state, selectedMode, message.message_id);
           } catch (error) {
               await safeEditMessage(chatId, message.message_id, `❌ Fallback failed: <code>${escapeHTML(error.message)}</code>`, { parse_mode: 'HTML' });
@@ -200,19 +185,15 @@ async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
         if (messageId) return safeEditMessage(chatId, messageId, text);
         return bot.sendMessage(chatId, text);
     }
-
     const sortedSports = sortSports(sports);
     const totalPages = Math.ceil(sortedSports.length / PAGE_SIZE) || 1;
     page = Math.min(Math.max(0, page), totalPages - 1);
-
     const slice = pageOf(sortedSports, page).map(s => ({
         text: `${getSportEmoji(s.sport_key)} ${escapeHTML(s.sport_title)}`, 
         callback_data: `ai_sport_${s.sport_key}`
     }));
-
     const rows = [];
     for (let i = 0; i < slice.length; i += 2) rows.push(slice.slice(i, i + 2));
-    
     if (totalPages > 1) {
         const nav = [];
         if (page > 0) nav.push({ text: '‹ Prev', callback_data: `ai_page_${page - 1}` });
@@ -220,7 +201,6 @@ async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
         if (page < totalPages - 1) nav.push({ text: 'Next ›', callback_data: `ai_page_${page + 1}` });
         rows.push(nav);
     }
-
     const text = `🤖 <b>AI Parlay Builder</b>\n\n<b>Step 1:</b> Select a sport.`;
     const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: rows } };
     if (messageId) await safeEditMessage(chatId, messageId, text, opts);
@@ -230,16 +210,11 @@ async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
 async function sendLegSelection(bot, chatId, messageId) {
   const state = await getUserState(chatId);
   const sportTitle = getSportTitle(state.sportKey);
-
   const legOptions = [2, 3, 4, 5, 6, 7, 8];
-  const buttons = legOptions.map(num => ({
-    text: `${num} Legs`, callback_data: `ai_legs_${num}`
-  }));
-
+  const buttons = legOptions.map(num => ({ text: `${num} Legs`, callback_data: `ai_legs_${num}` }));
   const keyboard = [];
   for (let i = 0; i < buttons.length; i += 4) keyboard.push(buttons.slice(i, i + 4));
   keyboard.push([{ text: '« Back to Sports', callback_data: 'ai_back_sport' }]);
-
   const text = `🤖 <b>AI Parlay Builder</b>\n\n<b>Step 2:</b> How many legs for your ${escapeHTML(sportTitle)} parlay?`;
   const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
   await safeEditMessage(chatId, messageId, text, opts);
@@ -271,10 +246,13 @@ async function sendBetTypeSelection(bot, chatId, messageId) {
 }
 
 async function sendAiModelSelection(bot, chatId, messageId) {
+  const config = await getAIConfig(chatId);
   const text = '🤖 <b>AI Parlay Builder</b>\n\n<b>Step 5:</b> Choose Research AI.';
   const keyboard = [
-    [{ text: '🧠 Gemini (Creative)', callback_data: 'ai_model_gemini'}],
-    [{ text: '⚡️ Perplexity (Data-Focused)', callback_data: 'ai_model_perplexity'}],
+    // --- CHANGE START: Make Perplexity the recommended default ---
+    [{ text: `⚡️ Perplexity (Recommended) ${config.model === 'perplexity' ? '✅' : ''}`, callback_data: 'set_set_ai_model_perplexity' }],
+    [{ text: `🧠 Gemini (Creative) ${config.model === 'gemini' ? '✅' : ''}`, callback_data: 'set_set_ai_model_gemini' }],
+    // --- CHANGE END ---
     [{ text: '« Back to Bet Type', callback_data: 'ai_back_bettype' }]
   ];
   const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
@@ -301,9 +279,7 @@ async function sendFallbackOptions(bot, chatId, messageId, error) {
     [{ text: '💾 Use Database Mode', callback_data: 'ai_fallback_db' }],
     [{ text: '🔄 Try Different Sport', callback_data: 'ai_back_sport' }]
   ];
-  await safeEditMessage(chatId, messageId, text, {
-    parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard }
-  });
+  await safeEditMessage(chatId, messageId, text, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
 }
 
 async function sendScheduleValidationError(bot, chatId, messageId, error) {
@@ -315,18 +291,12 @@ async function sendScheduleValidationError(bot, chatId, messageId, error) {
         [{ text: '🔄 Try Again', callback_data: 'ai_quick_retry' }],
         [{ text: '🎯 Change Sport', callback_data: 'ai_back_sport' }]
     ];
-    await safeEditMessage(chatId, messageId, text, {
-        parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard }
-    });
+    await safeEditMessage(chatId, messageId, text, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
 }
 
-// --- AI Request Execution & Result Formatting ---
 async function executeAiRequest(bot, chatId, messageId) {
     const state = await getUserState(chatId);
-    const userConfig = await getAIConfig(chatId); 
-
-    const { sportKey, numLegs, mode, betType, aiModel, quantitativeMode } = state || {};
-
+    const { sportKey, numLegs, mode, betType, aiModel, includeProps, quantitativeMode } = state || {};
     if (!sportKey || !numLegs || !mode || !betType) {
         return safeEditMessage(chatId, messageId, '❌ Incomplete selection. Please start over using /ai.');
     }
@@ -337,16 +307,9 @@ async function executeAiRequest(bot, chatId, messageId) {
                  `<b>Mode:</b> ${escapeHTML(mode.toUpperCase())}\n\n` +
                  `<i>Validating against real schedules and running quantitative checks. Please wait...</i>`;
     await safeEditMessage(chatId, messageId, text, { parse_mode: 'HTML' });
-
     try {
-        const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, {
-            quantitativeMode,
-            horizonHours: 72,
-            userConfig
-        });
-        
+        const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, { includeProps, quantitativeMode, horizonHours: 72 });
         if (parlay.research_metadata?.fallback_used) {
-            console.log('🔄 Handling fallback parlay response');
             await handleFallbackParlayResponse(bot, chatId, messageId, parlay, state);
         } else {
             await sendParlayResult(bot, chatId, parlay, state, mode, messageId);
@@ -367,107 +330,61 @@ async function executeAiRequest(bot, chatId, messageId) {
 async function handleFallbackParlayResponse(bot, chatId, messageId, parlay, state) {
     const { sportKey } = state;
     const { legs, reasoning } = parlay;
-    
     if (!legs || legs.length === 0) {
-        const text = `❌ <b>No Valid Parlay Generated</b>\n\n` +
-                     `${reasoning || 'The AI service was unable to generate a valid parlay.'}\n\n` +
-                     `<b>Suggested actions:</b>\n` +
-                     `• Try a different sport\n` +
-                     `• Reduce the number of legs\n` +
-                     `• Use /ai_quick for a simpler option`;
-        
-        const keyboard = [
-            [{ text: '🔄 Try Different Sport', callback_data: 'ai_back_sport' }],
-            [{ text: '🔴 Use Live Mode', callback_data: 'ai_fallback_live' }]
-        ];
-        
+        const text = `❌ <b>No Valid Parlay Generated</b>\n\n${reasoning || 'The AI service was unable to generate a valid parlay.'}\n\n<b>Suggested actions:</b>\n• Try a different sport\n• Reduce the number of legs\n• Try again later`;
+        const keyboard = [[{ text: '🔄 Try Different Sport', callback_data: 'ai_back_sport' }], [{ text: '🔴 Use Live Mode', callback_data: 'ai_fallback_live' }]];
         await safeEditMessage(chatId, messageId, text, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
         return;
     }
-    
     const sportTitle = getSportTitle(sportKey);
     let response = `⚠️ <b>Limited Parlay Generated</b>\n\n`;
     response += `<b>Note:</b> ${reasoning || 'AI service experienced issues but generated some picks.'}\n\n`;
     response += `<b>Sport:</b> ${escapeHTML(sportTitle)}\n`;
     response += `<b>Legs Found:</b> ${legs.length} (requested ${state.numLegs})\n\n`;
-    
     legs.forEach((leg, index) => {
         const game = escapeHTML(leg.event || leg.game || 'Unknown game');
         const pick = escapeHTML(leg.selection || leg.pick || 'Unknown pick');
-        const odds = leg.price_american > 0 ? `+${leg.price_american}` : leg.price_american;
+        const odds = (leg.odds?.american && Number.isFinite(leg.odds.american)) ? (leg.odds.american > 0 ? `+${leg.odds.american}` : leg.odds.american) : '';
         response += `<b>Leg ${index + 1}:</b> ${game}\n`;
-        response += `<b>Pick:</b> ${pick} (${escapeHTML(odds)})\n\n`;
+        response += `<b>Pick:</b> ${pick} ${odds ? `(${escapeHTML(odds)})` : ''}\n\n`;
     });
-    
     if (parlay.parlay_price_american) {
         response += `<b>Total Odds:</b> ${parlay.parlay_price_american > 0 ? '+' : ''}${escapeHTML(parlay.parlay_price_american)}\n`;
     }
-    
-    const finalKeyboard = [
-        [{ text: '🔄 Build Another', callback_data: 'ai_back_sport' }],
-        [{ text: '🔴 Try Live Mode', callback_data: 'ai_fallback_live' }]
-    ];
-    
+    const finalKeyboard = [[{ text: '🔄 Build Another', callback_data: 'ai_back_sport' }], [{ text: '🔴 Try Live Mode', callback_data: 'ai_fallback_live' }]];
     await safeEditMessage(chatId, messageId, response, { parse_mode: 'HTML', reply_markup: { inline_keyboard: finalKeyboard } });
 }
 
-// This is the updated function for better formatting
 async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
     const { sportKey } = state;
     const { legs, parlay_price_american, quantitative_analysis, research_metadata } = parlay;
     const sportTitle = getSportTitle(sportKey);
-    
     if (!legs || legs.length === 0) {
-        const errorText = `❌ <b>No Valid Parlay Found</b>\n\nThe AI could not generate a valid parlay for ${escapeHTML(sportTitle)}. This often happens if there are no upcoming games or if data sources are unavailable.`;
-        return safeEditMessage(chatId, messageId, errorText, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔄 Try Again', callback_data: 'ai_back_sport' }]] } });
+        const errorText = `❌ <b>No Valid Legs Generated</b>\n\nThe AI service could not find valid picks for ${escapeHTML(sportTitle)}.\n\nTry:\n• A different sport\n• Fewer legs\n• Different bet types`;
+        const keyboard = [[{ text: '🔄 Try Different Sport', callback_data: 'ai_back_sport' }], [{ text: '🔴 Use Live Mode', callback_data: 'ai_fallback_live' }]];
+        return safeEditMessage(chatId, messageId, errorText, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
     }
-    
     let response = `🧠 <b>AI-Generated Parlay</b>\n`;
-    response += `<b>Sport:</b> ${getSportEmoji(sportKey)} ${escapeHTML(sportTitle)}\n`;
-
-    if (research_metadata?.real_games_validated) {
-        response += `✅ <b>Verified Real Games</b>\n`;
-    }
-    if (research_metadata?.fallback_used) {
-        response += `⚠️ <b>Fallback Mode Used</b>\n`;
-    }
+    response += `<b>Sport:</b> ${escapeHTML(sportTitle)}\n`;
+    if (research_metadata?.real_games_validated) response += `✅ <b>Verified Real Games</b>\n`;
+    if (research_metadata?.fallback_used) response += `⚠️ <b>Fallback Mode Used</b>\n`;
     response += `\n`;
-
-    let allOddsAvailable = true;
     legs.forEach((leg, index) => {
-        const game = escapeHTML(leg.event || leg.game || 'Unknown Game');
-        const pick = escapeHTML(leg.selection || leg.pick || 'Unknown Pick');
-        
-        let oddsText = '<code>(Odds N/A)</code>';
-        const price = leg.price_american || leg.odds?.american;
-
-        if (price) {
-            oddsText = `<code>(${price > 0 ? '+' : ''}${price})</code>`;
-        } else {
-            allOddsAvailable = false;
-        }
-
-        response += `<b>Leg ${index + 1}:</b> ${game}\n`;
-        response += `  <b>Pick:</b> ${pick} ${oddsText}\n\n`;
+        const game = escapeHTML(leg.event || leg.game || 'Unknown game');
+        const pick = escapeHTML(leg.selection || leg.pick || 'Unknown pick');
+        const odds = (leg.odds?.american && Number.isFinite(leg.odds.american)) ? (leg.odds.american > 0 ? `+${leg.odds.american}` : leg.odds.american) : '';
+        response += `<b>Leg ${index + 1}: ${game}</b>\n`;
+        response += `  <b>Pick:</b> ${pick} ${odds ? `(${escapeHTML(odds)})` : ''}\n\n`;
     });
-
-    if (allOddsAvailable && parlay_price_american) {
-        response += `<b>Total Odds:</b> <code>${parlay_price_american > 0 ? '+' : ''}${escapeHTML(parlay_price_american)}</code>\n`;
-    } else {
-        response += `<b>Total Odds:</b> <code>N/A</code>\n`;
-    }
-    
+    response += `<b>Total Odds:</b> ${parlay_price_american > 0 ? '+' : ''}${escapeHTML(parlay_price_american)}\n`;
     if (quantitative_analysis && !quantitative_analysis.error) {
         const { calibrated, riskAssessment } = quantitative_analysis;
-        const ev = calibrated.evPercentage;
-        response += `<b>Calibrated EV:</b> <code>${ev.toFixed(1)}%</code> ${ev > 0 ? '👍' : '👎'}\n`;
-        response += `<b>Win Probability:</b> <code>${(calibrated.jointProbability * 100).toFixed(1)}%</code>\n`;
+        response += `<b>Calibrated EV:</b> ${escapeHTML(calibrated.evPercentage.toFixed(1))}% ${calibrated.evPercentage > 0 ? '👍' : '👎'}\n`;
+        response += `<b>Win Probability:</b> ${escapeHTML((calibrated.jointProbability * 100).toFixed(1))}%\n`;
         response += `<b>Risk Level:</b> ${escapeHTML(riskAssessment.overallRisk)}\n`;
+    } else if (quantitative_analysis?.error) {
+        response += `<b>Analysis:</b> ${escapeHTML(quantitative_analysis.error)}\n`;
     }
-
     const finalKeyboard = [[{ text: '🔄 Build Another', callback_data: 'ai_back_sport' }]];
-    await safeEditMessage(chatId, messageId, response, { 
-        parse_mode: 'HTML', 
-        reply_markup: { inline_keyboard: finalKeyboard } 
-    });
+    await safeEditMessage(chatId, messageId, response, { parse_mode: 'HTML', reply_markup: { inline_keyboard: finalKeyboard } });
 }
