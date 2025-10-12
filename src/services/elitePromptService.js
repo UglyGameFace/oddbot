@@ -1,4 +1,4 @@
-// src/services/elitePromptService.js - QUANTUM PROMPT ENGINE
+// src/services/elitePromptService.js - QUANTUM PROMPT ENGINE (Restored & Enhanced)
 export class ElitePromptService {
   static #SPORT_CONFIG = new Map([
     ['basketball_nba', {
@@ -160,6 +160,7 @@ ${config.edges.map(edge => `• ${edge}`).join('\n')}
 ${this.#buildMarketConstraints(betType, config.keyMarkets)}
 
 ## OUTPUT ARCHITECTURE - ABSOLUTELY NON-NEGOTIABLE
+CRITICAL: The \`american\` odds field inside the \`odds\` object for each leg MUST be a valid number (e.g., -110, +120). This is non-negotiable.
 \`\`\`json
 {
   "parlay_metadata": {
@@ -335,17 +336,17 @@ ${this.#buildUserContext(context.userConfig)}
 
 ## RESEARCH VERIFICATION PROTOCOL - ANTI-HALLUCINATION SAFEGUARDS
 1. **SCHEDULE VALIDATION**: Only use games/events from verified schedule: ${researchContext.scheduleInfo || 'Current season/tournament games'}
-2. **LINE SANITIZATION**: Construct realistic odds based on matchup quality and typical market ranges
-3. **TEAM/PLAYER VERIFICATION**: Use only legitimate teams and players from current competitions
-4. **MARKET REALISM**: Ensure all bet types and selections exist in real sportsbooks
-5. **CONTEXT AWARENESS**: Apply appropriate situational factors for current season phase
+2. **LINE SANITIZATION**: Construct realistic odds based on matchup quality and typical market ranges. The \`american\` odds field is REQUIRED.
+3. **TEAM/PLAYER VERIFICATION**: Use only legitimate teams and players from current competitions.
+4. **MARKET REALISM**: Ensure all bet types and selections exist in real sportsbooks.
+5. **CONTEXT AWARENESS**: Apply appropriate situational factors for current season phase.
 
 ## DATA INTEGRITY COMMANDS
-• REJECT any games/events not in the verified schedule
-• REJECT any players/teams not currently active in the competition  
-• REJECT any odds outside realistic market ranges (-500 to +500)
-• VALIDATE all selections against known market types for the sport
-• CONFIRM all event dates are current or future (no past events)
+• REJECT any games/events not in the verified schedule.
+• REJECT any players/teams not currently active in the competition.
+• REJECT any odds outside realistic market ranges (-500 to +500).
+• VALIDATE all selections against known market types for the sport.
+• CONFIRM all event dates are current or future (no past events).
 
 **ZERO TOLERANCE**: Absolutely no invented games, players, or markets. Every selection must be verifiable.`;
   }
@@ -358,24 +359,25 @@ ${this.#buildUserContext(context.userConfig)}
 Operating without real-time data. Using fundamental analysis, historical patterns, and established team hierarchies.
 
 ## FALLBACK ANALYTICAL FRAMEWORK
-• **TEAM QUALITY METRICS**: Roster talent evaluation, coaching pedigree, historical performance trends
-• **MARKET EFFICIENCY**: Apply typical odds distributions based on matchup quality and public perception  
-• **SITUATIONAL LOGIC**: Standard scheduling patterns, rest advantages, and motivational factors
-• **RISK MANAGEMENT**: Conservative bankroll allocation (0.5-1.5%) due to information limitations
-• **VALUE IDENTIFICATION**: Focus on clear mismatches and established performance trends
+• **TEAM QUALITY METRICS**: Roster talent evaluation, coaching pedigree, historical performance trends.
+• **MARKET EFFICIENCY**: Apply typical odds distributions based on matchup quality and public perception.
+• **SITUATIONAL LOGIC**: Standard scheduling patterns, rest advantages, and motivational factors.
+• **RISK MANAGEMENT**: Conservative bankroll allocation (0.5-1.5%) due to information limitations.
+• **VALUE IDENTIFICATION**: Focus on clear mismatches and established performance trends.
 
 ## ${config.title.toUpperCase()} FUNDAMENTALS
 ${config.edges.map(edge => `• ${edge}`).join('\n')}
 
 ## FALLBACK CONSTRUCTION RULES
-- Use well-established teams/players with proven track records and consistency
-- Focus on moneyline and spread markets (most reliable without real-time data)
-- Apply standard odds ranges: -180 to +180 for realistic market construction
-- Maximum 2 legs from same conference/division to maintain diversification
-- Prioritize starters over backups, established players over rookies
-- Consider typical home field/court advantages for the sport
+- Use well-established teams/players with proven track records and consistency.
+- Focus on moneyline and spread markets (most reliable without real-time data).
+- Apply standard odds ranges: -180 to +180 for realistic market construction.
+- Maximum 2 legs from same conference/division to maintain diversification.
+- Prioritize starters over backups, established players over rookies.
+- Consider typical home field/court advantages for the sport.
 
 ## OUTPUT REQUIREMENTS - MAINTAIN QUANTUM STANDARDS
+CRITICAL: The \`american\` odds field is REQUIRED for every leg.
 \`\`\`json
 {
   "parlay_metadata": {
@@ -414,99 +416,7 @@ ${config.edges.map(edge => `• ${edge}`).join('\n')}
 
 **FALLBACK INTEGRITY**: Every pick must withstand professional scrutiny. Ask: "Would I confidently bet $25,000 on this selection given available information?"`;
   }
-
-  static getLiveAdjustmentPrompt(originalParlay, liveData, context = {}) {
-    const sportConfig = this.#getSportConfig(originalParlay.sport_key || context.sportKey);
-    
-    return `# QUANTUM LIVE ADJUSTMENT MODE
-Real-time parlay optimization based on live game conditions and in-play dynamics.
-
-## ORIGINAL PARLAY ANALYSIS
-\`\`\`json
-${JSON.stringify(originalParlay, null, 2)}
-\`\`\`
-
-## LIVE DATA INTELLIGENCE
-${Object.entries(liveData).map(([key, value]) => `• **${key.toUpperCase()}**: ${value}`).join('\n')}
-
-## LIVE ADJUSTMENT FRAMEWORK
-1. **IN-GAME MOMENTUM**: Assess team/player performance vs pre-game expectations and model projections
-2. **LINE MOVEMENT ANALYSIS**: Identify new value opportunities based on live odds and market reactions
-3. **INJURY IMPACT ASSESSMENT**: Adjust for any player injuries, substitutions, or performance limitations
-4. **GAME FLOW DYNAMICS**: Consider scoring patterns, tempo changes, and strategic adjustments
-5. **WEATHER/UPDATES**: Incorporate any real-time environmental or situational changes
-
-## ADJUSTMENT DECISION MATRIX
-- **MAINTAIN ORIGINAL**: If analytical edge remains strong despite live context
-- **MODIFY LEGS**: Replace legs where live data significantly changes expected value
-- **REDUCE SIZE**: Decrease parlay legs if uncertainty increases
-- **ADD HEDGE**: Recommend correlated hedges based on live opportunities
-
-## ADJUSTMENT OUTPUT REQUIREMENTS
-Provide either:
-1. **CONFIRMED PARLAY**: Original parlay with live data validation reasoning
-2. **MODIFIED PARLAY**: Updated parlay with specific changes and live data justification
-3. **CANCELLATION RECOMMENDATION**: Only if all edges have evaporated
-
-Include live-specific analysis for each leg and overall portfolio impact.
-
-**LIVE INTEGRITY**: Only recommend changes with clear, quantifiable live data edges.`;
-  }
-
-  static getRapidAnalysisPrompt(sportKey, gameContext, analysisType = 'quick') {
-    const config = this.#getSportConfig(sportKey);
-    
-    return `# QUANTUM RAPID ANALYSIS - ${analysisType.toUpperCase()} MODE
-Time-constrained elite analysis for ${config.title}.
-
-## CONTEXT
-${gameContext}
-
-## RAPID ANALYSIS FRAMEWORK
-• **CORE EDGE IDENTIFICATION**: Focus on 1-2 strongest analytical advantages
-• **MARKET EFFICIENCY**: Quick line value assessment vs market consensus
-• **KEY FACTOR PRIORITIZATION**: Most impactful situational elements only
-• **BINARY DECISION**: Clear bet/no-bet recommendation with confidence level
-
-## RAPID OUTPUT
-\`\`\`json
-{
-  "rapid_analysis": {
-    "sport": "${config.title}",
-    "recommendation": "bet|pass",
-    "confidence": 85,
-    "primary_edge": "Single strongest analytical advantage",
-    "key_factors": ["factor1", "factor2"],
-    "risk_assessment": "low|medium|high",
-    "stake_recommendation": "0.5-3% of bankroll"
-  }
-}
-\`\`\`
-
-**RAPID INTEGRITY**: Maintain elite standards even in accelerated analysis.`;
-  }
-
-  // Utility method for sport validation
-  static getSupportedSports() {
-    return Array.from(this.#SPORT_CONFIG.keys()).map(key => {
-      const config = this.#SPORT_CONFIG.get(key);
-      return {
-        key,
-        title: config.title,
-        markets: config.keyMarkets
-      };
-    });
-  }
-
-  // Method to get analyst tier information
-  static getAnalystTierInfo(tierKey) {
-    const tierMap = {
-      'quant': this.#ANALYST_TIERS.QUANT,
-      'sharp': this.#ANALYST_TIERS.SHARPS,
-      'elite': this.#ANALYST_TIERS.ELITE
-    };
-    return tierMap[tierKey.toLowerCase()] || this.#ANALYST_TIERS.QUANT;
-  }
 }
 
 export default ElitePromptService;
+
