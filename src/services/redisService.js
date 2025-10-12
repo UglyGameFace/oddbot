@@ -1,7 +1,7 @@
 // src/services/redisService.js - COMPLETE FIXED VERSION
 import IORedis from 'ioredis';
 import env from '../config/env.js';
-import { sentryService } from './sentryService.js';
+import { sentryService } from '../services/sentryService.js';
 
 class RedisService {
   constructor() {
