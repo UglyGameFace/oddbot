@@ -47,44 +47,45 @@ class GameEnhancementService {
     });
   }
 
-  static validateGameData(game) {
-    if (!game) return false;
-    
-    // More flexible validation for different provider formats
-    const hasBasicInfo = (
-      (game.id || game.event_id || game.game_id) && 
-      game.sport_key &&
-      game.commence_time && 
-      (game.home_team || game.homeTeam) &&
-      (game.away_team || game.awayTeam)
-    );
+// IN THE GameEnhancementService class - UPDATE THE VALIDATION METHOD:
+static validateGameData(game) {
+  if (!game) return false;
+  
+  // More flexible required fields - different providers use different field names
+  const hasBasicInfo = (
+    (game.id || game.event_id || game.game_id) && 
+    game.sport_key &&
+    game.commence_time && 
+    (game.home_team || game.homeTeam) &&
+    (game.away_team || game.awayTeam)
+  );
 
-    if (!hasBasicInfo) {
-      console.warn(`⚠️ Game validation failed - missing basic info:`, game.id || game.event_id);
-      return false;
-    }
-
-    // Validate commence_time format and reasonable date
-    try {
-      const gameTime = new Date(game.commence_time);
-      const now = new Date();
-      const maxPastHours = 6; // Allow games up to 6 hours in past (for live games)
-      const maxFutureDays = 30; // Don't show games more than 30 days in future
-      
-      const isReasonableTime = gameTime > new Date(now.getTime() - maxPastHours * 60 * 60 * 1000) &&
-                              gameTime < new Date(now.getTime() + maxFutureDays * 24 * 60 * 60 * 1000);
-      
-      if (!isReasonableTime) {
-        console.warn(`⚠️ Game validation failed - unreasonable commence_time:`, game.commence_time);
-        return false;
-      }
-    } catch (dateError) {
-      console.warn(`⚠️ Game validation failed - invalid commence_time:`, game.commence_time);
-      return false;
-    }
-
-    return true;
+  if (!hasBasicInfo) {
+    console.warn(`⚠️ Game validation failed - missing basic info:`, game.id || game.event_id);
+    return false;
   }
+
+  // Validate commence_time format and reasonable date - MUCH MORE PERMISSIVE
+  try {
+    const gameTime = new Date(game.commence_time);
+    const now = new Date();
+    const maxPastHours = 24; // Allow games up to 24 hours in past (for live games)
+    const maxFutureDays = 365; // Allow games up to 1 year in future
+    
+    const isReasonableTime = gameTime > new Date(now.getTime() - maxPastHours * 60 * 60 * 1000) &&
+                            gameTime < new Date(now.getTime() + maxFutureDays * 24 * 60 * 60 * 1000);
+    
+    if (!isReasonableTime) {
+      console.warn(`⚠️ Game validation failed - unreasonable commence_time:`, game.commence_time);
+      return false;
+    }
+  } catch (dateError) {
+    console.warn(`⚠️ Game validation failed - invalid commence_time:`, game.commence_time);
+    return false;
+  }
+
+  return true;
+}
 
   static normalizeGameData(game, provider) {
     if (!game) return null;
