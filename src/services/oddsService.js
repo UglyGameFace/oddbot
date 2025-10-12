@@ -46,85 +46,86 @@ class GameEnhancementService {
       return isUpcoming || isLive;
     });
   }
-// IN THE GameEnhancementService class - UPDATE THE VALIDATION METHOD:
-static validateGameData(game) {
-  if (!game) return false;
-  
-  // More flexible required fields - different providers use different field names
-  const hasBasicInfo = (
-    (game.id || game.event_id || game.game_id) && 
-    game.sport_key &&
-    game.commence_time && 
-    (game.home_team || game.homeTeam) &&
-    (game.away_team || game.awayTeam)
-  );
 
-  if (!hasBasicInfo) {
-    console.warn(`⚠️ Game validation failed - missing basic info:`, game.id || game.event_id);
-    return false;
-  }
+  static validateGameData(game) {
+    if (!game) return false;
+    
+    // More flexible validation for different provider formats
+    const hasBasicInfo = (
+      (game.id || game.event_id || game.game_id) && 
+      game.sport_key &&
+      game.commence_time && 
+      (game.home_team || game.homeTeam) &&
+      (game.away_team || game.awayTeam)
+    );
 
-  // Validate commence_time format and reasonable date
-  try {
-    const gameTime = new Date(game.commence_time);
-    const now = new Date();
-    const maxPastHours = 6; // Allow games up to 6 hours in past (for live games)
-    const maxFutureDays = 30; // Don't show games more than 30 days in future
-    
-    const isReasonableTime = gameTime > new Date(now.getTime() - maxPastHours * 60 * 60 * 1000) &&
-                            gameTime < new Date(now.getTime() + maxFutureDays * 24 * 60 * 60 * 1000);
-    
-    if (!isReasonableTime) {
-      console.warn(`⚠️ Game validation failed - unreasonable commence_time:`, game.commence_time);
+    if (!hasBasicInfo) {
+      console.warn(`⚠️ Game validation failed - missing basic info:`, game.id || game.event_id);
       return false;
     }
-  } catch (dateError) {
-    console.warn(`⚠️ Game validation failed - invalid commence_time:`, game.commence_time);
-    return false;
+
+    // Validate commence_time format and reasonable date
+    try {
+      const gameTime = new Date(game.commence_time);
+      const now = new Date();
+      const maxPastHours = 6; // Allow games up to 6 hours in past (for live games)
+      const maxFutureDays = 30; // Don't show games more than 30 days in future
+      
+      const isReasonableTime = gameTime > new Date(now.getTime() - maxPastHours * 60 * 60 * 1000) &&
+                              gameTime < new Date(now.getTime() + maxFutureDays * 24 * 60 * 60 * 1000);
+      
+      if (!isReasonableTime) {
+        console.warn(`⚠️ Game validation failed - unreasonable commence_time:`, game.commence_time);
+        return false;
+      }
+    } catch (dateError) {
+      console.warn(`⚠️ Game validation failed - invalid commence_time:`, game.commence_time);
+      return false;
+    }
+
+    return true;
   }
 
-  return true;
+  static normalizeGameData(game, provider) {
+    if (!game) return null;
+    
+    const normalized = {
+      // Standardize ID field
+      id: game.id || game.event_id || game.game_id,
+      event_id: game.id || game.event_id || game.game_id,
+      
+      // Standardize sport fields
+      sport_key: game.sport_key || game.sport,
+      sport_title: game.sport_title || game.sport_name,
+      
+      // Standardize team fields
+      home_team: game.home_team || game.homeTeam || 'Unknown Home',
+      away_team: game.away_team || game.awayTeam || 'Unknown Away',
+      
+      // Standardize time field
+      commence_time: game.commence_time || game.start_time || game.time,
+      
+      // Preserve original data
+      bookmakers: game.bookmakers || game.odds || [],
+      raw_data: game,
+      provider: provider,
+      
+      // Metadata
+      last_updated: new Date().toISOString(),
+      normalized: true
+    };
+
+    // Clean up undefined fields
+    Object.keys(normalized).forEach(key => {
+      if (normalized[key] === undefined) {
+        delete normalized[key];
+      }
+    });
+
+    return normalized;
+  }
 }
 
-// ADD THIS METHOD TO NORMALIZE GAME DATA ACROSS PROVIDERS:
-static normalizeGameData(game, provider) {
-  if (!game) return null;
-  
-  const normalized = {
-    // Standardize ID field
-    id: game.id || game.event_id || game.game_id,
-    event_id: game.id || game.event_id || game.game_id,
-    
-    // Standardize sport fields
-    sport_key: game.sport_key || game.sport,
-    sport_title: game.sport_title || game.sport_name,
-    
-    // Standardize team fields
-    home_team: game.home_team || game.homeTeam || 'Unknown Home',
-    away_team: game.away_team || game.awayTeam || 'Unknown Away',
-    
-    // Standardize time field
-    commence_time: game.commence_time || game.start_time || game.time,
-    
-    // Preserve original data
-    bookmakers: game.bookmakers || game.odds || [],
-    raw_data: game,
-    provider: provider,
-    
-    // Metadata
-    last_updated: new Date().toISOString(),
-    normalized: true
-  };
-
-  // Clean up undefined fields
-  Object.keys(normalized).forEach(key => {
-    if (normalized[key] === undefined) {
-      delete normalized[key];
-    }
-  });
-
-  return normalized;
-}
 class DataQualityService {
   static assessDataQuality(games) {
     if (!Array.isArray(games) || games.length === 0) {
@@ -686,11 +687,15 @@ class OddsService {
         );
 
         if (games && games.length > 0) {
-          const validGames = games.filter(GameEnhancementService.validateGameData);
-          console.log(`✅ OddsService: ${provider.name} returned ${validGames.length} valid games for ${sportKey} (from ${games.length} raw)`);
+          // Normalize and validate games
+          const normalizedGames = games
+            .map(game => GameEnhancementService.normalizeGameData(game, provider.name))
+            .filter(game => game !== null && GameEnhancementService.validateGameData(game));
+          
+          console.log(`✅ OddsService: ${provider.name} returned ${normalizedGames.length} valid games for ${sportKey} (from ${games.length} raw)`);
           
           successfulProvider = provider.name;
-          return GameEnhancementService.enhanceGameData(validGames, sportKey, provider.name);
+          return GameEnhancementService.enhanceGameData(normalizedGames, sportKey, provider.name);
         }
 
         console.log(`⚠️ OddsService: ${provider.name} returned no valid data for ${sportKey}`);
@@ -734,7 +739,11 @@ class OddsService {
     // Return fallback data
     const fallbackProvider = this.providers.find(p => p.name === 'fallback');
     const fallbackGames = await fallbackProvider.fetchSportOdds(sportKey, options);
-    return GameEnhancementService.enhanceGameData(fallbackGames, sportKey, 'fallback');
+    const normalizedFallback = fallbackGames
+      .map(game => GameEnhancementService.normalizeGameData(game, 'fallback'))
+      .filter(game => game !== null);
+    
+    return GameEnhancementService.enhanceGameData(normalizedFallback, sportKey, 'fallback');
   }
 
   async getUsage() {
