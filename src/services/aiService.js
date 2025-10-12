@@ -1,5 +1,5 @@
-// src/services/aiService.js - FINAL, COMPLETE, AND CORRECTED
-import { GoogleGenerativeAI } from '@google/generative-ai';
+// src/services/aiService.js - FINAL, COMPLETE, AND CORRECTED (Value-First Quant Engine)
+import { GoogleGenerativeAI } from '@google-generative-ai';
 import axios from 'axios';
 import env from '../config/env.js';
 import gamesService from './gamesService.js';
@@ -118,9 +118,7 @@ class AIService {
           if (mode === 'web') {
               return await this._generateWebParlay(sportKey, numLegs, aiModel, betType, options);
           }
-          // --- CHANGE START: All other modes now go to the context/DB generator ---
           return await this._generateContextParlay(sportKey, numLegs, mode, betType, options);
-          // --- CHANGE END ---
       } catch (error) {
           console.error(`❌ QUANTUM parlay generation failed for ${requestId}:`, error.message);
           try {
@@ -157,49 +155,122 @@ class AIService {
       return parlayData;
   }
 
-  // --- THIS IS THE CORRECTED FUNCTION ---
+  // --- NEW: VALUE-FIRST QUANTITATIVE ENGINE FOR DATABASE MODE ---
+  async _findBestValuePlays(games) {
+    const valuePlays = [];
+    if (!games || games.length === 0) return valuePlays;
+
+    for (const game of games) {
+      const bookmaker = game.bookmakers?.[0]; // Use the first available bookmaker
+      if (!bookmaker?.markets) continue;
+
+      // --- Analyze Moneyline (h2h) Market ---
+      const h2hMarket = bookmaker.markets.find(m => m.key === 'h2h');
+      if (h2hMarket?.outcomes?.length >= 2) {
+        const home = h2hMarket.outcomes.find(o => o.name === game.home_team);
+        const away = h2hMarket.outcomes.find(o => o.name === game.away_team);
+
+        if (home && away) {
+          const homeProb = 1 / americanToDecimal(home.price);
+          const awayProb = 1 / americanToDecimal(away.price);
+          const totalProb = homeProb + awayProb;
+
+          if (totalProb > 0) {
+            const noVigHome = homeProb / totalProb;
+            const noVigAway = awayProb / totalProb;
+
+            const evHome = (americanToDecimal(home.price) * noVigHome - 1) * 100;
+            const evAway = (americanToDecimal(away.price) * noVigAway - 1) * 100;
+            
+            if (evHome > 0) valuePlays.push({ game, market: h2hMarket, outcome: home, ev: evHome, noVigProb: noVigHome });
+            if (evAway > 0) valuePlays.push({ game, market: h2hMarket, outcome: away, ev: evAway, noVigProb: noVigAway });
+          }
+        }
+      }
+
+      // --- Analyze Totals (Over/Under) Market ---
+      const totalsMarket = bookmaker.markets.find(m => m.key === 'totals');
+      if (totalsMarket?.outcomes?.length === 2) {
+          const over = totalsMarket.outcomes.find(o => o.name === 'Over');
+          const under = totalsMarket.outcomes.find(o => o.name === 'Under');
+
+          if (over && under) {
+              const overProb = 1 / americanToDecimal(over.price);
+              const underProb = 1 / americanToDecimal(under.price);
+              const totalProb = overProb + underProb;
+
+              if (totalProb > 0) {
+                  const noVigOver = overProb / totalProb;
+                  const noVigUnder = underProb / totalProb;
+
+                  const evOver = (americanToDecimal(over.price) * noVigOver - 1) * 100;
+                  const evUnder = (americanToDecimal(under.price) * noVigUnder - 1) * 100;
+
+                  if (evOver > 0) valuePlays.push({ game, market: totalsMarket, outcome: over, ev: evOver, noVigProb: noVigOver });
+                  if (evUnder > 0) valuePlays.push({ game, market: totalsMarket, outcome: under, ev: evUnder, noVigProb: noVigUnder });
+              }
+          }
+      }
+    }
+
+    // Sort by highest EV
+    return valuePlays.sort((a, b) => b.ev - a.ev);
+  }
+
   async _generateContextParlay(sportKey, numLegs, mode, betType, options) {
     console.log(`🤖 Generating parlay using local data from '${mode}' mode.`);
     try {
-        // Step 1: Fetch games directly from our own service (which uses the database)
         const allGames = await gamesService.getGamesForSport(sportKey, {
             hoursAhead: options.horizonHours || 72,
-            includeOdds: true, // Make sure we have odds to work with
-            useCache: false    // Use fresh data for this request
+            includeOdds: true,
+            useCache: false
         });
 
         if (allGames.length < numLegs) {
-            console.warn(`⚠️ Insufficient games in DB for ${sportKey} (${allGames.length} found), using AI fallback.`);
+            console.warn(`⚠️ Insufficient games in DB for ${sportKey}, using AI fallback.`);
             return await this._generateFallbackParlay(sportKey, numLegs, betType);
         }
 
-        // Step 2: Randomly select games from the available list
-        const selectedGames = allGames.sort(() => 0.5 - Math.random()).slice(0, numLegs);
+        // --- NEW LOGIC START ---
+        console.log(`🔍 Scanning ${allGames.length} games for +EV opportunities...`);
+        const bestPlays = await this._findBestValuePlays(allGames);
 
-        // Step 3: Build the parlay legs locally without calling an external AI
-        const parlayLegs = selectedGames.map(game => {
-            const market = game.bookmakers?.[0]?.markets.find(m => m.key === 'h2h'); // Default to moneyline
-            const outcome = market?.outcomes?.[0]; // Default to the first outcome (e.g., home team)
-            
+        if (bestPlays.length < numLegs) {
             return {
-                event: `${game.away_team} @ ${game.home_team}`,
-                market: market?.key || 'moneyline',
-                selection: outcome?.name || game.home_team,
-                odds: {
-                    american: outcome?.price || -110, // Default odds if none found
-                    decimal: americanToDecimal(outcome?.price || -110)
-                },
-                quantum_analysis: {
-                    confidence_score: 60, // Assign a neutral confidence
-                    analytical_basis: 'Selected from available database games.'
+                legs: [],
+                portfolio_construction: {
+                    overall_thesis: `No profitable (+EV) parlays could be constructed from the ${allGames.length} available games. A disciplined analyst would not force a bet in this market.`
                 }
             };
-        });
+        }
+
+        console.log(`✅ Found ${bestPlays.length} +EV plays. Selecting the top ${numLegs}.`);
+        const topPlays = bestPlays.slice(0, numLegs);
+        
+        const parlayLegs = topPlays.map(play => ({
+            event: `${play.game.away_team} @ ${play.game.home_team}`,
+            market: play.market.key,
+            selection: `${play.outcome.name} ${play.outcome.point || ''}`.trim(),
+            odds: {
+                american: play.outcome.price,
+                decimal: americanToDecimal(play.outcome.price),
+                implied_probability: 1 / americanToDecimal(play.outcome.price)
+            },
+            quantum_analysis: {
+                confidence_score: play.noVigProb * 100,
+                analytical_basis: `Positive EV of +${play.ev.toFixed(1)}% identified. Calculated no-vig win probability of ${(play.noVigProb * 100).toFixed(1)}% exceeds market implied probability.`,
+                key_factors: ["quantitative_edge", "market_inefficiency"]
+            }
+        }));
+        // --- NEW LOGIC END ---
         
         const parlayData = { legs: parlayLegs };
         parlayData.legs = this._ensureLegsHaveOdds(parlayData.legs);
         parlayData.parlay_price_decimal = parlayDecimal(parlayData.legs);
         parlayData.parlay_price_american = decimalToAmerican(parlayData.parlay_price_decimal);
+        parlayData.portfolio_construction = {
+            overall_thesis: `This parlay was constructed by systematically identifying the ${numLegs} highest Expected Value (+EV) bets from all available games in the database. Each leg represents a statistically profitable wager based on a no-vig probability calculation.`
+        };
 
         try {
             parlayData.quantitative_analysis = await quantitativeService.evaluateParlay(parlayData.legs, parlayData.parlay_price_decimal);
@@ -207,7 +278,7 @@ class AIService {
             parlayData.quantitative_analysis = { note: 'Quantitative analysis failed.' };
         }
         
-        parlayData.research_metadata = { mode, quantum_mode: true, games_used: parlayData.legs.length, prompt_strategy: 'database_selection' };
+        parlayData.research_metadata = { mode, quantum_mode: true, games_used: parlayData.legs.length, prompt_strategy: 'database_quant_selection' };
         
         console.log(`✅ Successfully built ${numLegs}-leg parlay from database.`);
         return parlayData;
@@ -221,7 +292,7 @@ class AIService {
   async _generateFallbackParlay(sportKey, numLegs, betType) {
       console.log(`🎯 Generating QUANTUM fallback for ${sportKey}`);
       const prompt = ElitePromptService.getFallbackPrompt(sportKey, numLegs, betType);
-      const parlayData = await this._callAIProvider('perplexity', prompt); // Use Perplexity for fallback
+      const parlayData = await this._callAIProvider('perplexity', prompt);
       
       parlayData.legs = this._ensureLegsHaveOdds(parlayData.legs);
       
