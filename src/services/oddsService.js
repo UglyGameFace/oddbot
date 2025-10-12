@@ -46,39 +46,85 @@ class GameEnhancementService {
       return isUpcoming || isLive;
     });
   }
+// IN THE GameEnhancementService class - UPDATE THE VALIDATION METHOD:
+static validateGameData(game) {
+  if (!game) return false;
+  
+  // More flexible required fields - different providers use different field names
+  const hasBasicInfo = (
+    (game.id || game.event_id || game.game_id) && 
+    game.sport_key &&
+    game.commence_time && 
+    (game.home_team || game.homeTeam) &&
+    (game.away_team || game.awayTeam)
+  );
 
-  static validateGameData(game) {
-    if (!game) return false;
-    
-    const requiredFields = ['id', 'sport_key', 'commence_time', 'home_team', 'away_team'];
-    const hasRequiredFields = requiredFields.every(field => 
-      game[field] !== undefined && game[field] !== null && game[field] !== ''
-    );
-
-    if (!hasRequiredFields) {
-      console.warn(`⚠️ Game validation failed - missing required fields:`, game.id);
-      return false;
-    }
-
-    // Validate commence_time format and is in future (or recent past for live games)
-    try {
-      const gameTime = new Date(game.commence_time);
-      const now = new Date();
-      const isFuture = gameTime > new Date(now.getTime() - 4 * 60 * 60 * 1000); // Up to 4 hours in past for live games
-      
-      if (!isFuture) {
-        console.warn(`⚠️ Game validation failed - commence_time too far in past:`, game.id, game.commence_time);
-        return false;
-      }
-    } catch (dateError) {
-      console.warn(`⚠️ Game validation failed - invalid commence_time:`, game.commence_time);
-      return false;
-    }
-
-    return true;
+  if (!hasBasicInfo) {
+    console.warn(`⚠️ Game validation failed - missing basic info:`, game.id || game.event_id);
+    return false;
   }
+
+  // Validate commence_time format and reasonable date
+  try {
+    const gameTime = new Date(game.commence_time);
+    const now = new Date();
+    const maxPastHours = 6; // Allow games up to 6 hours in past (for live games)
+    const maxFutureDays = 30; // Don't show games more than 30 days in future
+    
+    const isReasonableTime = gameTime > new Date(now.getTime() - maxPastHours * 60 * 60 * 1000) &&
+                            gameTime < new Date(now.getTime() + maxFutureDays * 24 * 60 * 60 * 1000);
+    
+    if (!isReasonableTime) {
+      console.warn(`⚠️ Game validation failed - unreasonable commence_time:`, game.commence_time);
+      return false;
+    }
+  } catch (dateError) {
+    console.warn(`⚠️ Game validation failed - invalid commence_time:`, game.commence_time);
+    return false;
+  }
+
+  return true;
 }
 
+// ADD THIS METHOD TO NORMALIZE GAME DATA ACROSS PROVIDERS:
+static normalizeGameData(game, provider) {
+  if (!game) return null;
+  
+  const normalized = {
+    // Standardize ID field
+    id: game.id || game.event_id || game.game_id,
+    event_id: game.id || game.event_id || game.game_id,
+    
+    // Standardize sport fields
+    sport_key: game.sport_key || game.sport,
+    sport_title: game.sport_title || game.sport_name,
+    
+    // Standardize team fields
+    home_team: game.home_team || game.homeTeam || 'Unknown Home',
+    away_team: game.away_team || game.awayTeam || 'Unknown Away',
+    
+    // Standardize time field
+    commence_time: game.commence_time || game.start_time || game.time,
+    
+    // Preserve original data
+    bookmakers: game.bookmakers || game.odds || [],
+    raw_data: game,
+    provider: provider,
+    
+    // Metadata
+    last_updated: new Date().toISOString(),
+    normalized: true
+  };
+
+  // Clean up undefined fields
+  Object.keys(normalized).forEach(key => {
+    if (normalized[key] === undefined) {
+      delete normalized[key];
+    }
+  });
+
+  return normalized;
+}
 class DataQualityService {
   static assessDataQuality(games) {
     if (!Array.isArray(games) || games.length === 0) {
