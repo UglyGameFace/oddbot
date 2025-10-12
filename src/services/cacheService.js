@@ -22,19 +22,11 @@ class CacheService {
     this.DEFAULT_LOCK_MS = 8000;
     this.DEFAULT_RETRY_MS = 150;
     
-    // SIMPLIFIED LUA SCRIPT to avoid syntax errors
-    this.RELEASE_LOCK_SCRIPT = `
-      local lock_value = redis.call('GET', KEYS[1])
-      if lock_value == ARGV[1] then
-        redis.call('DEL', KEYS[1])
-        return 1
-      else
-        return 0
-      end
-    `;
-
-    // Alternative simple script if above fails
-    this.SIMPLE_RELEASE_SCRIPT = `if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) else return 0 end`;
+    // FIXED: Proper Lua scripts without syntax errors
+    this.RELEASE_LOCK_SCRIPT = 'local lock_value = redis.call(\'GET\', KEYS[1]) if lock_value == ARGV[1] then redis.call(\'DEL\', KEYS[1]) return 1 else return 0 end';
+    
+    // FIXED: Simple script as single line string
+    this.SIMPLE_RELEASE_SCRIPT = 'if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) else return 0 end';
 
     this.init();
   }
@@ -89,7 +81,7 @@ class CacheService {
       
       // Test EVAL with simple script
       try {
-        const simpleScript = `return "test_ok"`;
+        const simpleScript = 'return "test_ok"';
         const evalResult = await this.redis.eval(simpleScript, 0);
         console.log(`✅ CacheService: Redis EVAL - ${evalResult}`);
       } catch (evalError) {
@@ -190,7 +182,7 @@ class CacheService {
   } = {}) {
     
     await this.ensureInitialized();
-    const lockValue = `lock_${Date.now()}`; // More unique lock value
+    const lockValue = `lock_${Date.now()}`;
     
     try {
       const cached = await this.safeRedisCommand(async (client) => {
@@ -516,49 +508,47 @@ class CacheService {
     }
   }
 
-// IN THE CacheService class - ADD THESE METHODS:
+  async keyInfo(key) {
+    await this.ensureInitialized();
+    
+    try {
+      if (!this.isValidRedisClient()) {
+        return {
+          exists: false,
+          error: 'Redis client not available',
+          timestamp: new Date().toISOString()
+        };
+      }
 
-async keyInfo(key) {
-  await this.ensureInitialized();
-  
-  try {
-    if (!this.isValidRedisClient()) {
+      const [exists, ttl, type] = await Promise.all([
+        this.safeRedisCommand(async (client) => await client.exists(key), 'keyInfo_exists'),
+        this.safeRedisCommand(async (client) => await client.ttl(key), 'keyInfo_ttl'),
+        this.safeRedisCommand(async (client) => await client.type(key), 'keyInfo_type')
+      ]);
+      
+      // Skip memory usage to avoid syntax errors
+      const result = {
+        exists: exists === 1,
+        ttl,
+        type,
+        memory_usage: 'disabled',
+        ttl_human: ttl > 0 ? `${ttl} seconds` : 'no TTL',
+        status: exists ? (ttl > 0 ? 'active' : 'persistent') : 'not_found',
+        timestamp: new Date().toISOString()
+      };
+
+      console.log(`🔍 CacheService: Key info for ${key}:`, result);
+      return result;
+
+    } catch (error) {
+      console.error(`❌ CacheService: Failed to get key info for: ${key}`, error.message);
       return {
         exists: false,
-        error: 'Redis client not available',
+        error: error.message,
         timestamp: new Date().toISOString()
       };
     }
-
-    // USE ONLY BASIC COMMANDS - NO MEMORY COMMAND
-    const [exists, ttl, type] = await Promise.all([
-      this.safeRedisCommand(async (client) => await client.exists(key), 'keyInfo_exists'),
-      this.safeRedisCommand(async (client) => await client.ttl(key), 'keyInfo_ttl'),
-      this.safeRedisCommand(async (client) => await client.type(key), 'keyInfo_type')
-    ]);
-    
-    const result = {
-      exists: exists === 1,
-      ttl,
-      type,
-      memory_usage: 'disabled', // Disabled to avoid syntax errors
-      ttl_human: ttl > 0 ? `${ttl} seconds` : 'no TTL',
-      status: exists ? (ttl > 0 ? 'active' : 'persistent') : 'not_found',
-      timestamp: new Date().toISOString()
-    };
-
-    console.log(`🔍 CacheService: Key info for ${key}:`, result);
-    return result;
-
-  } catch (error) {
-    console.error(`❌ CacheService: Failed to get key info for: ${key}`, error.message);
-    return {
-      exists: false,
-      error: error.message,
-      timestamp: new Date().toISOString()
-    };
   }
-}
 
   async increment(key, value = 1, ttlSec = null) {
     await this.ensureInitialized();
