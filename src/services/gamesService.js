@@ -56,15 +56,17 @@ class GameEnhancementService {
       return false;
     }
 
-    // Validate commence_time is in the future (or recent past for live games)
+    // --- CHANGE START ---
+    // Increased the time window to 4 hours to allow for games in progress.
     const gameTime = new Date(game.commence_time);
     const now = new Date();
-    const isFuture = gameTime > new Date(now.getTime() - 2 * 60 * 60 * 1000); // Up to 2 hours in past for live games
+    const isWithinWindow = gameTime > new Date(now.getTime() - 4 * 60 * 60 * 1000); // Up to 4 hours in past
     
-    if (!isFuture) {
-      console.warn(`⚠️ Game validation failed - commence_time in past:`, game.event_id, game.commence_time);
+    if (!isWithinWindow) {
+      console.warn(`⚠️ Game validation failed - commence_time too far in past:`, game.event_id, game.commence_time);
       return false;
     }
+    // --- CHANGE END ---
 
     return true;
   }
@@ -196,12 +198,10 @@ class GamesService {
             }
           }
 
-          // If both primary sources failed, log it but continue with mapping
           if (oddsFetchFailed && dbFetchFailed) {
             console.error('❌ GamesService: All primary data sources for sports failed');
           }
           
-          // Always include comprehensive mapping as fallback
           const mappedSports = this._getSportsFromMapping();
           sports = [...sports, ...mappedSports];
           console.log(`✅ GamesService: Added ${mappedSports.length} sports from comprehensive mapping`);
@@ -221,7 +221,6 @@ class GamesService {
     } catch (error) {
       console.error('❌ GamesService: Comprehensive sports fetch failed:', error.message);
       
-      // Ultimate fallback - just return the mapped sports
       console.log('🔄 GamesService: Falling back to comprehensive mapping only');
       return this._getSportsFromMapping();
     }
@@ -241,7 +240,6 @@ class GamesService {
 
     const cacheKey = `games_${sportKey}_${hoursAhead}_${includeOdds}_${includeLive}_v2`;
 
-    // If force refresh, delete cache first
     if (forceRefresh) {
       try {
         await cacheService.deleteKey(cacheKey);
@@ -257,7 +255,6 @@ class GamesService {
         let games = [];
         let source = 'unknown';
 
-        // Priority 1: Odds API (if requested and available)
         if (includeOdds) {
           try {
             const oddsGames = await withTimeout(
@@ -282,7 +279,6 @@ class GamesService {
           }
         }
 
-        // Priority 2: Database fallback
         if (games.length === 0) {
           try {
             const dbGames = await withTimeout(
@@ -302,7 +298,6 @@ class GamesService {
           }
         }
         
-        // Validate and enhance games
         const validGames = games.filter(GameEnhancementService.validateGameData);
         const enhancedGames = GameEnhancementService.enhanceGameData(validGames, sportKey, source);
         
@@ -317,16 +312,7 @@ class GamesService {
           cacheKey, 
           CACHE_TTL.GAMES_DATA, 
           fetchAndProcessGames,
-          {
-            context: { 
-              sport: sportKey, 
-              operation: 'getGamesForSport',
-              includeOdds,
-              hoursAhead
-            },
-            fallbackOnError: true,
-            lockMs: 15000
-          }
+          { context: { sport: sportKey, operation: 'getGamesForSport', includeOdds, hoursAhead }, fallbackOnError: true, lockMs: 15000 }
         );
       } else {
         console.log(`🔄 GamesService: Bypassing cache for ${sportKey} games...`);
@@ -336,7 +322,6 @@ class GamesService {
     } catch (error) {
       console.error(`❌ GamesService: CRITICAL failure for ${sportKey}:`, error.message);
       
-      // Don't throw timeout errors to the caller - return empty array instead
       if (error instanceof TimeoutError) {
         console.warn(`⏰ GamesService: Timeout for ${sportKey}, returning empty results`);
         return [];
@@ -348,9 +333,7 @@ class GamesService {
 
   async getVerifiedRealGames(sportKey, hours = 72) {
     await this._ensureInitialized();
-    
     const cacheKey = `verified_games_${sportKey}_${hours}_v2`;
-    
     console.log(`🔍 GamesService: Getting VERIFIED real games for ${sportKey}...`);
     
     try {
@@ -360,7 +343,6 @@ class GamesService {
         async () => {
           let realGames = [];
           
-          // Try Web Sources first
           try {
             const webGames = await withTimeout(
               import('../services/webSportsService.js').then(module => 
@@ -380,19 +362,13 @@ class GamesService {
             console.warn('❌ GamesService: Web sources failed:', webError.message);
           }
           
-          // Try Odds API as backup if web sources failed
           const { THE_ODDS_API_KEY } = env;
-          const hasValidOddsAPI = THE_ODDS_API_KEY && 
-                                !THE_ODDS_API_KEY.includes('expired') && 
-                                THE_ODDS_API_KEY.length > 20;
+          const hasValidOddsAPI = THE_ODDS_API_KEY && !THE_ODDS_API_KEY.includes('expired') && THE_ODDS_API_KEY.length > 20;
           
           if (hasValidOddsAPI && realGames.length === 0) {
             try {
               const oddsGames = await withTimeout(
-                oddsService.getSportOdds(sportKey, { 
-                  useCache: false,
-                  hoursAhead: hours 
-                }), 
+                oddsService.getSportOdds(sportKey, { useCache: false, hoursAhead: hours }), 
                 8000, 
                 'VerifiedOddsFetch'
               );
@@ -408,16 +384,12 @@ class GamesService {
             console.log('🎯 GamesService: Skipping Odds API - keys expired, using web sources only');
           }
           
-          // Validate games
           const validGames = realGames.filter(GameEnhancementService.validateGameData);
           console.log(`📅 GamesService: VERIFIED - ${validGames.length} real ${sportKey} games in next ${hours}h`);
           
           return validGames;
         },
-        {
-          context: { operation: 'getVerifiedRealGames', sport: sportKey },
-          fallbackOnError: true
-        }
+        { context: { operation: 'getVerifiedRealGames', sport: sportKey }, fallbackOnError: true }
       );
       
     } catch (error) {
@@ -430,26 +402,15 @@ class GamesService {
     await this._ensureInitialized();
     await this._incrementRequestCount(sportKey);
     
-    const {
-      includeOdds = true,
-      hoursAhead = 24,
-      maxGames = 50
-    } = options;
-
+    const { includeOdds = true, hoursAhead = 24, maxGames = 50 } = options;
     const cacheKey = `live_games_${sportKey}_${hoursAhead}_v2`;
 
     try {
       return await cacheService.getOrSetJSON(
         cacheKey,
-        CACHE_TTL.GAMES_DATA, // Shorter TTL for live games
+        CACHE_TTL.GAMES_DATA,
         async () => {
-          const games = await this.getGamesForSport(sportKey, {
-            includeOdds,
-            includeLive: true,
-            hoursAhead,
-            useCache: false
-          });
-
+          const games = await this.getGamesForSport(sportKey, { includeOdds, includeLive: true, hoursAhead, useCache: false });
           const liveGames = GameEnhancementService.filterGamesByTime(games, hoursAhead, true)
             .filter(GameEnhancementService.validateGameData)
             .slice(0, maxGames);
@@ -457,27 +418,23 @@ class GamesService {
           console.log(`🎯 GamesService: Found ${liveGames.length} live/upcoming games for ${sportKey}`);
           return liveGames;
         },
-        {
-          context: { operation: 'getLiveGames', sport: sportKey },
-          fallbackOnError: true
-        }
+        { context: { operation: 'getLiveGames', sport: sportKey }, fallbackOnError: true }
       );
 
     } catch (error) {
       console.error(`❌ GamesService: Live games fetch failed for ${sportKey}:`, error);
-      return []; // Return empty array instead of throwing for live games
+      return [];
     }
   }
 
   async searchGames(query, sportKey = null) {
     await this._ensureInitialized();
-    
     const cacheKey = `search_${sportKey || 'all'}_${query.toLowerCase().replace(/[^a-z0-9]/g, '_')}_v2`;
 
     try {
       return await cacheService.getOrSetJSON(
         cacheKey,
-        300, // 5 minutes cache for search
+        300,
         async () => {
           console.log(`🔍 GamesService: Searching games for: "${query}"${sportKey ? ` in ${sportKey}` : ''}`);
           
@@ -510,19 +467,13 @@ class GamesService {
             const tournament = game.tournament?.toLowerCase() || '';
             const sportTitle = game.sport_title?.toLowerCase() || '';
             
-            return homeTeam.includes(searchTerm) || 
-                  awayTeam.includes(searchTerm) || 
-                  tournament.includes(searchTerm) ||
-                  sportTitle.includes(searchTerm);
+            return homeTeam.includes(searchTerm) || awayTeam.includes(searchTerm) || tournament.includes(searchTerm) || sportTitle.includes(searchTerm);
           });
 
           console.log(`✅ GamesService: Search found ${results.length} games for "${query}"`);
           return results;
         },
-        {
-          context: { operation: 'searchGames', query, sportKey },
-          fallbackOnError: true
-        }
+        { context: { operation: 'searchGames', query, sportKey }, fallbackOnError: true }
       );
 
     } catch (error) {
@@ -537,72 +488,40 @@ class GamesService {
     try {
       const now = new Date();
       let freshnessInfo = {
-        overall: {
-          last_checked: now.toISOString(),
-          status: 'current',
-          service: 'GamesService'
-        },
+        overall: { last_checked: now.toISOString(), status: 'current', service: 'GamesService' },
         sources: {},
-        cache: {
-          enabled: cacheService.isAvailable(),
-          status: cacheService.isAvailable() ? 'active' : 'inactive'
-        }
+        cache: { enabled: cacheService.isAvailable(), status: cacheService.isAvailable() ? 'active' : 'inactive' }
       };
 
-      // Test Odds API
       try {
         const testSports = await withTimeout(oddsService.getAvailableSports(), 5000, 'FreshnessOddsTest');
-        freshnessInfo.sources.odds_api = {
-          status: 'active',
-          last_success: now.toISOString(),
-          sports_available: testSports?.length || 0,
-          response_time: 'ok'
-        };
+        freshnessInfo.sources.odds_api = { status: 'active', last_success: now.toISOString(), sports_available: testSports?.length || 0, response_time: 'ok' };
       } catch (error) {
-        freshnessInfo.sources.odds_api = {
-          status: 'inactive',
-          last_error: error.message,
-          last_attempt: now.toISOString(),
-          response_time: 'timeout'
-        };
+        freshnessInfo.sources.odds_api = { status: 'inactive', last_error: error.message, last_attempt: now.toISOString(), response_time: 'timeout' };
         freshnessInfo.overall.status = 'degraded';
       }
 
-      // Test Database
       try {
         const testConnection = await withTimeout(databaseService.testConnection(), 3000, 'FreshnessDBTest');
-        freshnessInfo.sources.database = {
-          status: testConnection ? 'active' : 'inactive',
-          last_checked: now.toISOString()
-        };
-        if (!testConnection) {
-          freshnessInfo.overall.status = 'degraded';
-        }
+        freshnessInfo.sources.database = { status: testConnection ? 'active' : 'inactive', last_checked: now.toISOString() };
+        if (!testConnection) freshnessInfo.overall.status = 'degraded';
       } catch (error) {
-        freshnessInfo.sources.database = {
-          status: 'error',
-          last_error: error.message,
-          last_attempt: now.toISOString()
-        };
+        freshnessInfo.sources.database = { status: 'error', last_error: error.message, last_attempt: now.toISOString() };
         freshnessInfo.overall.status = 'degraded';
       }
 
-      // Sport-specific info
       if (sportKey) {
         const lastRefresh = this.lastRefreshTimes.get(sportKey);
         const requestCount = this.requestCounts.get(sportKey) || 0;
-        
         freshnessInfo.sport_specific = {
           sport_key: sportKey,
           last_refresh: lastRefresh || 'never',
-          hours_since_refresh: lastRefresh ? 
-            Math.round((now - new Date(lastRefresh)) / (1000 * 60 * 60)) : null,
+          hours_since_refresh: lastRefresh ? Math.round((now - new Date(lastRefresh)) / (1000 * 60 * 60)) : null,
           request_count: requestCount,
           in_comprehensive_mapping: !!COMPREHENSIVE_SPORTS[sportKey]
         };
       }
 
-      // Cache info
       if (cacheService.isAvailable()) {
         try {
           const cacheHealth = await cacheService.healthCheck();
@@ -619,11 +538,7 @@ class GamesService {
     } catch (error) {
       console.error('❌ GamesService: Data freshness check failed:', error);
       return {
-        overall: {
-          status: 'error',
-          error: error.message,
-          last_checked: new Date().toISOString()
-        },
+        overall: { status: 'error', error: error.message, last_checked: new Date().toISOString() },
         sources: {},
         cache: { enabled: false, status: 'unknown' }
       };
@@ -646,24 +561,18 @@ class GamesService {
 
   _enhanceAndDeduplicateSports(sports) {
     const seen = new Map();
-    
-    // Sort by source priority
     const sortedSports = sports.sort((a, b) => {
         const priorityMap = { 'odds_api': 1, 'database': 2, 'comprehensive_mapping': 3, 'unknown': 4 };
-        const priorityA = priorityMap[a.source] || 4;
-        const priorityB = priorityMap[b.source] || 4;
-        return priorityA - priorityB;
+        return (priorityMap[a.source] || 4) - (priorityMap[b.source] || 4);
     });
 
     for (const sport of sortedSports) {
       if (!sport.sport_key) continue;
-
       const key = sport.sport_key;
       const existing = seen.get(key);
-
       if (!existing) {
         const comprehensiveData = COMPREHENSIVE_SPORTS[key];
-        const enhancedSport = {
+        seen.set(key, {
           sport_key: key,
           sport_title: sport.sport_title || comprehensiveData?.title || this._formatSportKey(key),
           emoji: comprehensiveData?.emoji || '🏆',
@@ -678,56 +587,41 @@ class GamesService {
           is_major: (sport.priority ?? 100) <= 20,
           is_international: !['americanfootball_nfl', 'basketball_nba', 'baseball_mlb', 'icehockey_nhl'].includes(key),
           has_mapping: !!COMPREHENSIVE_SPORTS[key]
-        };
-        seen.set(key, enhancedSport);
+        });
       } else {
-        // Merge data from higher priority source
         existing.game_count = existing.game_count || sport.game_count || 0;
         existing.sport_title = existing.sport_title || sport.sport_title;
         existing.active = existing.active || sport.active;
       }
     }
-
     return Array.from(seen.values()).sort((a, b) => (a.priority || 100) - (b.priority || 100));
   }
 
   _formatSportKey(sportKey) {
-    return sportKey
-      .split('_')
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(' ');
+    return sportKey.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
   }
 
   async clearCache(sportKey = null) {
     await this._ensureInitialized();
-    
     try {
       if (sportKey) {
-        const patterns = [
-          `games_${sportKey}_*`,
-          `live_games_${sportKey}_*`,
-          `verified_games_${sportKey}_*`,
-          `search_${sportKey}_*`
-        ];
-        
+        const patterns = [`games_${sportKey}_*`, `live_games_${sportKey}_*`, `verified_games_${sportKey}_*`, `search_${sportKey}_*`];
         let totalCleared = 0;
         for (const pattern of patterns) {
-          const cleared = await cacheService.flushPattern(pattern);
-          totalCleared += cleared;
+          totalCleared += await cacheService.flushPattern(pattern);
         }
-        
         console.log(`🧹 GamesService: Cleared ${totalCleared} cache entries for ${sportKey}`);
       } else {
-        await cacheService.flushPattern('games_*');
-        await cacheService.flushPattern('live_games_*');
-        await cacheService.flushPattern('verified_games_*');
-        await cacheService.flushPattern('search_*');
-        await cacheService.deleteKey('available_sports_comprehensive_v2');
+        await Promise.all([
+          cacheService.flushPattern('games_*'),
+          cacheService.flushPattern('live_games_*'),
+          cacheService.flushPattern('verified_games_*'),
+          cacheService.flushPattern('search_*'),
+          cacheService.deleteKey('available_sports_comprehensive_v2')
+        ]);
         console.log('🧹 GamesService: Cleared all games cache');
       }
-      
       this.lastRefreshTimes.clear();
-      
       return true;
     } catch (error) {
       console.error('❌ GamesService: Cache clearance failed:', error);
@@ -737,15 +631,11 @@ class GamesService {
 
   async getServiceStatus() {
     await this._ensureInitialized();
-    
     const status = {
       service: 'GamesService',
       status: 'healthy',
       timestamp: new Date().toISOString(),
-      cache: {
-        enabled: cacheService.isAvailable(),
-        status: cacheService.isAvailable() ? 'active' : 'inactive'
-      },
+      cache: { enabled: cacheService.isAvailable(), status: cacheService.isAvailable() ? 'active' : 'inactive' },
       sources: {},
       statistics: {
         total_sports_supported: Object.keys(COMPREHENSIVE_SPORTS).length,
@@ -754,7 +644,6 @@ class GamesService {
       }
     };
 
-    // Test Odds API
     try {
       const testSports = await withTimeout(this.getAvailableSports(), 5000, 'StatusSportsTest');
       status.sources.odds_api = 'active';
@@ -765,7 +654,6 @@ class GamesService {
       status.statistics.sports_available = 0;
     }
 
-    // Test Database
     try {
       const testConnection = await withTimeout(databaseService.testConnection(), 3000, 'StatusDBTest');
       status.sources.database = testConnection ? 'active' : 'inactive';
@@ -775,7 +663,6 @@ class GamesService {
       status.status = 'degraded';
     }
 
-    // Test Cache
     if (cacheService.isAvailable()) {
       try {
         const cacheHealth = await cacheService.healthCheck();
@@ -787,69 +674,44 @@ class GamesService {
         status.status = 'degraded';
       }
     }
-
     return status;
   }
 
   async preloadPopularSports() {
     await this._ensureInitialized();
-    
-    const popularSports = [
-      'americanfootball_nfl',
-      'basketball_nba', 
-      'baseball_mlb',
-      'icehockey_nhl',
-      'soccer_england_premier_league'
-    ];
-
+    const popularSports = ['americanfootball_nfl', 'basketball_nba', 'baseball_mlb', 'icehockey_nhl', 'soccer_england_premier_league'];
     console.log('🚀 GamesService: Preloading cache for popular sports...');
-    
     const results = [];
     for (const sport of popularSports) {
       try {
         const games = await this.getGamesForSport(sport, { useCache: true });
-        results.push({
-          sport,
-          games_loaded: games.length,
-          status: 'success',
-          data_quality: DataQualityService.assessDataQuality(games)
-        });
+        results.push({ sport, games_loaded: games.length, status: 'success', data_quality: DataQualityService.assessDataQuality(games) });
       } catch (error) {
-        results.push({
-          sport, 
-          games_loaded: 0,
-          status: 'error',
-          error: error.message
-        });
+        results.push({ sport, games_loaded: 0, status: 'error', error: error.message });
       }
     }
-
     console.log('✅ GamesService: Cache preload completed');
     return results;
   }
 
   async getDataQualityReport(sportKey = null) {
     await this._ensureInitialized();
-    
     try {
       if (sportKey) {
         const games = await this.getGamesForSport(sportKey, { useCache: false });
         return DataQualityService.assessDataQuality(games);
-      } else {
-        const majorSports = ['americanfootball_nfl', 'basketball_nba', 'baseball_mlb', 'icehockey_nhl'];
-        const reports = {};
-        
-        for (const sport of majorSports) {
-          try {
-            const games = await this.getGamesForSport(sport, { useCache: false });
-            reports[sport] = DataQualityService.assessDataQuality(games);
-          } catch (error) {
-            reports[sport] = { error: error.message, status: 'failed' };
-          }
-        }
-        
-        return reports;
       }
+      const majorSports = ['americanfootball_nfl', 'basketball_nba', 'baseball_mlb', 'icehockey_nhl'];
+      const reports = {};
+      for (const sport of majorSports) {
+        try {
+          const games = await this.getGamesForSport(sport, { useCache: false });
+          reports[sport] = DataQualityService.assessDataQuality(games);
+        } catch (error) {
+          reports[sport] = { error: error.message, status: 'failed' };
+        }
+      }
+      return reports;
     } catch (error) {
       console.error('❌ GamesService: Data quality report failed:', error);
       throw error;
