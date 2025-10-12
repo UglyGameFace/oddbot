@@ -560,15 +560,6 @@ async keyInfo(key) {
   }
 }
 
-// SIMPLIFY THE LUA SCRIPT EVEN FURTHER
-this.SIMPLE_RELEASE_SCRIPT = `
-if redis.call("GET", KEYS[1]) == ARGV[1] then
-  return redis.call("DEL", KEYS[1])
-else
-  return 0
-end
-`;
-
   async increment(key, value = 1, ttlSec = null) {
     await this.ensureInitialized();
     
