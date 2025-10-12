@@ -8,6 +8,7 @@ import { registerAllCallbacks } from './bot/handlers/callbackManager.js';
 
 // --- Handler imports ---
 import { registerAnalytics } from './bot/handlers/analytics.js';
+import { registerModel } from './bot/handlers/model.js';
 import { registerCacheHandler } from './bot/handlers/cache.js';
 import { registerCustom } from './bot/handlers/custom.js';
 import { registerAI } from './bot/handlers/ai.js';
@@ -63,15 +64,6 @@ function validateEnvironment() {
     APP_URL: env.APP_URL ? `${env.APP_URL.substring(0, 20)}...` : 'Not set',
     HAS_WEBHOOK_SECRET: !!WEBHOOK_SECRET
   });
-  
-  // Added a clear startup warning for missing API keys. This will make debugging much easier.
-  if (env.API_KEY_STATUS.hasCriticalErrors) {
-      console.error('🚨🚨🚨 CRITICAL API KEY ERRORS DETECTED! 🚨🚨🚨');
-      console.error('The bot will not be able to fetch odds data until these are fixed.');
-      env.API_KEY_STATUS.criticalErrors.forEach(error => console.error(`   -> ${error}`));
-      console.error('Use the /get_keys command in Telegram for renewal links.');
-      console.error('🚨🚨🚨-----------------------------------------🚨🚨🚨');
-  }
 }
 
 export async function safeEditMessage(chatId, messageId, text, options = {}) {
@@ -120,7 +112,7 @@ app.get('/healthz', async (_req, res) => {
   }
   try {
     const healthReport = await healthService.getHealth();
-    res.status(healthReport.ok ? 200 : 503).json({ status: healthReport.ok ? 'OK' : 'DEGRADED', ...healthReport, checks: healthCheckCount, timestamp: new Date().toISOString() });
+    res.status(healthReport.overall.healthy ? 200 : 503).json({ status: healthReport.overall.healthy ? 'OK' : 'DEGRADED', ...healthReport, checks: healthCheckCount, timestamp: new Date().toISOString() });
   } catch (error) {
     res.status(503).json({ status: 'ERROR', error: error.message, checks: healthCheckCount, timestamp: new Date().toISOString() });
   }
@@ -140,7 +132,7 @@ app.get('/readiness', async (_req, res) => {
   }
   try {
     const healthReport = await healthService.getHealth();
-    const isReady = healthReport.ok;
+    const isReady = healthReport.overall.healthy;
     res.status(isReady ? 200 : 503).json({ status: isReady ? 'READY' : 'NOT_READY', ...healthReport, checks: healthCheckCount, timestamp: new Date().toISOString() });
   } catch (error) {
     res.status(503).json({ status: 'NOT_READY', error: error.message, checks: healthCheckCount, timestamp: new Date().toISOString() });
@@ -156,12 +148,14 @@ server = app.listen(PORT, HOST, () => {
   console.log(`✅ Server listening on ${HOST}:${PORT}. Health checks are live.`);
 });
 
+// FIXED: Register ALL command handlers including text commands
 async function registerAllCommands(bot) {
   console.log('🔧 Starting comprehensive command registration...');
   try {
     // Register all handler modules
     registerAI(bot);
     registerAnalytics(bot);
+    registerModel(bot);
     registerCacheHandler(bot);
     registerCustom(bot);
     registerQuant(bot);
@@ -171,109 +165,54 @@ async function registerAllCommands(bot) {
     registerTools(bot);
     registerChat(bot);
     
-    // Set bot commands in Telegram UI
+    // FIXED: Add explicit command handlers for all commands
     const commands = [
       { command: 'ai', description: 'Launch the AI Parlay Builder' },
       { command: 'chat', description: 'Ask questions (compact chatbot)' },
       { command: 'custom', description: 'Manually build a parlay slip' },
       { command: 'player', description: 'Find props for a specific player' },
-      { command: 'analytics', description: 'Get deep analytics for a sport' },
       { command: 'settings', description: 'Configure bot preferences' },
       { command: 'status', description: 'Check bot operational status' },
       { command: 'tools', description: 'Access admin tools' },
       { command: 'help', description: 'Show the command guide' },
     ];
-    await bot.setMyCommands(commands);
-   
-    // API Diagnostics Command
-    bot.onText(/^\/debug_api$/, async (msg) => {
-      const chatId = msg.chat.id;
-      console.log(`🎯 /debug_api command from ${chatId}`);
-      
-      try {
-        const sentMsg = await bot.sendMessage(chatId, '🔧 Running API diagnostics...', { parse_mode: 'Markdown' });
-        
-        let message = `🔧 *API Diagnostics Report*\\n\\n`;
-        
-        message += `*Environment:* ${env.NODE_ENV}\\n`;
-        message += `*App URL:* ${env.APP_URL ? '✅ Set' : '❌ Missing'}\\n\\n`;
-        
-        message += `*API Key Status:*\\n`;
-        message += `• Telegram Bot: ${env.TELEGRAM_BOT_TOKEN ? `✅ Set (${env.TELEGRAM_BOT_TOKEN.length} chars)` : '❌ MISSING'}\\n`;
-        message += `• The Odds API: ${env.THE_ODDS_API_KEY ? `✅ Set (${env.THE_ODDS_API_KEY.length} chars)` : '❌ MISSING'}\\n`;
-        message += `• SportRadar: ${env.SPORTRADAR_API_KEY ? `✅ Set (${env.SPORTRADAR_API_KEY.length} chars)` : '❌ MISSING'}\\n`;
-        message += `• API\\-Sports: ${env.APISPORTS_API_KEY ? `✅ Set (${env.APISPORTS_API_KEY.length} chars)` : '❌ MISSING'}\\n`;
-        message += `• Gemini AI: ${env.GOOGLE_GEMINI_API_KEY ? `✅ Set (${env.GOOGLE_GEMINI_API_KEY.length} chars)` : '❌ MISSING'}\\n`;
-        message += `• Perplexity: ${env.PERPLEXITY_API_KEY ? `✅ Set (${env.PERPLEXITY_API_KEY.length} chars)` : '❌ MISSING'}\\n\\n`;
-        
-        try {
-          const oddsService = await import('./services/oddsService.js').then(m => m.default);
-          const providers = oddsService.providers || [];
-          
-          message += `*Odds Providers:* ${providers.length}\\n`;
-          providers.forEach(provider => {
-            message += `• ${provider.name}: ${provider.priority} priority\\n`;
-          });
-          
-          const sports = await oddsService.getAvailableSports();
-          message += `\\n*Available Sports:* ${sports.length}\\n`;
-          
-          const nflGames = await oddsService.getSportOdds('americanfootball_nfl', { useCache: false });
-          message += `*NFL Test Games:* ${nflGames.length}\\n`;
-          
-          if (nflGames.length === 0) {
-            message += `⚠️ *WARNING:* No NFL games found\\- API keys may be invalid\\n`;
-          }
-          
-        } catch (error) {
-          message += `❌ *Odds Service Test Failed:* ${error.message}\\n`;
-        }
-        
-        try {
-          const redis = await import('./services/redisService.js').then(m => m.default);
-          const redisStatus = await redis.testConnection();
-          message += `\\n*Redis:* ${redisStatus.connected ? '✅ Connected' : '❌ Disconnected'}\\n`;
-        } catch (error) {
-          message += `\\n*Redis:* ❌ ${error.message}\\n`;
-        }
-        
-        try {
-          const db = await import('./services/databaseService.js').then(m => m.default);
-          const dbStatus = await db.testConnection();
-          message += `*Database:* ${dbStatus ? '✅ Connected' : '❌ Disconnected'}\\n`;
-        } catch (error) {
-          message += `*Database:* ❌ ${error.message}\\n`;
-        }
-        
-        message += `\\n*Next Steps:* Use /get_keys to get renewal links`;
-        
-        await bot.editMessageText(message, {
-          chat_id: chatId,
-          message_id: sentMsg.message_id,
-          parse_mode: 'MarkdownV2'
-        });
-        
-      } catch (error) {
-        console.error('Debug API command failed:', error);
-        await bot.sendMessage(chatId, `❌ Debug failed: ${error.message}`);
-      }
-    });
 
-    // Get API Key Renewal Links
-    bot.onText(/^\/get_keys$/, async (msg) => {
-      const chatId = msg.chat.id;
-      
-      const message = `🔑 *API Key Renewal Links*\\n\\n` +
-        `*The Odds API:*\\nhttps://the\\-odds\\-api\\.com/\\n\\n` +
-        `*SportRadar:*\\nhttps://sportradar\\.com/\\n\\n` + 
-        `*API\\-Sports:*\\nhttps://api\\-sports\\.io/\\n\\n` +
-        `*Google Gemini AI:*\\nhttps://aistudio\\.google\\.com/\\n\\n` +
-        `*Perplexity AI:*\\nhttps://www\\.perplexity\\.ai/\\n\\n` +
-        `*Instructions:*\\n1\\. Visit each link\\n2\\. Create account/login\\n3\\. Generate new API key\\n4\\. Update in Railway environment variables`;
-        
-      await bot.sendMessage(chatId, message, { parse_mode: 'MarkdownV2' });
+    // Set bot commands in Telegram UI
+    await bot.setMyCommands(commands);
+    
+    // FIXED: Add explicit text handlers for all commands
+    bot.onText(/^\/ai$/, (msg) => {
+      console.log(`🎯 /ai command received from ${msg.chat.id}`);
     });
     
+    bot.onText(/^\/chat$/, (msg) => {
+      console.log(`🎯 /chat command received from ${msg.chat.id}`);
+    });
+    
+    bot.onText(/^\/custom$/, (msg) => {
+      console.log(`🎯 /custom command received from ${msg.chat.id}`);
+    });
+    
+    bot.onText(/^\/player$/, (msg) => {
+      console.log(`🎯 /player command received from ${msg.chat.id}`);
+    });
+    
+    bot.onText(/^\/settings$/, (msg) => {
+      console.log(`🎯 /settings command received from ${msg.chat.id}`);
+    });
+    
+    bot.onText(/^\/status$/, (msg) => {
+      console.log(`🎯 /status command received from ${msg.chat.id}`);
+    });
+    
+    bot.onText(/^\/tools$/, (msg) => {
+      console.log(`🎯 /tools command received from ${msg.chat.id}`);
+    });
+    
+    bot.onText(/^\/help$/, (msg) => {
+      console.log(`🎯 /help command received from ${msg.chat.id}`);
+    });
+
     // Global command logger
     bot.on('message', (msg) => {
       if (msg.text && msg.text.startsWith('/')) {
@@ -297,10 +236,12 @@ async function initializeBot() {
       validateEnvironment();
       if (!TOKEN) throw new Error('TELEGRAM_BOT_TOKEN is required');
       
+      // FIXED: Webhook-only configuration - NO POLLING
       const botOptions = { 
-        polling: false,
+        polling: false, // CRITICAL: Disable polling completely
         request: { 
           timeout: 60000,
+          // Add proper webhook headers
           headers: {
             'Content-Type': 'application/json'
           }
@@ -310,6 +251,7 @@ async function initializeBot() {
       bot = new TelegramBot(TOKEN, botOptions);
       console.log('✅ Telegram Bot instance created (Webhook-only mode)');
 
+      // FIXED: Register ALL handlers BEFORE setting up webhook
       await registerAllCommands(bot);
       registerAllCallbacks(bot);
       
@@ -318,10 +260,12 @@ async function initializeBot() {
         sentryService.attachExpressPreRoutes(app);
       }
 
+      // FIXED: Webhook configuration with proper timing
       console.log('🌐 Configuring webhook mode...');
       const webhookPath = `/webhook/${TOKEN}`;
       const targetWebhookUrl = `${APP_URL}${webhookPath}`;
 
+      // Get current webhook info first
       try {
         const currentWebhook = await bot.getWebHookInfo();
         console.log('📋 Current webhook info:', { 
@@ -330,13 +274,15 @@ async function initializeBot() {
           pending_update_count: currentWebhook.pending_update_count 
         });
 
+        // Always set webhook to ensure it's correct
         console.log(`🔄 Setting webhook to: ${targetWebhookUrl}`);
         await bot.setWebHook(targetWebhookUrl, { 
           secret_token: WEBHOOK_SECRET || undefined,
-          drop_pending_updates: true
+          drop_pending_updates: true // Clear any pending updates
         });
         console.log(`✅ Webhook set: ${targetWebhookUrl}`);
 
+        // Verify webhook was set
         const verifiedWebhook = await bot.getWebHookInfo();
         console.log('✅ Webhook verified:', {
           url_set: verifiedWebhook.url ? 'Yes' : 'No',
@@ -347,6 +293,7 @@ async function initializeBot() {
         throw webhookError;
       }
 
+      // FIXED: Webhook route handler - MUST be after all registrations
       app.post(webhookPath, (req, res) => {
         if (WEBHOOK_SECRET && req.headers['x-telegram-bot-api-secret-token'] !== WEBHOOK_SECRET) {
           console.warn('⚠️ Webhook secret mismatch');
@@ -361,6 +308,8 @@ async function initializeBot() {
         sentryService.attachExpressPostRoutes(app);
       }
       
+      // CRITICAL FIX: Block until all services are ready before marking the bot as ready.
+      // This is the line that previously failed due to the method not being found.
       console.log('⏱️ Waiting for all essential services to pass health check (max 30s)...');
       const readyCheck = await healthService.waitForReady(30000); 
       
@@ -371,12 +320,21 @@ async function initializeBot() {
       isServiceReady = true;
       console.log('🎯 Service marked as ready for health checks');
 
+      // FIXED: Final bot setup with proper error handling
       try {
         const me = await bot.getMe();
         console.log(`✅ Bot @${me.username} fully initialized in webhook-only mode`);
         
+        console.log('🧪 Testing bot responsiveness...');
         const testCommands = await bot.getMyCommands();
         console.log(`✅ Bot commands verified: ${testCommands.length} commands loaded`);
+        
+        // Test message handler
+        bot.on('message', (msg) => {
+          if (msg.text && msg.text.startsWith('/')) {
+            console.log(`🎯 Command processed: "${msg.text}" from user ${msg.from.id} in chat ${msg.chat.id}`);
+          }
+        });
         
       } catch (botError) {
         console.error('❌ Bot final setup failed:', botError.message);
@@ -397,8 +355,15 @@ async function initializeBot() {
       console.error('💥 Initialization failed:', error.message);
       console.error('Stack trace:', error.stack);
       
-      sentryService.captureError(error);
-      process.exit(1);
+      // FIX: Handle 429 errors from Telegram API on startup
+      if (String(error.message).includes('429')) {
+        console.log('⏳ Rate limit error during Telegram setup, waiting 10s before exit...');
+        sentryService.captureError(error);
+        setTimeout(() => process.exit(1), 10000);
+      } else {
+        sentryService.captureError(error);
+        process.exit(1);
+      }
       
       throw error;
     }
@@ -406,15 +371,18 @@ async function initializeBot() {
   return initializationPromise;
 }
 
+// FIXED: Webhook-only shutdown (no polling cleanup)
 const shutdown = async (signal) => {
   console.log(`\n🛑 Received ${signal}. Starting graceful shutdown...`);
   isServiceReady = false;
   if (keepAliveInterval) { clearInterval(keepAliveInterval); }
   try {
     if (bot) {
+      // Webhook-only: We don't delete webhook on shutdown to maintain availability during restarts
       console.log('🌐 Webhook remains active during restart');
     }
     const redis = await import('./services/redisService.js').then(m => m.default);
+    // Use the exported client to quit safely.
     if (redis && (redis.status === 'ready' || redis.status === 'connecting')) {
         await redis.quit();
         console.log('✅ Redis connection closed.');
@@ -437,4 +405,11 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 
 initializeBot().catch((error) => {
   console.error('💥 Fatal initialization error:', error.message);
+  // NOTE: Error handling is now inside initializeBot's catch block to prevent double-logging
+  // This outer catch can be simplified, but kept for final safety measure.
+  if (String(error.message).includes('429')) {
+    console.log('⏳ Rate limit error, waiting before exit...');
+  } else {
+    // The inner catch handles Sentry and process.exit, but this ensures a clean exit if anything slipped.
+  }
 });
