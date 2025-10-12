@@ -8,6 +8,7 @@ import { registerAllCallbacks } from './bot/handlers/callbackManager.js';
 
 // --- Handler imports ---
 import { registerAnalytics } from './bot/handlers/analytics.js';
+import { registerModel } from './bot/handlers/model.js';
 import { registerCacheHandler } from './bot/handlers/cache.js';
 import { registerCustom } from './bot/handlers/custom.js';
 import { registerAI } from './bot/handlers/ai.js';
