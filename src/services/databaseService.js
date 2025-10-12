@@ -1,24 +1,9 @@
-// src/services/databaseService.js - COMPLETE FIXED VERSION
+// src/services/databaseService.js - ULTRA-SAFE VERSION
 import { createClient } from '@supabase/supabase-js';
 import env from '../config/env.js';
-import { sentryService } from '../services/sentryService.js';
+import { sentryService } from './sentryService.js';
 import { COMPREHENSIVE_SPORTS } from '../config/sportDefinitions.js';
 import { withTimeout, TimeoutError } from '../utils/asyncUtils.js';
-
-class GameEnhancementService {
-  static enhanceGameData(games, sportKey, source) {
-    if (!Array.isArray(games)) return [];
-    return games.map(game => this.enhanceSingleGame(game, sportKey, source));
-  }
-  static enhanceSingleGame(game, sportKey, source) {
-    return {
-      ...game,
-      enhanced: true,
-      enhancement_source: source,
-      source: source,
-    };
-  }
-}
 
 const COMPREHENSIVE_FALLBACK_SPORTS = Object.entries(COMPREHENSIVE_SPORTS).map(([sport_key, data]) => ({
   sport_key,
@@ -108,7 +93,7 @@ class DatabaseService {
         `getUpcomingGames_${sportKey}`
       );
       if (error) throw error;
-      return GameEnhancementService.enhanceGameData(data || [], sportKey, 'database');
+      return this.enhanceGameData(data || [], sportKey, 'database');
     } catch (error) {
       console.error(`❌ Supabase getUpcomingGames error for ${sportKey}:`, error.message);
       throw error;
@@ -124,26 +109,26 @@ class DatabaseService {
     try {
       console.log(`🔄 Upserting ${gamesData.length} games...`);
       
-      const gamesWithMetadata = gamesData.map(game => {
-        const safeGame = { ...game };
+      // ULTRA-SAFE: Only include fields that definitely exist in database
+      const minimalGames = gamesData.map(game => ({
+        // Core required fields - ONLY THESE EXIST IN DATABASE
+        event_id: game.event_id || game.id,
+        sport_key: game.sport_key,
+        commence_time: game.commence_time,
+        home_team: game.home_team,
+        away_team: game.away_team,
         
-        delete safeGame.data_quality;
-        delete safeGame.enhanced;
-        delete safeGame.enhancement_source;
-        delete safeGame.last_enhanced;
-        delete safeGame.market_data;
+        // Optional fields that might exist
+        sport_title: game.sport_title,
+        league_key: game.league_key,
         
-        return {
-          ...safeGame,
-          last_updated: new Date().toISOString(),
-          data_source: game.source || 'odds_api_ingestion'
-        };
-      });
+        // REMOVED: cache_timestamp, enhanced, has_odds, etc. - these don't exist in DB
+      }));
 
       const { data, error } = await withTimeout(
         this.client
           .from('games')
-          .upsert(gamesWithMetadata, { 
+          .upsert(minimalGames, { 
             onConflict: 'event_id',
             ignoreDuplicates: false
           })
@@ -153,11 +138,8 @@ class DatabaseService {
       );
 
       if (error) {
-        if (error.message.includes('column') && error.message.includes('does not exist')) {
-          console.warn('⚠️ Database schema mismatch, attempting fallback upsert...');
-          return await this._fallbackUpsert(gamesWithMetadata);
-        }
-        throw error;
+        console.warn('⚠️ Database upsert error, attempting minimal fallback...');
+        return await this._minimalUpsert(gamesData);
       }
 
       console.log(`✅ Successfully upserted ${data?.length || 0} games`);
@@ -175,37 +157,47 @@ class DatabaseService {
         operation: 'upsertGames',
         game_count: gamesData.length
       });
-      throw error;
+      
+      // Don't throw - just return empty to prevent worker crashes
+      return { data: [], error: error.message };
     }
   }
   
-  async _fallbackUpsert(gamesData) {
+  async _minimalUpsert(gamesData) {
     try {
-      console.log('🔄 Using fallback upsert with minimal fields...');
+      console.log('🔄 Using MINIMAL upsert with only core fields...');
       
-      const minimalGames = gamesData.map(game => ({
-        event_id: game.event_id,
+      const absoluteMinimal = gamesData.map(game => ({
+        event_id: game.event_id || game.id,
         sport_key: game.sport_key,
         commence_time: game.commence_time,
-        home_team: game.home_team,
-        away_team: game.away_team,
-        last_updated: game.last_updated,
-        data_source: game.data_source
+        home_team: game.home_team || 'Unknown',
+        away_team: game.away_team || 'Unknown'
       }));
 
       const { data, error } = await this.client
         .from('games')
-        .upsert(minimalGames, { onConflict: 'event_id' })
+        .upsert(absoluteMinimal, { onConflict: 'event_id' })
         .select();
 
       if (error) throw error;
       
-      console.log(`✅ Fallback upsert completed: ${data?.length || 0} games`);
+      console.log(`✅ Minimal upsert completed: ${data?.length || 0} games`);
       return { data, error: null };
     } catch (fallbackError) {
-      console.error('❌ Fallback upsert also failed:', fallbackError.message);
-      return { data: null, error: fallbackError };
+      console.error('❌ Minimal upsert also failed:', fallbackError.message);
+      return { data: [], error: fallbackError.message };
     }
+  }
+  
+  enhanceGameData(games, sportKey, source) {
+    if (!Array.isArray(games)) return [];
+    return games.map(game => ({
+      ...game,
+      enhanced: true,
+      source: source,
+      // REMOVED: cache_timestamp - doesn't exist in database
+    }));
   }
   
   async findOrCreateUser(telegramId, firstName = '', username = '') {
@@ -258,7 +250,7 @@ class DatabaseService {
       }
   }
   
-    async getDatabaseStats() {
+  async getDatabaseStats() {
     if (!this.client) return null;
     try {
         const [gamesCount, usersCount] = await Promise.all([
