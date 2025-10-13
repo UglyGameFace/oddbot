@@ -2,7 +2,7 @@
 import env from '../config/env.js';
 import cacheService from './cacheService.js';
 import { sentryService } from './sentryService.js';
-import { withTimeout, TimeoutError } from '../utils/asyncUtils.js'; 
+import { withTimeout, TimeoutError } from '../utils/asyncUtils.js';
 import { TheOddsProvider } from './providers/theOddsProvider.js';
 import { SportRadarProvider } from './providers/sportRadarProvider.js';
 import { ApiSportsProvider } from './providers/apiSportsProvider.js';
@@ -322,7 +322,6 @@ class OddsService {
       return false;
     }
     
-    // Check for suspiciously long keys
     if (sportKey.length > 50) {
       console.warn(`⚠️ OddsService: Sport key too long: ${sportKey}`);
       return false;
@@ -358,7 +357,6 @@ class OddsService {
               if (sports && sports.length > 0) {
                 console.log(`✅ OddsService: Found ${sports.length} sports from ${provider.name}`);
                 
-                // Enhance sports data
                 const enhancedSports = sports.map(sport => ({
                   ...sport,
                   source: provider.name,
@@ -395,7 +393,6 @@ class OddsService {
         operation: 'getAvailableSports',
       });
       
-      // Ultimate fallback
       console.log('🔄 OddsService: Using emergency fallback sports');
       const fallbackProvider = this.providers.find(p => p.name === 'fallback');
       return await fallbackProvider.fetchAvailableSports();
@@ -422,7 +419,6 @@ class OddsService {
 
     const cacheKey = `odds:${sportKey}:${regions}:${markets}:${oddsFormat}:${includeLive}:${hoursAhead}:v2`;
 
-    // If force refresh, delete cache first
     if (forceRefresh) {
       try {
         await cacheService.deleteKey(cacheKey);
@@ -488,7 +484,6 @@ class OddsService {
     try {
       console.log(`🎯 OddsService: Fetching player props for ${sportKey} game ${gameId}`);
 
-      // Try providers that support player props
       for (const provider of this.providers) {
         if (provider.name === 'fallback') continue;
         
@@ -503,7 +498,6 @@ class OddsService {
             if (props && props.length > 0) {
               console.log(`✅ OddsService: Found ${props.length} player props from ${provider.name}`);
               
-              // Cache the results
               if (cacheService.isAvailable()) {
                 await cacheService.setJSON(cacheKey, props, CACHE_TTL.PROPS);
               }
@@ -541,7 +535,7 @@ class OddsService {
     try {
       return await cacheService.getOrSetJSON(
         cacheKey,
-        CACHE_TTL.LIVE_GAMES, // Short TTL for live games
+        CACHE_TTL.LIVE_GAMES,
         async () => {
           const allGames = await this.getSportOdds(sportKey, {
             regions,
@@ -593,7 +587,6 @@ class OddsService {
         }
       };
 
-      // Test each provider
       for (const provider of this.providers) {
         try {
           const statusResult = await withTimeout(
@@ -617,7 +610,6 @@ class OddsService {
         }
       }
 
-      // Sport-specific freshness
       if (sportKey && this._validateSportKey(sportKey)) {
         try {
           const testGames = await this.getSportOdds(sportKey, {
@@ -639,7 +631,6 @@ class OddsService {
         }
       }
 
-      // Cache health
       if (cacheService.isAvailable()) {
         try {
           const cacheHealth = await cacheService.healthCheck();
@@ -683,12 +674,11 @@ class OddsService {
 
         const games = await withTimeout(
           provider.fetchSportOdds(sportKey, options), 
-          12000, // 12 second timeout for odds fetching
+          12000,
           `FetchOdds_${provider.name}_${sportKey}`
         );
 
         if (games && games.length > 0) {
-          // Normalize and validate games
           const normalizedGames = games
             .map(game => GameEnhancementService.normalizeGameData(game, provider.name))
             .filter(game => game !== null && GameEnhancementService.validateGameData(game));
@@ -705,7 +695,6 @@ class OddsService {
         lastError = error;
         console.error(`❌ OddsService: ${provider.name} failed for ${sportKey}:`, error.message);
 
-        // Handle specific error types
         if (error?.response?.status === 401 || error?.response?.status === 403) {
           console.error(`🔐 OddsService: ${provider.name} authentication failed - check API key`);
           continue;
@@ -737,7 +726,6 @@ class OddsService {
       console.error(`📋 OddsService: Last error details:`, lastError.message);
     }
     
-    // Return fallback data
     const fallbackProvider = this.providers.find(p => p.name === 'fallback');
     const fallbackGames = await fallbackProvider.fetchSportOdds(sportKey, options);
     const normalizedFallback = fallbackGames
@@ -811,23 +799,18 @@ class OddsService {
     };
 
     try {
-      // Get usage stats
       const usage = await this.getUsage();
       status.statistics.usage = usage;
       
-      // Get freshness info
       const freshness = await this.getDataFreshness();
       status.freshness = freshness;
 
-      // Test data fetching with a sample sport
       try {
         const availableSports = await this.getAvailableSports();
         if (availableSports && availableSports.length > 0) {
           const testSport = availableSports[0]?.sport_key;
           if (testSport && this._validateSportKey(testSport)) {
-            const testGames = await this.getSportOdds(testSport, {
-              useCache: false,
-            });
+            const testGames = await this.getSportOdds(testSport, { useCache: false });
             status.statistics.test_games = testGames.length;
             status.statistics.data_quality = DataQualityService.assessDataQuality(testGames);
             status.statistics.test_sport = testSport;
@@ -842,19 +825,13 @@ class OddsService {
       } catch (testError) {
         console.warn('❌ OddsService: Service status test failed:', testError.message);
         status.statistics.test_games = 0;
-        status.statistics.data_quality = { 
-          score: 0, 
-          rating: 'test_failed', 
-          error: testError.message 
-        };
+        status.statistics.data_quality = { score: 0, rating: 'test_failed', error: testError.message };
       }
         
-      // Determine overall status
       if (usage.error || freshness.overall.status !== 'current' || status.statistics.test_games === 0) {
         status.status = 'degraded';
       }
       
-      // Check if we're only using fallback
       const activeProviders = this.providers.filter(p => p.name !== 'fallback' && this.providerStatus.get(p.name) === 'initialized');
       if (activeProviders.length === 0) {
         status.status = 'fallback_only';
@@ -882,8 +859,7 @@ class OddsService {
         
         let totalCleared = 0;
         for (const pattern of patterns) {
-          const cleared = await cacheService.flushPattern(pattern);
-          totalCleared += cleared;
+          totalCleared += await cacheService.flushPattern(pattern);
         }
         
         console.log(`🧹 OddsService: Cleared ${totalCleared} cache entries for ${sportKey}`);
