@@ -24,7 +24,7 @@ export function registerSettingsCallbacks(bot) {
     if (action === 'ai') return sendAiSettingsMenu(bot, chatId, messageId);
     if (action === 'builder') return sendBuilderSettingsMenu(bot, chatId, messageId);
     if (action === 'quant_help') return sendQuantHelpMenu(bot, chatId, messageId);
-    if (action === 'bookmakers') return sendBookmakerMenu(bot, chatId, messageId); // New Menu
+    if (action === 'bookmakers') return sendBookmakerMenu(bot, chatId, messageId);
 
     if (action === 'set') {
       const [,,, category, key, value] = parts;
@@ -63,16 +63,15 @@ async function sendMainMenu(bot, chatId, messageId = null) {
   const keyboard = [
     [{ text: '🤖 AI Analyst Settings', callback_data: 'set_ai' }],
     [{ text: '✍️ Custom Builder Settings', callback_data: 'set_builder' }],
-    [{ text: '📚 Preferred Sportsbooks', callback_data: 'set_bookmakers' }] // New Button
+    [{ text: '📚 Preferred Sportsbooks', callback_data: 'set_bookmakers' }]
   ];
   const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
   if (messageId) await safeEditMessage(chatId, messageId, text, opts);
   else await bot.sendMessage(chatId, text, opts);
 }
 
-// --- NEW MENU FOR SPORTSBOOKS ---
 async function sendBookmakerMenu(bot, chatId, messageId) {
-    const config = await getAIConfig(chatId); // Bookmaker settings stored under AI config
+    const config = await getAIConfig(chatId);
     const selectedBooks = new Set(config.bookmakers || []);
     const text = `<b>📚 Preferred Sportsbooks</b>\n\nSelect the bookmakers you use. The bot will prioritize these when fetching odds.`;
     const keyboard = [
@@ -120,4 +119,28 @@ async function sendQuantHelpMenu(bot, chatId, messageId) {
     const keyboard = [[{ text: '« Back to AI Settings', callback_data: 'set_ai' }]];
     const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
     await safeEditMessage(chatId, messageId, text, opts);
+}
+
+// These functions are included for completeness but are not modified in this step.
+async function sendAiModeMenu(bot, chatId, messageId) {
+    const config = await getAIConfig(chatId);
+    const text = 'Select your preferred default analysis mode for the AI:';
+    const keyboard = [
+        [{ text: `📡 Live API (Best) ${config.mode === 'live' ? '✅' : ''}`, callback_data: 'set_set_ai_mode_live' }],
+        [{ text: `🌐 Web Research ${config.mode === 'web' ? '✅' : ''}`, callback_data: 'set_set_ai_mode_web' }],
+        [{ text: `💾 Database Fallback ${config.mode === 'db' ? '✅' : ''}`, callback_data: 'set_set_ai_mode_db' }],
+        [{ text: '« Back to AI Settings', callback_data: 'set_ai' }]
+    ];
+    await safeEditMessage(chatId, messageId, text, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
+}
+
+async function sendAiBetTypeMenu(bot, chatId, messageId) {
+    const config = await getAIConfig(chatId);
+    const text = 'Select the default type of parlay the AI should build:';
+    const keyboard = [
+        [{ text: `🔥 Player Props Only ${config.betType === 'props' ? '✅' : ''}`, callback_data: 'set_set_ai_betType_props' }],
+        [{ text: `🧩 Any Bet Type (Mixed) ${config.betType === 'mixed' ? '✅' : ''}`, callback_data: 'set_set_ai_betType_mixed' }],
+        [{ text: '« Back to AI Settings', callback_data: 'set_ai' }]
+    ];
+    await safeEditMessage(chatId, messageId, text, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
 }
