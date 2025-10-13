@@ -109,7 +109,7 @@ export function registerAICallbacks(bot) {
           break;
         case 'bettype':
           state.betType = parts[2];
-          state.aiModel = 'perplexity'; // Hardcode Perplexity as the model
+          state.aiModel = 'perplexity';
           await setUserState(chatId, state);
           await sendQuantitativeModeSelection(bot, chatId, message.message_id);
           break;
@@ -175,7 +175,8 @@ async function sendLegSelection(bot, chatId, messageId) {
 async function sendModeSelection(bot, chatId, messageId) {
   const text = `🤖 <b>AI Parlay Builder</b>\n\n<b>Step 3:</b> Select analysis mode.`;
   const keyboard = [
-    [{ text: '🌐 Web Research (Recommended)', callback_data: 'ai_mode_web'}],
+    [{ text: '🌐 Web Research (AI Picks)', callback_data: 'ai_mode_web'}],
+    [{ text: '📡 Live API Data (AI Picks)', callback_data: 'ai_mode_live'}],
     [{ text: '💾 Database Only (Best Value)', callback_data: 'ai_mode_db'}],
     [{ text: '« Back to Legs', callback_data: 'ai_back_legs' }]
   ];
@@ -226,7 +227,11 @@ async function executeAiRequest(bot, chatId, messageId = null) {
                  `<i>Scanning the market for value and running quantitative checks...</i>`;
     await safeEditMessage(chatId, sentMessage.message_id, text, { parse_mode: 'HTML' });
     try {
-        const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, { quantitativeMode, horizonHours: 72 });
+        const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, { 
+            quantitativeMode, 
+            horizonHours: 72,
+            chatId: chatId 
+        });
         await sendParlayResult(bot, chatId, parlay, state, mode, sentMessage.message_id);
     } catch (error) {
         console.error('AI handler execution error:', error.message);
@@ -248,10 +253,11 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
         return safeEditMessage(chatId, messageId, errorText, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
     }
     
-    let response = `🧠 <b>AI-Generated Parlay</b>\n`;
+    let response = `🧠 <b>QUANTUM PARLAY REPORT</b>\n`;
     response += `<b>Sport:</b> ${escapeHTML(sportTitle)}\n`;
-    if (research_metadata?.real_games_validated) response += `✅ <b>Verified Real Games</b>\n`;
-    if (research_metadata?.fallback_used) response += `⚠️ <b>Fallback Mode Used</b>\n`;
+    if (portfolio_construction?.overall_thesis) {
+        response += `<b>Thesis:</b> <i>${escapeHTML(portfolio_construction.overall_thesis)}</i>\n`;
+    }
     response += `\n`;
 
     legs.forEach((leg, index) => {
@@ -260,7 +266,7 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
         const oddsValue = leg.odds?.american;
         const odds = (oddsValue && Number.isFinite(oddsValue)) ? (oddsValue > 0 ? `+${oddsValue}` : oddsValue) : '';
         response += `<b>Leg ${index + 1}: ${game}</b>\n`;
-        response += `  <b>Pick:</b> ${pick} ${odds ? `(${escapeHTML(odds)})` : ''}\n`;
+        response += `  <b>Pick:</b> ${pick} (${escapeHTML(odds)})\n`;
         if (leg.quantum_analysis?.analytical_basis) {
             response += `  <i>Rationale: ${escapeHTML(leg.quantum_analysis.analytical_basis)}</i>\n\n`;
         } else {
@@ -275,10 +281,6 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
         response += `<b>Calibrated EV:</b> ${escapeHTML(calibrated.evPercentage.toFixed(1))}% ${calibrated.evPercentage > 0 ? '👍' : '👎'}\n`;
         response += `<b>Win Probability:</b> ${escapeHTML((calibrated.jointProbability * 100).toFixed(1))}%\n`;
         response += `<b>Risk Level:</b> ${escapeHTML(riskAssessment.overallRisk)}\n`;
-    }
-
-    if(portfolio_construction?.overall_thesis) {
-        response += `\n<b>Thesis:</b> <i>${escapeHTML(portfolio_construction.overall_thesis)}</i>`;
     }
 
     const finalKeyboard = [[{ text: '🔄 Build Another', callback_data: 'ai_back_sport' }]];
