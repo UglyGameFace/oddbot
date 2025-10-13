@@ -17,7 +17,7 @@ export class TheOddsProvider {
       regions = 'us',
       markets = 'h2h,spreads,totals',
       oddsFormat = 'american',
-      bookmakers = 'draftkings,fanduel' // --- CHANGE: Default to user's preferred books
+      bookmakers = 'draftkings,fanduel' // Default to your preferred books
     } = options;
 
     if (await rateLimitService.shouldBypassLive(this.name)) {
@@ -25,13 +25,13 @@ export class TheOddsProvider {
     }
 
     const url = `${ODDS_BASE}/sports/${sportKey}/odds`;
-    const params = { 
-      apiKey: this.apiKey, 
-      regions, 
-      markets, 
-      oddsFormat, 
-      bookmakers, // --- CHANGE: Pass the bookmakers to the API
-      dateFormat: 'iso' 
+    const params = {
+      apiKey: this.apiKey,
+      regions,
+      markets,
+      oddsFormat,
+      bookmakers, // Pass the selected bookmakers to the API
+      dateFormat: 'iso'
     };
 
     const response = await withTimeout(
@@ -51,13 +51,18 @@ export class TheOddsProvider {
 
     const url = `${ODDS_BASE}/sports`;
     const response = await withTimeout(
-      axios.get(url, { params: { apiKey: this.apiKey, all: 'false' } }),
+      axios.get(url, {
+        params: {
+          apiKey: this.apiKey,
+          all: 'false'
+        }
+      }),
       8000,
       'theodds_sports_list'
     );
 
     await rateLimitService.saveProviderQuota(this.name, response.headers);
-    
+
     return (response.data || []).map(sport => ({
       key: sport.key,
       title: sport.title,
@@ -70,7 +75,10 @@ export class TheOddsProvider {
   }
 
   transformData(data, sportKey) {
-    if (!Array.isArray(data)) return [];
+    if (!Array.isArray(data)) {
+      console.warn('⚠️ TheOddsAPI returned non-array data');
+      return [];
+    }
 
     return data.reduce((acc, game) => {
       if (!this.validateGameData(game)) {
@@ -100,18 +108,37 @@ export class TheOddsProvider {
 
   titleFromKey(key) {
     const mapping = {
-      'americanfootball_nfl': 'NFL', 'basketball_nba': 'NBA', 'baseball_mlb': 'MLB', 'icehockey_nhl': 'NHL'
+      'americanfootball_nfl': 'NFL',
+      'americanfootball_ncaaf': 'NCAAF',
+      'basketball_nba': 'NBA',
+      'basketball_wnba': 'WNBA',
+      'baseball_mlb': 'MLB',
+      'icehockey_nhl': 'NHL',
+      'soccer_england_premier_league': 'Premier League',
+      'soccer_uefa_champions_league': 'Champions League',
+      'tennis_atp': 'ATP Tennis',
+      'mma_ufc': 'UFC'
     };
-    return mapping[key] || key.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    return mapping[key] || key.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
   }
 
   async getProviderStatus() {
-    const quota = await rateLimitService.getProviderQuota(this.name);
-    return {
-      name: this.name,
-      status: quota ? 'active' : 'unknown',
-      priority: this.priority,
-      remaining_requests: quota?.remaining
-    };
+    try {
+      const quota = await rateLimitService.getProviderQuota(this.name);
+      return {
+        name: this.name,
+        status: quota ? 'active' : 'unknown',
+        priority: this.priority,
+        last_quota_check: quota?.at ? new Date(quota.at).toISOString() : null,
+        remaining_requests: quota?.remaining,
+        should_bypass: await rateLimitService.shouldBypassLive(this.name)
+      };
+    } catch (error) {
+      return {
+        name: this.name,
+        status: 'error',
+        error: error.message
+      };
+    }
   }
 }
