@@ -1,4 +1,5 @@
-// src/services/aiService.js - FINAL, COMPLETE, AND CORRECTED (Perplexity-Only)
+// src/services/aiService.js - FINAL, COMPLETE, AND CORRECTED (Value-First Quant Engine)
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import axios from 'axios';
 import env from '../config/env.js';
 import gamesService from './gamesService.js';
@@ -9,7 +10,7 @@ const TZ = env.TIMEZONE || 'America/New_York';
 const WEB_TIMEOUT_MS = 30000;
 
 const AI_MODELS = {
-  perplexity: "sonar-pro"
+  perplexity: "sonar-large-32k-online"
 };
 
 function americanToDecimal(a) {
@@ -248,7 +249,7 @@ class AIService {
             return {
                 legs: [],
                 portfolio_construction: {
-                    overall_thesis: `No profitable (+EV) parlays could be constructed from the ${allGames.length} available games. A disciplined analyst does not force a bet in this market.`
+                    overall_thesis: `No profitable (+EV) parlays could be constructed from the ${allGames.length} available games. A disciplined analyst would not force a bet in this market.`
                 }
             };
         }
