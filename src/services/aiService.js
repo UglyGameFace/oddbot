@@ -1,5 +1,4 @@
 // src/services/aiService.js - FINAL, COMPLETE, AND CORRECTED (Value-First Quant Engine)
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import axios from 'axios';
 import env from '../config/env.js';
 import gamesService from './gamesService.js';
@@ -22,7 +21,7 @@ function americanToDecimal(a) {
 function decimalToAmerican(d) {
     const x = Number(d);
     if (!Number.isFinite(x) || x <= 1) return null;
-    return x >= 2 ? Math.round((x - 1) * 100) : Math.round(-100 / (x - 1));
+    return x >= 2 ? Math.round((x - 1) * 100) : Math.round(-100 / (d - 1));
 }
 
 function parlayDecimal(legs) {
@@ -48,8 +47,7 @@ async function buildEliteScheduleContext(sportKey, hours) {
     try {
         const { THE_ODDS_API_KEY } = env;
         if (!THE_ODDS_API_KEY || THE_ODDS_API_KEY.includes('expired') || THE_ODDS_API_KEY.length < 10) {
-            console.log('🎯 Using elite analyst mode - skipping API validation');
-            return `\n\n🎯 ELITE ANALYST MODE: Generating ${sportKey.toUpperCase()} parlay using fundamental analysis and matchup expertise.\n\nNOTE: Real-time validation skipped due to system maintenance. Relying on elite analytical framework.`;
+            return `\n\n🎯 ELITE ANALYST MODE: Real-time validation skipped due to system maintenance. Relying on elite analytical framework.`;
         }
         const realGames = await gamesService.getVerifiedRealGames(sportKey, hours);
         if (realGames.length === 0) {
@@ -69,21 +67,13 @@ async function buildEliteScheduleContext(sportKey, hours) {
 async function eliteGameValidation(sportKey, proposedLegs, hours) {
     const { THE_ODDS_API_KEY } = env;
     if (!THE_ODDS_API_KEY || THE_ODDS_API_KEY.includes('expired') || THE_ODDS_API_KEY.length < 10) {
-        console.log('🎯 Elite mode: Skipping game validation (API keys expired)');
         return proposedLegs || [];
     }
     try {
         const realGames = await gamesService.getVerifiedRealGames(sportKey, hours);
         if (realGames.length === 0) return proposedLegs || [];
-        const realGameMap = new Map();
-        realGames.forEach(game => {
-            const key = `${(game.away_team || '').toLowerCase().trim()} @ ${(game.home_team || '').toLowerCase().trim()}`;
-            realGameMap.set(key, game);
-        });
-        return (proposedLegs || []).filter(leg => {
-            const gameKey = (leg.event || '').toLowerCase().trim();
-            return realGameMap.has(gameKey);
-        });
+        const realGameMap = new Map(realGames.map(game => [`${(game.away_team || '').toLowerCase().trim()} @ ${(game.home_team || '').toLowerCase().trim()}`, game]));
+        return (proposedLegs || []).filter(leg => realGameMap.has((leg.event || '').toLowerCase().trim()));
     } catch (error) {
         console.warn(`⚠️ Elite validation failed for ${sportKey}, using AI proposals:`, error.message);
         return proposedLegs || [];
@@ -138,7 +128,7 @@ class AIService {
       const requestId = `quantum_${sportKey}_${Date.now()}`;
       console.log(`🎯 Starting QUANTUM parlay generation for ${sportKey} in ${mode} mode...`);
       try {
-          if (mode === 'web') {
+          if (mode === 'web' || mode === 'live') {
               return await this._generateWebParlay(sportKey, numLegs, betType, options);
           }
           return await this._generateContextParlay(sportKey, numLegs, mode, betType, options);
@@ -190,13 +180,11 @@ class AIService {
           const homeProb = 1 / americanToDecimal(home.price);
           const awayProb = 1 / americanToDecimal(away.price);
           const totalProb = homeProb + awayProb;
-
           if (totalProb > 0) {
             const noVigHome = homeProb / totalProb;
             const noVigAway = awayProb / totalProb;
             const evHome = (americanToDecimal(home.price) * noVigHome - 1) * 100;
             const evAway = (americanToDecimal(away.price) * noVigAway - 1) * 100;
-            
             if (evHome > 0) valuePlays.push({ game, market: h2hMarket, outcome: home, ev: evHome, noVigProb: noVigHome });
             if (evAway > 0) valuePlays.push({ game, market: h2hMarket, outcome: away, ev: evAway, noVigProb: noVigAway });
           }
@@ -207,18 +195,15 @@ class AIService {
       if (totalsMarket?.outcomes?.length === 2) {
           const over = totalsMarket.outcomes.find(o => o.name === 'Over');
           const under = totalsMarket.outcomes.find(o => o.name === 'Under');
-
           if (over && under && over.price && under.price) {
               const overProb = 1 / americanToDecimal(over.price);
               const underProb = 1 / americanToDecimal(under.price);
               const totalProb = overProb + underProb;
-
               if (totalProb > 0) {
                   const noVigOver = overProb / totalProb;
                   const noVigUnder = underProb / totalProb;
                   const evOver = (americanToDecimal(over.price) * noVigOver - 1) * 100;
                   const evUnder = (americanToDecimal(under.price) * noVigUnder - 1) * 100;
-
                   if (evOver > 0) valuePlays.push({ game, market: totalsMarket, outcome: over, ev: evOver, noVigProb: noVigOver });
                   if (evUnder > 0) valuePlays.push({ game, market: totalsMarket, outcome: under, ev: evUnder, noVigProb: noVigUnder });
               }
@@ -234,7 +219,8 @@ class AIService {
         const allGames = await gamesService.getGamesForSport(sportKey, {
             hoursAhead: options.horizonHours || 72,
             includeOdds: true,
-            useCache: false
+            useCache: false,
+            chatId: options.chatId
         });
 
         if (allGames.length < numLegs) {
@@ -274,7 +260,6 @@ class AIService {
         }));
         
         const parlayData = { legs: parlayLegs };
-        parlayData.legs = this._ensureLegsHaveOdds(parlayData.legs);
         parlayData.parlay_price_decimal = parlayDecimal(parlayData.legs);
         parlayData.parlay_price_american = decimalToAmerican(parlayData.parlay_price_decimal);
         parlayData.portfolio_construction = {
