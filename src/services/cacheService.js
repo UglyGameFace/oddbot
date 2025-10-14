@@ -21,12 +21,6 @@ class CacheService {
     this.initializationPromise = null;
     this.DEFAULT_LOCK_MS = 8000;
     this.DEFAULT_RETRY_MS = 150;
-    
-    // FIXED: Proper Lua scripts without syntax errors
-    this.RELEASE_LOCK_SCRIPT = 'local lock_value = redis.call(\'GET\', KEYS[1]) if lock_value == ARGV[1] then redis.call(\'DEL\', KEYS[1]) return 1 else return 0 end';
-    
-    // FIXED: Simple script as single line string
-    this.SIMPLE_RELEASE_SCRIPT = 'if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) else return 0 end';
 
     this.init();
   }
@@ -79,16 +73,6 @@ class CacheService {
       const testValue = await this.redis.get(testKey);
       console.log(`✅ CacheService: Redis SET/GET - ${testValue === 'test_value' ? 'PASS' : 'FAIL'}`);
       
-      // Test EVAL with simple script
-      try {
-        const simpleScript = 'return "test_ok"';
-        const evalResult = await this.redis.eval(simpleScript, 0);
-        console.log(`✅ CacheService: Redis EVAL - ${evalResult}`);
-      } catch (evalError) {
-        const errorMessage = (evalError instanceof Error && evalError.message) ? evalError.message : String(evalError);
-        console.warn('⚠️ CacheService: Redis EVAL test failed (may be normal):', errorMessage);
-      }
-
       // Cleanup test key
       await this.redis.del(testKey).catch(() => {});
 
@@ -139,17 +123,33 @@ class CacheService {
     }
   }
 
-  async safeEval(script, keyCount, ...args) {
+  async releaseLock(lockKey, lockValue) {
+    await this.ensureInitialized();
+    if (!this.isValidRedisClient()) return;
+  
     try {
-      return await this.redis.eval(script, keyCount, ...args);
-    } catch (error) {
-      if (error && error.message && error.message.includes('syntax error')) {
-        console.warn('⚠️ CacheService: Lua syntax error, trying simplified script...');
-        if (script.includes('RELEASE_LOCK')) {
-          return await this.redis.eval(this.SIMPLE_RELEASE_SCRIPT, keyCount, ...args);
-        }
+      // Use optimistic locking to release the lock safely.
+      await this.redis.watch(lockKey);
+      const value = await this.redis.get(lockKey);
+  
+      if (value === lockValue) {
+        const multi = this.redis.multi();
+        multi.del(lockKey);
+        await multi.exec();
+        console.log(`🔓 CacheService: Released lock for key: ${lockKey.replace('lock:','')}`);
+      } else {
+        // The lock value changed or expired, so we don't need to do anything.
+        await this.redis.unwatch();
       }
-      throw error;
+    } catch (error) {
+        const errorMessage = (error instanceof Error && error.message) ? error.message : String(error);
+        console.warn(`⚠️ CacheService: Failed to release lock for key: ${lockKey}`, errorMessage);
+        // Ensure unwatch is called even on error to clean up the connection state.
+        try {
+          await this.redis.unwatch();
+        } catch (unwatchError) {
+          // This might happen if the connection is lost.
+        }
     }
   }
 
@@ -232,15 +232,7 @@ class CacheService {
           }
           throw loaderError;
         } finally {
-          try {
-            await this.safeRedisCommand(async (client) => {
-              await this.safeEval(this.RELEASE_LOCK_SCRIPT, 1, lockKey, lockValue);
-            }, 'release_lock');
-            console.log(`🔓 CacheService: Released lock for key: ${key}`);
-          } catch (releaseError) {
-            const releaseErrorMessage = (releaseError instanceof Error && releaseError.message) ? releaseError.message : String(releaseError);
-            console.warn(`⚠️ CacheService: Failed to release lock for key: ${lockKey}`, releaseErrorMessage);
-          }
+            await this.releaseLock(lockKey, lockValue);
         }
       } else {
         console.log(`⏳ CacheService: Waiting for lock on key: ${key}`);
