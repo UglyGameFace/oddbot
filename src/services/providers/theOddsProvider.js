@@ -17,7 +17,7 @@ export class TheOddsProvider {
       regions = 'us',
       markets = 'h2h,spreads,totals',
       oddsFormat = 'american',
-      bookmakers = 'draftkings,fanduel' // Default to your preferred books
+      bookmakers = 'draftkings,fanduel,betmgm,caesars,pointsbetus,wynnbet,betrivers,unibet' // Expanded list of bookmakers
     } = options;
 
     if (await rateLimitService.shouldBypassLive(this.name)) {
