@@ -25,6 +25,7 @@ export function registerSettingsCallbacks(bot) {
     if (action === 'builder') return sendBuilderSettingsMenu(bot, chatId, messageId);
     if (action === 'quant_help') return sendQuantHelpMenu(bot, chatId, messageId);
     if (action === 'bookmakers') return sendBookmakerMenu(bot, chatId, messageId);
+    if (action === 'aihorizon') return sendAiHorizonMenu(bot, chatId, messageId);
 
     if (action === 'set') {
       const [,,, category, key, value] = parts;
@@ -88,6 +89,7 @@ async function sendAiSettingsMenu(bot, chatId, messageId) {
     const text = `<b>🤖 AI Analyst Settings</b>\n\nSet your default preferences for the \`/ai\` command.`;
     const keyboard = [
       [{ text: `Default Mode: ${config.mode || 'Web Research'}`, callback_data: 'set_aimode' }],
+      [{ text: `Game Horizon: ${config.horizonHours || 72} hours`, callback_data: 'set_aihorizon' }],
       [{ text: `Default Bet Type: ${config.betType || 'Mixed'}`, callback_data: 'set_aibettype' }],
       [{ text: `Pro Quant Mode: ${config.proQuantMode ? '✅ On' : '❌ Off'}`, callback_data: 'set_set_ai_proQuantMode_toggle' }],
       [{ text: '❔ What is Pro Quant Mode?', callback_data: 'set_quant_help' }],
@@ -95,6 +97,18 @@ async function sendAiSettingsMenu(bot, chatId, messageId) {
     ];
     const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
     await safeEditMessage(chatId, messageId, text, opts);
+}
+
+async function sendAiHorizonMenu(bot, chatId, messageId) {
+    const config = await getAIConfig(chatId);
+    const text = 'Select the default time window for finding games:';
+    const keyboard = [
+        [{ text: `24 Hours ${config.horizonHours === 24 ? '✅' : ''}`, callback_data: 'set_set_ai_horizonHours_24' }],
+        [{ text: `48 Hours ${config.horizonHours === 48 ? '✅' : ''}`, callback_data: 'set_set_ai_horizonHours_48' }],
+        [{ text: `72 Hours ${config.horizonHours === 72 ? '✅' : ''}`, callback_data: 'set_set_ai_horizonHours_72' }],
+        [{ text: '« Back to AI Settings', callback_data: 'set_ai' }]
+    ];
+    await safeEditMessage(chatId, messageId, text, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
 }
 
 async function sendBuilderSettingsMenu(bot, chatId, messageId) {
