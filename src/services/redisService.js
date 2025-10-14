@@ -10,8 +10,8 @@ class RedisService {
     this.connectionPromise = null;
     this.connectionEstablished = false;
     this.connectionAttempts = 0;
-    this.maxConnectionAttempts = 3;
-    this.syntaxErrorCount = 0; // Add syntax error counter
+    this.maxConnectionAttempts = 5; // Increased attempts
+    this.syntaxErrorCount = 0;
 
     if (env.REDIS_URL) {
       console.log('🔄 RedisService: Initializing Redis connection...');
@@ -40,38 +40,32 @@ class RedisService {
         const newClient = new IORedis(env.REDIS_URL, {
           connectTimeout: 10000,
           commandTimeout: 5000,
-          maxRetriesPerRequest: 2,
-          retryDelayOnFailover: 100,
-          lazyConnect: true,
+          maxRetriesPerRequest: 3,
+          retryStrategy: (times) => {
+            const delay = Math.min(times * 100, 2000); // Reconnect with increasing delay
+            return delay;
+          },
           reconnectOnError: (err) => {
-            const errorMessage = err.message.toLowerCase();
-            if (errorMessage.includes('syntax error')) {
-              this.syntaxErrorCount++; // Increment on syntax error
-              return false; // Don't reconnect for syntax errors
+            const targetError = 'read ECONNRESET';
+            if (err.message.includes(targetError)) {
+              return true; // Attempt to reconnect on ECONNRESET
             }
-            return true;
-          }
+            return false;
+          },
+          lazyConnect: true,
         });
 
-        // Apply safety wrappers to prevent syntax errors
         this.applyCommandSafetyWrappers(newClient);
 
         newClient.on('error', (error) => {
-          const errorMessage = error.message.toLowerCase();
+          const errorMessage = (error && error.message) ? error.message.toLowerCase() : '';
           
           if (errorMessage.includes('syntax error')) {
-            this.syntaxErrorCount++; // Increment on syntax error
-            return; // Don't treat syntax errors as connection failures
+            this.syntaxErrorCount++;
+            return;
           }
           
-          console.error('❌ RedisService: Client Error:', error.message);
-          if (error.code === 'ECONNREFUSED') {
-            sentryService.captureError(error, { 
-              component: 'redis_service', 
-              operation: 'connection_refused',
-              attempt: this.connectionAttempts
-            });
-          }
+          console.error('❌ RedisService: Unhandled Client Error:', (error && error.message) ? error.message : String(error));
           this.connectionEstablished = false;
         });
 
@@ -128,45 +122,22 @@ class RedisService {
   applyCommandSafetyWrappers(client) {
     if (!client) return;
 
-    // Wrap MEMORY command to handle syntax errors
-    const originalMemory = client.memory;
-    client.memory = async function(...args) {
-      try {
-        return await originalMemory.apply(this, args);
-      } catch (error) {
-        if (error.message.includes('ERR syntax error') || error.message.includes('unknown command')) {
-          console.warn('⚠️ RedisService: MEMORY command not available, using fallback');
-          return null;
-        }
-        throw error;
-      }
-    };
-
-    // Wrap EVAL command with better error handling
     const originalEval = client.eval;
     client.eval = async function(script, numKeys, ...args) {
       try {
-        // Validate script before execution
-        if (typeof script !== 'string' || script.trim().length === 0) {
-          throw new Error('Invalid Lua script: empty or non-string');
-        }
-        
-        // Ensure numKeys is a valid number
+        if (typeof script !== 'string' || script.trim().length === 0) throw new Error('Invalid Lua script');
         const keysCount = parseInt(numKeys, 10);
-        if (isNaN(keysCount) || keysCount < 0) {
-          throw new Error(`Invalid keys count: ${numKeys}`);
-        }
-        
+        if (isNaN(keysCount) || keysCount < 0) throw new Error(`Invalid keys count: ${numKeys}`);
         return await originalEval.apply(this, [script, keysCount, ...args]);
       } catch (error) {
-        if (error.message.includes('ERR syntax error')) {
-          this.syntaxErrorCount++; // Increment on syntax error
+        if (error && error.message && error.message.includes('ERR syntax error')) {
+          this.syntaxErrorCount++;
           console.error('❌ RedisService: EVAL syntax error:', error.message);
           throw new Error(`Lua script execution failed: ${error.message}`);
         }
         throw error;
       }
-    }.bind(this); // Bind 'this' to access syntaxErrorCount
+    }.bind(this);
 
     console.log('✅ RedisService: Command safety wrappers applied');
   }
@@ -249,7 +220,6 @@ class RedisService {
   }
 }
 
-// FIXED: Add the missing export that rateLimitService needs
 const redisServiceInstance = new RedisService();
 export default redisServiceInstance;
-export const getRedisClient = () => redisServiceInstance.getClient(); // THIS WAS MISSING!
+export const getRedisClient = () => redisServiceInstance.getClient();
