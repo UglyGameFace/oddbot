@@ -1,4 +1,4 @@
-// src/services/redisService.js - ENHANCED VERSION
+// src/services/redisService.js - COMPLETE FIXED VERSION
 import IORedis from 'ioredis';
 import env from '../config/env.js';
 import { sentryService } from '../services/sentryService.js';
@@ -11,63 +11,64 @@ class RedisService {
     this.connectionEstablished = false;
     this.connectionAttempts = 0;
     this.maxConnectionAttempts = 3;
-    this.lastError = null;
 
     if (env.REDIS_URL) {
       console.log('🔄 RedisService: Initializing Redis connection...');
-      // Don't auto-connect - let the application control connection timing
+      this.connect();
     } else {
       console.warn('🟡 RedisService: REDIS_URL not found, Redis disabled.');
     }
   }
 
   async connect() {
-    // If we're already connected or connecting, return the existing client/promise
-    if (this.client && this.client.status === 'ready') {
-      return this.client;
+    if (this.isConnecting) {
+      return this.connectionPromise;
     }
 
-    if (this.isConnecting && this.connectionPromise) {
-      return this.connectionPromise;
+    if (this.client && this.client.status === 'ready') {
+      return Promise.resolve(this.client);
     }
 
     this.isConnecting = true;
     this.connectionAttempts++;
-    this.lastError = null;
 
     console.log(`🔄 RedisService: Attempting connection (attempt ${this.connectionAttempts}/${this.maxConnectionAttempts})...`);
 
     this.connectionPromise = new Promise(async (resolve, reject) => {
       try {
         const newClient = new IORedis(env.REDIS_URL, {
-          connectTimeout: 5000, // Reduced from 10000 for faster failure
-          commandTimeout: 3000, // Reduced from 5000
-          maxRetriesPerRequest: 1, // Reduced from 2
-          retryDelayOnFailover: 50, // Reduced from 100
-          lazyConnect: false, // Changed to false for immediate connection
-          // Critical: Don't reconnect on syntax errors
+          connectTimeout: 10000,
+          commandTimeout: 5000,
+          maxRetriesPerRequest: 2,
+          retryDelayOnFailover: 100,
+          lazyConnect: true,
           reconnectOnError: (err) => {
             const errorMessage = err.message.toLowerCase();
-            if (errorMessage.includes('syntax error') || errorMessage.includes('unknown command')) {
-              return false;
+            if (errorMessage.includes('syntax error')) {
+              return false; // Don't reconnect for syntax errors
             }
             return true;
           }
         });
 
-        // Apply minimal safety wrappers
+        // Apply safety wrappers to prevent syntax errors
         this.applyCommandSafetyWrappers(newClient);
 
         newClient.on('error', (error) => {
           const errorMessage = error.message.toLowerCase();
           
-          // Suppress syntax error logging
-          if (errorMessage.includes('syntax error') || errorMessage.includes('unknown command')) {
-            return;
+          if (errorMessage.includes('syntax error')) {
+            return; // Don't treat syntax errors as connection failures
           }
           
           console.error('❌ RedisService: Client Error:', error.message);
-          this.lastError = error.message;
+          if (error.code === 'ECONNREFUSED') {
+            sentryService.captureError(error, { 
+              component: 'redis_service', 
+              operation: 'connection_refused',
+              attempt: this.connectionAttempts
+            });
+          }
           this.connectionEstablished = false;
         });
 
@@ -84,6 +85,10 @@ class RedisService {
           resolve(this.client);
         });
 
+        newClient.on('reconnecting', (delay) => {
+          console.log(`🔁 RedisService: Reconnecting in ${delay}ms...`);
+        });
+
         newClient.on('close', () => {
           console.warn('🟡 RedisService: Connection closed');
           this.connectionEstablished = false;
@@ -95,18 +100,17 @@ class RedisService {
           this.client = null;
         });
 
-        // Connection will happen automatically since lazyConnect is false
+        await newClient.connect();
         
       } catch (error) {
         console.error('❌ RedisService: Initial connection failed:', error.message);
         this.isConnecting = false;
-        this.lastError = error.message;
         
         if (this.connectionAttempts < this.maxConnectionAttempts) {
-          console.log(`🔄 RedisService: Retrying connection in 1 second...`);
+          console.log(`🔄 RedisService: Retrying connection in 2 seconds...`);
           setTimeout(() => {
             this.connect().then(resolve).catch(reject);
-          }, 1000);
+          }, 2000);
         } else {
           console.error('❌ RedisService: Max connection attempts reached, giving up.');
           this.isConnecting = false;
@@ -121,68 +125,119 @@ class RedisService {
   applyCommandSafetyWrappers(client) {
     if (!client) return;
 
-    // Completely disable problematic commands
-    client.memory = async function() {
-      return null; // Silent fail
+    // Wrap MEMORY command to handle syntax errors
+    const originalMemory = client.memory;
+    client.memory = async function(...args) {
+      try {
+        return await originalMemory.apply(this, args);
+      } catch (error) {
+        if (error.message.includes('ERR syntax error') || error.message.includes('unknown command')) {
+          console.warn('⚠️ RedisService: MEMORY command not available, using fallback');
+          return null;
+        }
+        throw error;
+      }
+    };
+
+    // Wrap EVAL command with better error handling
+    const originalEval = client.eval;
+    client.eval = async function(script, numKeys, ...args) {
+      try {
+        // Validate script before execution
+        if (typeof script !== 'string' || script.trim().length === 0) {
+          throw new Error('Invalid Lua script: empty or non-string');
+        }
+        
+        // Ensure numKeys is a valid number
+        const keysCount = parseInt(numKeys, 10);
+        if (isNaN(keysCount) || keysCount < 0) {
+          throw new Error(`Invalid keys count: ${numKeys}`);
+        }
+        
+        return await originalEval.apply(this, [script, keysCount, ...args]);
+      } catch (error) {
+        if (error.message.includes('ERR syntax error')) {
+          console.error('❌ RedisService: EVAL syntax error:', error.message);
+          throw new Error(`Lua script execution failed: ${error.message}`);
+        }
+        throw error;
+      }
     };
 
     console.log('✅ RedisService: Command safety wrappers applied');
   }
 
   async getClient() {
-    // If no REDIS_URL, return null immediately
-    if (!env.REDIS_URL) {
-      return null;
-    }
-
-    // If we have a ready client, return it
     if (this.client && this.client.status === 'ready') {
       return this.client;
     }
 
-    // Otherwise, connect
+    if (!env.REDIS_URL) {
+      return null;
+    }
+
+    if (this.isConnecting) {
+      return this.connectionPromise;
+    }
+
     return this.connect();
   }
 
-  async healthCheck() {
+  async testConnection() {
     try {
       const client = await this.getClient();
       if (!client) {
-        return {
-          healthy: false,
-          error: 'Redis not configured',
-          timestamp: new Date().toISOString()
+        return { 
+          connected: false, 
+          latency: -1, 
+          error: 'Redis client not available' 
         };
       }
 
       const startTime = Date.now();
       const reply = await client.ping();
-      const latency = Date.now() - startTime;
+      const endTime = Date.now();
+      
+      const isConnected = reply === 'PONG';
+      const latency = endTime - startTime;
 
-      return {
-        healthy: reply === 'PONG',
+      return { 
+        connected: isConnected, 
         latency: latency,
-        status: client.status,
-        timestamp: new Date().toISOString()
+        status: client.status
       };
     } catch (error) {
-      return {
-        healthy: false,
-        error: error.message,
-        timestamp: new Date().toISOString()
+      console.error('❌ RedisService: Connection test FAILED:', error.message);
+      return { 
+        connected: false, 
+        latency: -1, 
+        error: error.message
       };
+    }
+  }
+
+  async disconnect() {
+    if (this.client) {
+      try {
+        await this.client.quit();
+        console.log('✅ RedisService: Client disconnected gracefully.');
+      } catch (error) {
+        console.error('❌ RedisService: Error during disconnection:', error.message);
+      } finally {
+        this.client = null;
+        this.connectionEstablished = false;
+        this.isConnecting = false;
+        this.connectionPromise = null;
+      }
     }
   }
 
   isConnected() {
     return this.connectionEstablished && this.client && this.client.status === 'ready';
   }
-
-  // Quick check for health checks
-  isReady() {
-    return this.isConnected();
-  }
 }
 
+// FIXED: Add the missing export that rateLimitService needs
 const redisServiceInstance = new RedisService();
 export default redisServiceInstance;
+export const getRedisClient = () => redisServiceInstance.getClient(); // THIS WAS MISSING!
