@@ -6,7 +6,7 @@ import quantitativeService from './quantitativeService.js';
 import { ElitePromptService } from './elitePromptService.js';
 
 const TZ = env.TIMEZONE || 'America/New_York';
-const WEB_TIMEOUT_MS = 30000;
+const WEB_TIMEOUT_MS = 60000;
 
 const AI_MODELS = {
   perplexity: "sonar-pro"
