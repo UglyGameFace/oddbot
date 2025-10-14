@@ -82,7 +82,7 @@ export function registerAICallbacks(bot) {
           break;
         case 'sport':
           state.sportKey = parts.slice(2).join('_');
-          state.page = 0;
+          state.page = 0; // Reset game page
           await setUserState(chatId, state);
           await sendGameSelection(bot, chatId, message.message_id);
           break;
@@ -246,6 +246,17 @@ async function executeAiRequest(bot, chatId, messageId = null) {
     }
 
     const game = await gamesService.getGameById(gameId);
+
+    if (!game || game.source === 'fallback') {
+        const errorMessage = `❌ <b>Cannot Analyze Game: Invalid Data Source</b>\n\n` +
+                             `The bot has detected that its live odds providers are failing. This usually means your API keys are expired or invalid.\n\n` +
+                             `A real parlay cannot be generated without a working data source. Please check your API keys and try again.`;
+        return safeEditMessage(chatId, sentMessage.message_id, errorMessage, { 
+            parse_mode: 'HTML', 
+            reply_markup: { inline_keyboard: [[{ text: '« Change Game', callback_data: 'ai_back_game' }]] } 
+        });
+    }
+
     const gameTitle = game ? `${game.away_team} @ ${game.home_team}` : 'Selected Game';
     
     const sportTitle = getSportEmoji(sportKey) + ' ' + getSportTitle(sportKey);
