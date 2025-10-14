@@ -73,11 +73,12 @@ async function eliteGameValidation(sportKey, proposedLegs, hours) {
             const legEvent = (leg.event || '').toLowerCase().trim();
             const realGame = realGameMap.get(legEvent);
             if (realGame) {
+                // IMPORTANT: Inject the correct commence_time from the verified game data
                 return { ...leg, commence_time: realGame.commence_time };
             }
             console.warn(`[Validation] Discarding invalid game: ${leg.event}`);
             return null;
-        }).filter(Boolean);
+        }).filter(Boolean); // remove nulls
         return validated;
     } catch (error) {
         console.warn(`⚠️ Elite validation failed for ${sportKey}, using raw AI proposals:`, error.message);
@@ -139,13 +140,16 @@ class AIService {
           return await this._generateContextParlay(sportKey, numLegs, mode, betType, options);
       } catch (error) {
           console.error(`❌ QUANTUM parlay generation failed for ${requestId}:`, error.message);
-          return this._generateFallbackParlay(sportKey, numLegs, betType);
+          return this._generateFallbackParlay(sportKey, numLegs, betType, options);
       }
   }
 
   async _generateWebParlay(sportKey, numLegs, betType, options) {
       const scheduleContext = await buildEliteScheduleContext(sportKey, options.horizonHours || 72);
-      const prompt = ElitePromptService.getWebResearchPrompt(sportKey, numLegs, betType, { scheduleInfo: scheduleContext });
+      const prompt = ElitePromptService.getWebResearchPrompt(sportKey, numLegs, betType, { 
+          scheduleInfo: scheduleContext,
+          gameContext: options.gameContext 
+        });
       const parlayData = await this._callAIProvider(prompt);
       
       if (!parlayData.legs || !Array.isArray(parlayData.legs)) throw new Error('AI response lacked valid parlay structure');
@@ -154,11 +158,15 @@ class AIService {
       const validatedLegs = await eliteGameValidation(sportKey, parlayData.legs, options.horizonHours || 72);
       
       if (validatedLegs.length < numLegs) {
-          console.warn(`[Web Mode] Validation failed to find all requested legs. Found ${validatedLegs.length}/${numLegs}. Using what was found.`);
+        console.warn(`[Web Mode] Validation failed to find all requested legs. Found ${validatedLegs.length}/${numLegs}. Returning what was found.`);
       }
 
-      parlayData.legs = validatedLegs.length > 0 ? validatedLegs.slice(0, numLegs) : parlayData.legs.slice(0, numLegs);
+      parlayData.legs = validatedLegs; // Use only the validated legs
       
+      if (parlayData.legs.length === 0) {
+        return parlayData; // Return empty legs to be handled by the caller
+      }
+
       parlayData.parlay_price_decimal = parlayDecimal(parlayData.legs);
       parlayData.parlay_price_american = decimalToAmerican(parlayData.parlay_price_decimal);
       
@@ -226,16 +234,16 @@ class AIService {
   async _generateContextParlay(sportKey, numLegs, mode, betType, options) {
     console.log(`🤖 Generating parlay using local data from '${mode}' mode.`);
     try {
-        const allGames = await gamesService.getGamesForSport(sportKey, {
+        const allGames = options.gameContext ? [options.gameContext] : await gamesService.getGamesForSport(sportKey, {
             hoursAhead: options.horizonHours || 72,
             includeOdds: true,
             useCache: false,
             chatId: options.chatId
         });
 
-        if (allGames.length < numLegs) {
+        if (allGames.length === 0) {
             console.warn(`⚠️ Insufficient games in DB for ${sportKey}, using AI fallback.`);
-            return await this._generateFallbackParlay(sportKey, numLegs, betType);
+            return await this._generateFallbackParlay(sportKey, numLegs, betType, options);
         }
 
         console.log(`🔍 Scanning ${allGames.length} games for +EV opportunities...`);
@@ -245,7 +253,7 @@ class AIService {
             return {
                 legs: [],
                 portfolio_construction: {
-                    overall_thesis: `No profitable (+EV) parlays could be constructed from the ${allGames.length} available games. A disciplined analyst would not force a bet in this market.`
+                    overall_thesis: `No profitable (+EV) parlays could be constructed from the available game(s). A disciplined analyst would not force a bet in this market.`
                 }
             };
         }
@@ -288,14 +296,17 @@ class AIService {
 
     } catch (error) {
         console.error(`❌ Database context parlay failed for ${sportKey}:`, error.message);
-        return await this._generateFallbackParlay(sportKey, numLegs, betType);
+        return await this._generateFallbackParlay(sportKey, numLegs, betType, options);
     }
   }
 
-  async _generateFallbackParlay(sportKey, numLegs, betType) {
+  async _generateFallbackParlay(sportKey, numLegs, betType, options) {
       console.log(`🎯 Generating QUANTUM fallback for ${sportKey}`);
       const scheduleContext = await buildEliteScheduleContext(sportKey, 168); // Wider window for fallback
-      const prompt = ElitePromptService.getFallbackPrompt(sportKey, numLegs, betType, { scheduleInfo: scheduleContext });
+      const prompt = ElitePromptService.getFallbackPrompt(sportKey, numLegs, betType, { 
+          scheduleInfo: scheduleContext,
+          gameContext: options.gameContext
+        });
       const parlayData = await this._callAIProvider(prompt);
       
       if (!parlayData.legs || !Array.isArray(parlayData.legs)) throw new Error('AI response lacked valid parlay structure in fallback');
