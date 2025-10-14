@@ -4,9 +4,11 @@ import env from '../config/env.js';
 import gamesService from './gamesService.js';
 import quantitativeService from './quantitativeService.js';
 import { ElitePromptService } from './elitePromptService.js';
+import { sleep } from '../utils/asyncUtils.js';
 
 const TZ = env.TIMEZONE || 'America/New_York';
 const WEB_TIMEOUT_MS = 60000;
+const MAX_RETRIES = 2;
 
 const AI_MODELS = {
   perplexity: "sonar-pro"
@@ -49,7 +51,7 @@ async function buildEliteScheduleContext(sportKey, hours) {
         if (realGames.length === 0) {
             return `\n\n🎯 ELITE ANALYST MODE: No real-time ${sportKey} data available for the next ${hours} hours. Using fundamental analysis of typical matchups and team quality.`;
         }
-        const gameList = realGames.slice(0, 20).map((game, index) => { // Increased to 20
+        const gameList = realGames.slice(0, 20).map((game, index) => {
             const timeStr = new Date(game.commence_time).toLocaleString('en-US', { timeZone: TZ, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
             return `${index + 1}. ${game.away_team} @ ${game.home_team} - ${timeStr}`;
         }).join('\n');
@@ -73,12 +75,11 @@ async function eliteGameValidation(sportKey, proposedLegs, hours) {
             const legEvent = (leg.event || '').toLowerCase().trim();
             const realGame = realGameMap.get(legEvent);
             if (realGame) {
-                // IMPORTANT: Inject the correct commence_time from the verified game data
                 return { ...leg, commence_time: realGame.commence_time };
             }
             console.warn(`[Validation] Discarding invalid game: ${leg.event}`);
             return null;
-        }).filter(Boolean); // remove nulls
+        }).filter(Boolean);
         return validated;
     } catch (error) {
         console.warn(`⚠️ Elite validation failed for ${sportKey}, using raw AI proposals:`, error.message);
@@ -106,28 +107,33 @@ class AIService {
   }
 
   async _callAIProvider(prompt) {
-      const { PERPLEXITY_API_KEY } = env;
-      if (!PERPLEXITY_API_KEY) {
-        throw new Error('Perplexity API key is not configured.');
-      }
-      
-      console.log(`🔄 Calling AI Provider: Perplexity`);
-      try {
-          const response = await axios.post('https://api.perplexity.ai/chat/completions',
-              { model: AI_MODELS.perplexity, messages: [{ role: 'user', content: prompt }] },
-              { headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}` }, timeout: WEB_TIMEOUT_MS }
-          );
-          const responseText = response?.data?.choices?.[0]?.message?.content || '';
-          const parsedJson = extractJSON(responseText);
-          if (!parsedJson) throw new Error('AI response did not contain valid JSON.');
-          return parsedJson;
+    const { PERPLEXITY_API_KEY } = env;
+    if (!PERPLEXITY_API_KEY) {
+      throw new Error('Perplexity API key is not configured.');
+    }
 
-      } catch (error) {
-          if (error.response?.status === 401 || error.response?.status === 403) {
-            throw new Error('Perplexity API key invalid or expired');
-          }
-          throw new Error(`Perplexity API error: ${error.message}`);
-      }
+    for (let i = 0; i <= MAX_RETRIES; i++) {
+        console.log(`🔄 Calling AI Provider: Perplexity (Attempt ${i + 1}/${MAX_RETRIES + 1})`);
+        try {
+            const response = await axios.post('https://api.perplexity.ai/chat/completions',
+                { model: AI_MODELS.perplexity, messages: [{ role: 'user', content: prompt }] },
+                { headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}` }, timeout: WEB_TIMEOUT_MS }
+            );
+            const responseText = response?.data?.choices?.[0]?.message?.content || '';
+            const parsedJson = extractJSON(responseText);
+            if (!parsedJson) throw new Error('AI response did not contain valid JSON.');
+            return parsedJson;
+        } catch (error) {
+            console.error(`❌ Perplexity API Error (Attempt ${i + 1}):`, error.message);
+            if (i === MAX_RETRIES) {
+                if (error.response?.status === 401 || error.response?.status === 403) {
+                    throw new Error('Perplexity API key invalid or expired');
+                }
+                throw new Error(`Perplexity API error after ${MAX_RETRIES + 1} attempts: ${error.message}`);
+            }
+            await sleep(1000 * (i + 1)); // Exponential backoff
+        }
+    }
   }
 
   async generateParlay(sportKey, numLegs, mode, aiModel, betType, options) {
@@ -149,7 +155,7 @@ class AIService {
       const prompt = ElitePromptService.getWebResearchPrompt(sportKey, numLegs, betType, { 
           scheduleInfo: scheduleContext,
           gameContext: options.gameContext 
-        });
+      });
       const parlayData = await this._callAIProvider(prompt);
       
       if (!parlayData.legs || !Array.isArray(parlayData.legs)) throw new Error('AI response lacked valid parlay structure');
@@ -161,10 +167,10 @@ class AIService {
         console.warn(`[Web Mode] Validation failed to find all requested legs. Found ${validatedLegs.length}/${numLegs}. Returning what was found.`);
       }
 
-      parlayData.legs = validatedLegs; // Use only the validated legs
+      parlayData.legs = validatedLegs;
       
-      if (parlayData.legs.length === 0) {
-        return parlayData; // Return empty legs to be handled by the caller
+      if (parlayData.legs.length === 0 && numLegs > 0) {
+        return parlayData; 
       }
 
       parlayData.parlay_price_decimal = parlayDecimal(parlayData.legs);
