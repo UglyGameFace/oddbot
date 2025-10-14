@@ -22,12 +22,6 @@ class CacheService {
     this.DEFAULT_LOCK_MS = 8000;
     this.DEFAULT_RETRY_MS = 150;
     
-    // FIXED: Proper Lua scripts without syntax errors
-    this.RELEASE_LOCK_SCRIPT = 'local lock_value = redis.call(\'GET\', KEYS[1]) if lock_value == ARGV[1] then redis.call(\'DEL\', KEYS[1]) return 1 else return 0 end';
-    
-    // FIXED: Simple script as single line string
-    this.SIMPLE_RELEASE_SCRIPT = 'if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) else return 0 end';
-
     this.init();
   }
 
@@ -136,21 +130,6 @@ class CacheService {
     }
   }
 
-  async safeEval(script, keyCount, ...args) {
-    try {
-      return await this.redis.eval(script, keyCount, ...args);
-    } catch (error) {
-      if (error.message.includes('syntax error')) {
-        console.warn('⚠️ CacheService: Lua syntax error, trying simplified script...');
-        // Try the simpler script as fallback
-        if (script.includes('RELEASE_LOCK')) {
-          return await this.redis.eval(this.SIMPLE_RELEASE_SCRIPT, keyCount, ...args);
-        }
-      }
-      throw error;
-    }
-  }
-
   async executeLoaderAndCache(key, ttlSec, loader, context) {
     try {
       const data = await loader();
@@ -231,8 +210,13 @@ class CacheService {
         } finally {
           try {
             await this.safeRedisCommand(async (client) => {
-              // Use safe eval wrapper
-              await this.safeEval(this.RELEASE_LOCK_SCRIPT, 1, lockKey, lockValue);
+                await client.watch(lockKey);
+                const val = await client.get(lockKey);
+                if (val === lockValue) {
+                    await client.multi().del(lockKey).exec();
+                } else {
+                    await client.unwatch();
+                }
             }, 'release_lock');
             console.log(`🔓 CacheService: Released lock for key: ${key}`);
           } catch (releaseError) {
