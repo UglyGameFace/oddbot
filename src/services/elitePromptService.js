@@ -335,20 +335,19 @@ ${this.#buildUserContext(context.userConfig)}
     return `${basePrompt}
 
 ## RESEARCH VERIFICATION PROTOCOL - ANTI-HALLUCINATION SAFEGUARDS
-1. **SCHEDULE VALIDATION**: Only use games/events from verified schedule: ${researchContext.scheduleInfo || 'Current season/tournament games'}
-2. **LINE SANITIZATION**: Construct realistic odds based on matchup quality and typical market ranges. The \`american\` odds field is REQUIRED.
-3. **TEAM/PLAYER VERIFICATION**: Use only legitimate teams and players from current competitions.
-4. **MARKET REALISM**: Ensure all bet types and selections exist in real sportsbooks.
-5. **CONTEXT AWARENESS**: Apply appropriate situational factors for current season phase.
+1. **SCHEDULE VALIDATION**: Only use games/events from the VERIFIED SCHEDULE provided in the 'CONTEXTUAL INTELLIGENCE' section.
+2. **LINE SANITIZATION**: Construct realistic odds based on matchup quality and typical market ranges. The \`american\` odds field is REQUIRED and must be a number.
+3. **TEAM/PLAYER VERIFICATION**: Use only legitimate teams and players from the verified schedule.
+4. **MARKET REALISM**: Ensure all bet types and selections exist in real sportsbooks for the given sport.
+5. **CONTEXT AWARENESS**: If the verified schedule is empty, state that no real games were found and create a plausible, fundamental-based parlay for entertainment, clearly noting it is hypothetical.
 
 ## DATA INTEGRITY COMMANDS
-• REJECT any games/events not in the verified schedule.
-• REJECT any players/teams not currently active in the competition.
+• CRITICAL: REJECT and DO NOT USE any games or events not explicitly listed in the 'VERIFIED SCHEDULE'.
+• If the schedule is empty, your thesis must state that the parlay is hypothetical due to lack of real-time data.
 • REJECT any odds outside realistic market ranges (-500 to +500).
 • VALIDATE all selections against known market types for the sport.
-• CONFIRM all event dates are current or future (no past events).
 
-**ZERO TOLERANCE**: Absolutely no invented games, players, or markets. Every selection must be verifiable.`;
+**ZERO TOLERANCE**: Absolutely no invented games if a schedule is provided. Every selection must be from the verified list.`;
   }
 
   static getFallbackPrompt(sportKey, numLegs, betType, fallbackContext = {}) {
@@ -419,4 +418,3 @@ CRITICAL: The \`american\` odds field is REQUIRED for every leg.
 }
 
 export default ElitePromptService;
-
