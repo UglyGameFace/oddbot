@@ -96,6 +96,11 @@ export function registerAICallbacks(bot) {
         case 'sport':
           state.sportKey = parts.slice(2).join('_');
           await setUserState(chatId, state);
+          await sendGameSelection(bot, chatId, message.message_id); // New Step: Select a game
+          break;
+        case 'game':
+          state.gameId = parts.slice(2).join('_');
+          await setUserState(chatId, state);
           await sendLegSelection(bot, chatId, message.message_id);
           break;
         case 'legs':
@@ -122,6 +127,7 @@ export function registerAICallbacks(bot) {
         case 'back':
           const to = parts[2];
           if (to === 'sport') await sendSportSelection(bot, chatId, message.message_id, state.page || 0);
+          if (to === 'game') await sendGameSelection(bot, chatId, message.message_id);
           if (to === 'legs') await sendLegSelection(bot, chatId, message.message_id);
           if (to === 'mode') await sendModeSelection(bot, chatId, message.message_id);
           if (to === 'bettype') await sendBetTypeSelection(bot, chatId, message.message_id);
@@ -160,21 +166,34 @@ async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
     else await bot.sendMessage(chatId, text, opts);
 }
 
+async function sendGameSelection(bot, chatId, messageId) {
+    const state = await getUserState(chatId);
+    const games = await gamesService.getGamesForSport(state.sportKey, { hoursAhead: 72 });
+    if (!games || games.length === 0) {
+        const text = '⚠️ No upcoming games found for this sport. Please select another.';
+        return safeEditMessage(chatId, messageId, text, { reply_markup: { inline_keyboard: [[{ text: '« Back to Sports', callback_data: 'ai_back_sport' }]] } });
+    }
+    const keyboard = games.slice(0, 20).map(game => {
+        return [{ text: `${game.away_team} @ ${game.home_team}`, callback_data: `ai_game_${game.event_id}` }];
+    });
+    keyboard.push([{ text: '« Back to Sports', callback_data: 'ai_back_sport' }]);
+    const text = `🤖 <b>AI Parlay Builder</b>\n\n<b>Step 2:</b> Select a game to analyze.`;
+    const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
+    await safeEditMessage(chatId, messageId, text, opts);
+}
+
 async function sendLegSelection(bot, chatId, messageId) {
-  const state = await getUserState(chatId);
-  const sportTitle = getSportTitle(state.sportKey);
-  const legOptions = [2, 3, 4, 5, 6, 7, 8];
+  const legOptions = [2, 3, 4, 5];
   const buttons = legOptions.map(num => ({ text: `${num} Legs`, callback_data: `ai_legs_${num}` }));
-  const keyboard = [];
-  for (let i = 0; i < buttons.length; i += 4) keyboard.push(buttons.slice(i, i + 4));
-  keyboard.push([{ text: '« Back to Sports', callback_data: 'ai_back_sport' }]);
-  const text = `🤖 <b>AI Parlay Builder</b>\n\n<b>Step 2:</b> How many legs for your ${escapeHTML(sportTitle)} parlay?`;
+  const keyboard = [buttons.slice(0, 2), buttons.slice(2, 4)];
+  keyboard.push([{ text: '« Back to Games', callback_data: 'ai_back_game' }]);
+  const text = `🤖 <b>AI Parlay Builder</b>\n\n<b>Step 3:</b> How many legs for this game?`;
   const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
   await safeEditMessage(chatId, messageId, text, opts);
 }
 
 async function sendModeSelection(bot, chatId, messageId) {
-  const text = `🤖 <b>AI Parlay Builder</b>\n\n<b>Step 3:</b> Select analysis mode.`;
+  const text = `🤖 <b>AI Parlay Builder</b>\n\n<b>Step 4:</b> Select analysis mode.`;
   const keyboard = [
     [{ text: '🌐 Web Research (AI Picks)', callback_data: 'ai_mode_web'}],
     [{ text: '📡 Live API Data (AI Picks)', callback_data: 'ai_mode_live'}],
@@ -186,7 +205,7 @@ async function sendModeSelection(bot, chatId, messageId) {
 }
 
 async function sendBetTypeSelection(bot, chatId, messageId) {
-  const text = '🤖 <b>AI Parlay Builder</b>\n\n<b>Step 4:</b> What kind of parlay?';
+  const text = '🤖 <b>AI Parlay Builder</b>\n\n<b>Step 5:</b> What kind of parlay?';
   const keyboard = [
     [{ text: '🎯 Moneyline Focus', callback_data: 'ai_bettype_moneyline'}],
     [{ text: '📊 Spreads & Totals', callback_data: 'ai_bettype_spreads'}],
@@ -198,7 +217,7 @@ async function sendBetTypeSelection(bot, chatId, messageId) {
 }
 
 async function sendQuantitativeModeSelection(bot, chatId, messageId) {
-    const text = '🤖 <b>AI Parlay Builder</b>\n\n<b>Step 5:</b> Select Analysis Strength';
+    const text = '🤖 <b>AI Parlay Builder</b>\n\n<b>Step 6:</b> Select Analysis Strength';
     const keyboard = [
       [{ text: '🔬 Conservative (Recommended)', callback_data: 'ai_quantitative_conservative' }],
       [{ text: '🚀 Aggressive (High Risk)', callback_data: 'ai_quantitative_aggressive' }],
@@ -216,22 +235,31 @@ async function executeAiRequest(bot, chatId, messageId = null) {
         sentMessage = await bot.sendMessage(chatId, '🤖 <b>Analyzing...</b>', { parse_mode: 'HTML' });
     }
     const state = await getUserState(chatId);
-    const { sportKey, numLegs, mode, betType, aiModel, quantitativeMode } = state || {};
-    if (!sportKey || !numLegs || !mode || !betType) {
+    const { sportKey, numLegs, mode, betType, aiModel, quantitativeMode, gameId } = state || {};
+
+    if (!sportKey || !numLegs || !mode || !betType || !gameId) {
         return safeEditMessage(chatId, sentMessage.message_id, '❌ Incomplete selection. Please start over using /ai.');
     }
+
+    const game = await gamesService.getGameById(gameId);
+    const gameTitle = game ? `${game.away_team} @ ${game.home_team}` : 'Selected Game';
+    
     const sportTitle = getSportEmoji(sportKey) + ' ' + getSportTitle(sportKey);
     const text = `🤖 <b>Analyzing...</b>\n\n` +
+                 `<b>Game:</b> ${escapeHTML(gameTitle)}\n`+
                  `<b>Strategy:</b> ${escapeHTML(numLegs)}-Leg Parlay\n` +
                  `<b>Sport:</b> ${escapeHTML(sportTitle)}\n` +
                  `<b>Mode:</b> ${escapeHTML(mode.toUpperCase())}\n\n` +
                  `<i>Scanning the market for value and running quantitative checks...</i>`;
+
     await safeEditMessage(chatId, sentMessage.message_id, text, { parse_mode: 'HTML' });
+
     try {
         const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, { 
             quantitativeMode, 
             horizonHours: 72,
-            chatId: chatId 
+            chatId: chatId,
+            gameContext: game 
         });
         await sendParlayResult(bot, chatId, parlay, state, mode, sentMessage.message_id);
     } catch (error) {
@@ -248,9 +276,9 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
     
     if (!legs || legs.length === 0) {
         const errorText = `❌ <b>No Profitable Bets Found</b>\n\n` +
-                         `The bot's quantitative analysis scanned all available games for <b>${escapeHTML(sportTitle)}</b> but found no bets with a positive expected value (+EV).\n\n`+
-                         `This is a feature, not a bug. A disciplined analyst does not force a bet when there's no value.`;
-        const keyboard = [[{ text: '🔄 Try a Different Sport', callback_data: 'ai_back_sport' }]];
+                         `The AI and quantitative models scanned all available markets but could not construct a valid, positive Expected Value (+EV) parlay based on your criteria.\n\n`+
+                         `This is a feature, not a bug. A disciplined analyst does not force a bet when there's no value. Try another game or adjust your settings.`;
+        const keyboard = [[{ text: '🔄 Try a Different Game', callback_data: 'ai_back_game' }, { text: '🔄 New Sport', callback_data: 'ai_back_sport' }]];
         return safeEditMessage(chatId, messageId, errorText, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
     }
     
