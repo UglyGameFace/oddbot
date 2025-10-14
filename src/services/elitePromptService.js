@@ -160,7 +160,7 @@ ${config.edges.map(edge => `• ${edge}`).join('\n')}
 ${this.#buildMarketConstraints(betType, config.keyMarkets)}
 
 ## OUTPUT ARCHITECTURE - ABSOLUTELY NON-NEGOTIABLE
-CRITICAL: The \`american\` odds field inside the \`odds\` object for each leg MUST be a valid number (e.g., -110, +120). This is non-negotiable.
+CRITICAL: The \`american\` odds field inside the \`odds\` object for each leg MUST be a valid number (e.g., -110, +120). The \`commence_time\` field MUST be a valid ISO 8601 string.
 \`\`\`json
 {
   "parlay_metadata": {
@@ -176,14 +176,14 @@ CRITICAL: The \`american\` odds field inside the \`odds\` object for each leg MU
   },
   "legs": [
     {
-      "event": "Team A @ Team B | Player X vs Player Y",
+      "event": "Team A @ Team B",
+      "commence_time": "2025-10-15T20:00:00Z",
       "market": "${config.keyMarkets[0]}",
       "selection": "exact_selection_identifier",
       "odds": {
         "american": -110,
         "decimal": 1.91,
-        "implied_probability": 0.524,
-        "fair_value": 0.045
+        "implied_probability": 0.524
       },
       "quantum_analysis": {
         "confidence_score": 85,
@@ -334,20 +334,19 @@ ${this.#buildUserContext(context.userConfig)}
     
     return `${basePrompt}
 
-## RESEARCH VERIFICATION PROTOCOL - ANTI-HALLUCINATION SAFEGUARDS
-1. **SCHEDULE VALIDATION**: Only use games/events from the VERIFIED SCHEDULE provided in the 'CONTEXTUAL INTELLIGENCE' section.
-2. **LINE SANITIZATION**: Construct realistic odds based on matchup quality and typical market ranges. The \`american\` odds field is REQUIRED and must be a number.
-3. **TEAM/PLAYER VERIFICATION**: Use only legitimate teams and players from the verified schedule.
-4. **MARKET REALISM**: Ensure all bet types and selections exist in real sportsbooks for the given sport.
-5. **CONTEXT AWARENESS**: If the verified schedule is empty, state that no real games were found and create a plausible, fundamental-based parlay for entertainment, clearly noting it is hypothetical.
+## RESEARCH VERIFICATION PROTOCOL - ANTI-HALLUCINATION SAFEGUARDS (NON-NEGOTIABLE)
+1.  **MANDATORY SCHEDULE ADHERENCE**: You MUST ONLY use games/events from the 'VERIFIED SCHEDULE' provided in the 'CONTEXTUAL INTELLIGENCE' section. This is a strict, non-negotiable rule.
+2.  **ZERO HALLUCINATION POLICY**: Do not invent, create, or assume any games, players, or events. If the verified schedule is empty or insufficient, you MUST state that a parlay cannot be formed and return an empty "legs" array.
+3.  **DATA INTEGRITY**: The \`event\` and \`commence_time\` fields in your response MUST EXACTLY MATCH the data from the verified schedule.
+4.  **REALISTIC ODDS**: Construct plausible odds based on the matchup. The \`american\` odds field is REQUIRED and must be a number.
 
-## DATA INTEGRITY COMMANDS
-• CRITICAL: REJECT and DO NOT USE any games or events not explicitly listed in the 'VERIFIED SCHEDULE'.
-• If the schedule is empty, your thesis must state that the parlay is hypothetical due to lack of real-time data.
-• REJECT any odds outside realistic market ranges (-500 to +500).
-• VALIDATE all selections against known market types for the sport.
+## FAILURE CONDITIONS (If any of these occur, you have failed the task)
+-   Generating a leg for a game NOT listed in the 'VERIFIED SCHEDULE'.
+-   Inventing a game when the schedule is empty.
+-   Failing to return exactly ${numLegs} legs if enough games are available.
+-   Returning a JSON structure that does not match the schema.
 
-**ZERO TOLERANCE**: Absolutely no invented games if a schedule is provided. Every selection must be from the verified list.`;
+**FINAL COMMAND**: Adhere to these rules strictly. Your primary function is to build a valid parlay from the provided real-world data, not to be creative. Failure to comply will result in task termination.`;
   }
 
   static getFallbackPrompt(sportKey, numLegs, betType, fallbackContext = {}) {
@@ -376,7 +375,7 @@ ${config.edges.map(edge => `• ${edge}`).join('\n')}
 - Consider typical home field/court advantages for the sport.
 
 ## OUTPUT REQUIREMENTS - MAINTAIN QUANTUM STANDARDS
-CRITICAL: The \`american\` odds field is REQUIRED for every leg.
+CRITICAL: The \`american\` odds and \`commence_time\` fields are REQUIRED for every leg.
 \`\`\`json
 {
   "parlay_metadata": {
@@ -389,7 +388,8 @@ CRITICAL: The \`american\` odds field is REQUIRED for every leg.
   },
   "legs": [
     {
-      "event": "Team A @ Team B | Player X vs Player Y",
+      "event": "Team A @ Team B",
+      "commence_time": "2025-10-15T20:00:00Z",
       "market": "${config.keyMarkets[0]}",
       "selection": "exact_selection_identifier",
       "odds": {
