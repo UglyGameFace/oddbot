@@ -205,3 +205,88 @@ async function sendQuantitativeModeSelection(bot, chatId, messageId) {
       [{ text: '« Back to Bet Type', callback_data: 'ai_back_bettype' }]
     ];
     const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
+    await safeEditMessage(chatId, messageId, text, opts);
+}
+
+async function executeAiRequest(bot, chatId, messageId = null) {
+    let sentMessage;
+    if (messageId) {
+        sentMessage = { chat: { id: chatId }, message_id: messageId };
+    } else {
+        sentMessage = await bot.sendMessage(chatId, '🤖 <b>Analyzing...</b>', { parse_mode: 'HTML' });
+    }
+    const state = await getUserState(chatId);
+    const { sportKey, numLegs, mode, betType, aiModel, quantitativeMode } = state || {};
+    if (!sportKey || !numLegs || !mode || !betType) {
+        return safeEditMessage(chatId, sentMessage.message_id, '❌ Incomplete selection. Please start over using /ai.');
+    }
+    const sportTitle = getSportEmoji(sportKey) + ' ' + getSportTitle(sportKey);
+    const text = `🤖 <b>Analyzing...</b>\n\n` +
+                 `<b>Strategy:</b> ${escapeHTML(numLegs)}-Leg Parlay\n` +
+                 `<b>Sport:</b> ${escapeHTML(sportTitle)}\n` +
+                 `<b>Mode:</b> ${escapeHTML(mode.toUpperCase())}\n\n` +
+                 `<i>Scanning the market for value and running quantitative checks...</i>`;
+    await safeEditMessage(chatId, sentMessage.message_id, text, { parse_mode: 'HTML' });
+    try {
+        const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, { 
+            quantitativeMode, 
+            horizonHours: 72,
+            chatId: chatId 
+        });
+        await sendParlayResult(bot, chatId, parlay, state, mode, sentMessage.message_id);
+    } catch (error) {
+        console.error('AI handler execution error:', error.message);
+        const errorMessage = `❌ Critical error during analysis: <code>${escapeHTML(error.message)}</code>`;
+        await safeEditMessage(chatId, sentMessage.message_id, errorMessage, { parse_mode: 'HTML' });
+    }
+}
+
+async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
+    const { sportKey } = state;
+    const { legs, parlay_price_american, quantitative_analysis, research_metadata, portfolio_construction } = parlay;
+    const sportTitle = getSportTitle(sportKey);
+    
+    if (!legs || legs.length === 0) {
+        const errorText = `❌ <b>No Profitable Bets Found</b>\n\n` +
+                         `The bot's quantitative analysis scanned all available games for <b>${escapeHTML(sportTitle)}</b> but found no bets with a positive expected value (+EV).\n\n`+
+                         `This is a feature, not a bug. A disciplined analyst does not force a bet when there's no value.`;
+        const keyboard = [[{ text: '🔄 Try a Different Sport', callback_data: 'ai_back_sport' }]];
+        return safeEditMessage(chatId, messageId, errorText, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
+    }
+    
+    let response = `🧠 <b>QUANTUM PARLAY REPORT</b>\n`;
+    response += `<b>Sport:</b> ${escapeHTML(sportTitle)}\n`;
+    if (portfolio_construction?.overall_thesis) {
+        response += `<b>Thesis:</b> <i>${escapeHTML(portfolio_construction.overall_thesis)}</i>\n`;
+    }
+    response += `\n`;
+
+    legs.forEach((leg, index) => {
+        const game = escapeHTML(leg.event || 'Unknown game');
+        const pick = escapeHTML(leg.selection || 'Unknown pick');
+        const oddsValue = leg.odds?.american;
+        const odds = (oddsValue && Number.isFinite(oddsValue)) ? (oddsValue > 0 ? `+${oddsValue}` : oddsValue) : '';
+        const gameTime = leg.commence_time ? formatGameTimeTZ(leg.commence_time) : 'Time TBD';
+
+        response += `<b>Leg ${index + 1}: ${game}</b>\n`;
+        response += `  <b>Time:</b> ${escapeHTML(gameTime)}\n`;
+        response += `  <b>Pick:</b> ${pick} (${escapeHTML(odds)})\n`;
+        if (leg.quantum_analysis?.analytical_basis) {
+            response += `  <i>Rationale: ${escapeHTML(leg.quantum_analysis.analytical_basis)}</i>\n\n`;
+        } else {
+            response += `\n`;
+        }
+    });
+
+    response += `<b>Total Odds:</b> ${parlay.parlay_price_american > 0 ? '+' : ''}${escapeHTML(parlay.parlay_price_american)}\n`;
+    
+    if (quantitative_analysis && !quantitative_analysis.error) {
+        const { calibrated, riskAssessment } = quantitative_analysis;
+        response += `<b>Calibrated EV:</b> ${escapeHTML(calibrated.evPercentage.toFixed(1))}% ${calibrated.evPercentage > 0 ? '👍' : '👎'}\n`;
+        response += `<b>Win Probability:</b> ${escapeHTML((calibrated.jointProbability * 100).toFixed(1))}%\n`;
+        response += `<b>Risk Level:</b> ${escapeHTML(riskAssessment.overallRisk)}\n`;
+    }
+
+    const finalKeyboard = [[{ text: '🔄 Build Another', callback_data: 'ai_back_sport' }]];
+    await safeEditMessage(chatId, messageId, response, { parse_mode: 'HTML', reply_markup: { inline_keyboard: finalKeyboard } });
+}
