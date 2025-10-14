@@ -284,6 +284,9 @@ ${this.#buildUserContext(context.userConfig)}
       `• Season Phase: ${context.seasonPhase || 'Regular season dynamics'}`
     ];
 
+    if (context.gameContext) {
+        intelligence.push(`• FOCUS GAME: ${context.gameContext.away_team} @ ${context.gameContext.home_team} on ${new Date(context.gameContext.commence_time).toDateString()}`);
+    }
     if (context.scheduleInfo) {
       intelligence.push(`• Game Universe: ${context.scheduleInfo}`);
     }
@@ -334,19 +337,20 @@ ${this.#buildUserContext(context.userConfig)}
     
     return `${basePrompt}
 
-## RESEARCH VERIFICATION PROTOCOL - ANTI-HALLUCINATION SAFEGUARDS (NON-NEGOTIABLE)
-1.  **MANDATORY SCHEDULE ADHERENCE**: You MUST ONLY use games/events from the 'VERIFIED SCHEDULE' provided in the 'CONTEXTUAL INTELLIGENCE' section. This is a strict, non-negotiable rule.
-2.  **ZERO HALLUCINATION POLICY**: Do not invent, create, or assume any games, players, or events. If the verified schedule is empty or insufficient, you MUST state that a parlay cannot be formed and return an empty "legs" array.
-3.  **DATA INTEGRITY**: The \`event\` and \`commence_time\` fields in your response MUST EXACTLY MATCH the data from the verified schedule.
-4.  **REALISTIC ODDS**: Construct plausible odds based on the matchup. The \`american\` odds field is REQUIRED and must be a number.
+## META-AGGREGATOR WEB RESEARCH PROTOCOL (NON-NEGOTIABLE)
+1.  **ACT AS AGGREGATOR**: Your primary task is to search and synthesize information from multiple reputable online sports sources (e.g., ESPN, DraftKings, FanDuel, official league sites) to find the BEST available odds and justifications for your picks.
+2.  **MANDATORY SCHEDULE ADHERENCE**: You MUST ONLY build legs for the game(s) listed in the 'VERIFIED SCHEDULE' or 'FOCUS GAME' section. This is a strict, non-negotiable rule.
+3.  **ZERO HALLUCINATION POLICY**: Do not invent, create, or assume any games, players, or stats. If the provided schedule is empty or you cannot find sufficient data for the requested game, you MUST state that a valid parlay cannot be formed and return an empty "legs" array.
+4.  **DATA INTEGRITY**: The \`event\` and \`commence_time\` fields in your response MUST EXACTLY MATCH the data from the verified schedule.
+5.  **REAL ODDS**: The \`american\` odds field MUST be a real, verifiable number that you have found through your simulated web search.
 
 ## FAILURE CONDITIONS (If any of these occur, you have failed the task)
--   Generating a leg for a game NOT listed in the 'VERIFIED SCHEDULE'.
--   Inventing a game when the schedule is empty.
--   Failing to return exactly ${numLegs} legs if enough games are available.
+-   Generating a leg for a game NOT listed in the provided context.
+-   Inventing a game or stats when the schedule is empty or data is unavailable.
+-   Failing to return exactly ${numLegs} legs if enough markets exist for the selected game.
 -   Returning a JSON structure that does not match the schema.
 
-**FINAL COMMAND**: Adhere to these rules strictly. Your primary function is to build a valid parlay from the provided real-world data, not to be creative. Failure to comply will result in task termination.`;
+**FINAL COMMAND**: Your primary function is to build the most statistically sound, +EV parlay possible using real, aggregated data for the SPECIFIED GAME(S). Failure to comply will result in task termination.`;
   }
 
   static getFallbackPrompt(sportKey, numLegs, betType, fallbackContext = {}) {
