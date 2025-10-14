@@ -45,19 +45,15 @@ function extractJSON(text = '') {
 
 async function buildEliteScheduleContext(sportKey, hours) {
     try {
-        const { THE_ODDS_API_KEY } = env;
-        if (!THE_ODDS_API_KEY || THE_ODDS_API_KEY.includes('expired') || THE_ODDS_API_KEY.length < 10) {
-            return `\n\n🎯 ELITE ANALYST MODE: Real-time validation skipped due to system maintenance. Relying on elite analytical framework.`;
-        }
         const realGames = await gamesService.getVerifiedRealGames(sportKey, hours);
         if (realGames.length === 0) {
-            return `\n\n🎯 ELITE ANALYST MODE: No real-time ${sportKey} data available. Using fundamental analysis of typical matchups and team quality.`;
+            return `\n\n🎯 ELITE ANALYST MODE: No real-time ${sportKey} data available for the next ${hours} hours. Using fundamental analysis of typical matchups and team quality.`;
         }
-        const gameList = realGames.slice(0, 15).map((game, index) => {
+        const gameList = realGames.slice(0, 20).map((game, index) => { // Increased to 20
             const timeStr = new Date(game.commence_time).toLocaleString('en-US', { timeZone: TZ, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
             return `${index + 1}. ${game.away_team} @ ${game.home_team} - ${timeStr}`;
         }).join('\n');
-        return `\n\n📅 VERIFIED SCHEDULE (Next ${hours} hours):\n${gameList}\n\nBase your analysis on these real matchups.`;
+        return `\n\n📅 VERIFIED SCHEDULE (Next ${hours} hours):\n${gameList}\n\nCRITICAL: You MUST base your analysis exclusively on these real matchups. Do not invent games.`;
     } catch (error) {
         console.warn(`⚠️ Schedule context failed for ${sportKey}, using elite mode:`, error.message);
         return `\n\n🎯 ELITE ANALYST MODE: System data temporarily limited. Generating parlay using fundamental sports analysis and matchup expertise.`;
@@ -65,17 +61,27 @@ async function buildEliteScheduleContext(sportKey, hours) {
 }
 
 async function eliteGameValidation(sportKey, proposedLegs, hours) {
-    const { THE_ODDS_API_KEY } = env;
-    if (!THE_ODDS_API_KEY || THE_ODDS_API_KEY.includes('expired') || THE_ODDS_API_KEY.length < 10) {
-        return proposedLegs || [];
-    }
     try {
         const realGames = await gamesService.getVerifiedRealGames(sportKey, hours);
-        if (realGames.length === 0) return proposedLegs || [];
+        if (realGames.length === 0) {
+            // If no real games are found, we can't validate, so we trust the AI had to invent.
+            // This is a fallback for when web scraping might fail.
+            console.warn(`⚠️ Elite validation skipped for ${sportKey}: No real games found to validate against.`);
+            return proposedLegs || [];
+        }
         const realGameMap = new Map(realGames.map(game => [`${(game.away_team || '').toLowerCase().trim()} @ ${(game.home_team || '').toLowerCase().trim()}`, game]));
-        return (proposedLegs || []).filter(leg => realGameMap.has((leg.event || '').toLowerCase().trim()));
+
+        const validated = (proposedLegs || []).filter(leg => {
+            const legEvent = (leg.event || '').toLowerCase().trim();
+            const isValid = realGameMap.has(legEvent);
+            if (!isValid) {
+                console.warn(`[Validation] Discarding invalid game: ${leg.event}`);
+            }
+            return isValid;
+        });
+        return validated;
     } catch (error) {
-        console.warn(`⚠️ Elite validation failed for ${sportKey}, using AI proposals:`, error.message);
+        console.warn(`⚠️ Elite validation failed for ${sportKey}, using raw AI proposals:`, error.message);
         return proposedLegs || [];
     }
 }
@@ -147,7 +153,14 @@ class AIService {
       
       parlayData.legs = this._ensureLegsHaveOdds(parlayData.legs);
       const validatedLegs = await eliteGameValidation(sportKey, parlayData.legs, options.horizonHours || 72);
-      parlayData.legs = validatedLegs.length > 0 ? validatedLegs.slice(0, numLegs) : parlayData.legs.slice(0, numLegs);
+      
+      // If validation returns results, use them. Otherwise, trust the AI's output as a last resort.
+      if (validatedLegs.length > 0) {
+        parlayData.legs = validatedLegs.slice(0, numLegs);
+      } else {
+        console.warn(`[Web Mode] Could not validate any AI-proposed games against real schedules. Using AI output directly.`);
+        parlayData.legs = parlayData.legs.slice(0, numLegs);
+      }
       
       parlayData.parlay_price_decimal = parlayDecimal(parlayData.legs);
       parlayData.parlay_price_american = decimalToAmerican(parlayData.parlay_price_decimal);
