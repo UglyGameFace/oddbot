@@ -11,6 +11,7 @@ class RedisService {
     this.connectionEstablished = false;
     this.connectionAttempts = 0;
     this.maxConnectionAttempts = 3;
+    this.syntaxErrorCount = 0; // Add syntax error counter
 
     if (env.REDIS_URL) {
       console.log('🔄 RedisService: Initializing Redis connection...');
@@ -45,6 +46,7 @@ class RedisService {
           reconnectOnError: (err) => {
             const errorMessage = err.message.toLowerCase();
             if (errorMessage.includes('syntax error')) {
+              this.syntaxErrorCount++; // Increment on syntax error
               return false; // Don't reconnect for syntax errors
             }
             return true;
@@ -58,6 +60,7 @@ class RedisService {
           const errorMessage = error.message.toLowerCase();
           
           if (errorMessage.includes('syntax error')) {
+            this.syntaxErrorCount++; // Increment on syntax error
             return; // Don't treat syntax errors as connection failures
           }
           
@@ -157,12 +160,13 @@ class RedisService {
         return await originalEval.apply(this, [script, keysCount, ...args]);
       } catch (error) {
         if (error.message.includes('ERR syntax error')) {
+          this.syntaxErrorCount++; // Increment on syntax error
           console.error('❌ RedisService: EVAL syntax error:', error.message);
           throw new Error(`Lua script execution failed: ${error.message}`);
         }
         throw error;
       }
-    };
+    }.bind(this); // Bind 'this' to access syntaxErrorCount
 
     console.log('✅ RedisService: Command safety wrappers applied');
   }
@@ -234,6 +238,14 @@ class RedisService {
 
   isConnected() {
     return this.connectionEstablished && this.client && this.client.status === 'ready';
+  }
+
+  getSyntaxErrorCount() {
+    return this.syntaxErrorCount;
+  }
+
+  resetSyntaxErrorCount() {
+    this.syntaxErrorCount = 0;
   }
 }
 
