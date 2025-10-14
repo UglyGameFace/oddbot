@@ -9,7 +9,7 @@ const TZ = env.TIMEZONE || 'America/New_York';
 const WEB_TIMEOUT_MS = 30000;
 
 const AI_MODELS = {
-  perplexity: "sonar-large-32k-online"
+  perplexity: "sonar-pro"
 };
 
 function americanToDecimal(a) {
