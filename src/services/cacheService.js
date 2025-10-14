@@ -121,12 +121,12 @@ class CacheService {
     try {
       return await operation(this.redis);
     } catch (error) {
-      const errorMsg = error.message.toLowerCase();
+      const errorMsg = error && error.message ? String(error.message).toLowerCase() : 'unknown redis error';
       
       // Don't log syntax errors to reduce noise
       if (!errorMsg.includes('syntax error')) {
-        console.error(`❌ CacheService: Redis command failed (${context}):`, error.message);
-        sentryService.captureError(error, {
+        console.error(`❌ CacheService: Redis command failed (${context}):`, (error && error.message) ? error.message : error);
+        sentryService.captureError(error instanceof Error ? error : new Error(String(error)), {
           component: 'cache_service',
           operation: context
         });
