@@ -228,7 +228,9 @@ class GamesService {
 
   async getGamesForSport(sportKey, options = {}) {
     await this._ensureInitialized();
-    await this._incrementRequestCount(sportKey);
+    if (sportKey) {
+        await this._incrementRequestCount(sportKey);
+    }
     
     const {
       includeOdds = true,
@@ -238,12 +240,12 @@ class GamesService {
       forceRefresh = false
     } = options;
 
-    const cacheKey = `games_${sportKey}_${hoursAhead}_${includeOdds}_${includeLive}_v2`;
+    const cacheKey = `games_${sportKey || 'all'}_${hoursAhead}_${includeOdds}_${includeLive}_v2`;
 
     if (forceRefresh) {
       try {
         await cacheService.deleteKey(cacheKey);
-        console.log(`🗑️ GamesService: Force refresh - cleared cache for ${sportKey}`);
+        console.log(`🗑️ GamesService: Force refresh - cleared cache for ${sportKey || 'all'}`);
       } catch (error) {
         console.warn(`⚠️ GamesService: Failed to clear cache for force refresh:`, error.message);
       }
@@ -251,6 +253,13 @@ class GamesService {
 
     try {
       const fetchAndProcessGames = async () => {
+        if (!sportKey) {
+            const allSports = await this.getAvailableSports();
+            const gamePromises = allSports.map(s => this.getGamesForSport(s.sport_key, options));
+            const results = await Promise.allSettled(gamePromises);
+            return results.filter(r => r.status === 'fulfilled').flatMap(r => r.value);
+        }
+
         console.log(`🔄 GamesService: Fetching fresh games for ${sportKey}...`);
         let games = [];
         let source = 'unknown';
@@ -315,19 +324,64 @@ class GamesService {
           { context: { sport: sportKey, operation: 'getGamesForSport', includeOdds, hoursAhead }, fallbackOnError: true, lockMs: 15000 }
         );
       } else {
-        console.log(`🔄 GamesService: Bypassing cache for ${sportKey} games...`);
+        console.log(`🔄 GamesService: Bypassing cache for ${sportKey || 'all'} games...`);
         return await fetchAndProcessGames();
       }
 
     } catch (error) {
-      console.error(`❌ GamesService: CRITICAL failure for ${sportKey}:`, error.message);
+      console.error(`❌ GamesService: CRITICAL failure for ${sportKey || 'all'}:`, error.message);
       
       if (error instanceof TimeoutError) {
-        console.warn(`⏰ GamesService: Timeout for ${sportKey}, returning empty results`);
+        console.warn(`⏰ GamesService: Timeout for ${sportKey || 'all'}, returning empty results`);
         return [];
       }
       
       throw error;
+    }
+  }
+
+  async getGameById(eventId) {
+    await this._ensureInitialized();
+    const cacheKey = `game_by_id_${eventId}_v2`;
+
+    try {
+      return await cacheService.getOrSetJSON(
+        cacheKey,
+        CACHE_TTL.GAMES_DATA, // Use a reasonable TTL
+        async () => {
+          console.log(`🔍 GamesService: Fetching game by ID: ${eventId}`);
+          
+          // 1. Try database first (most efficient)
+          try {
+            const dbGame = await databaseService.getGameById(eventId);
+            if (dbGame) {
+              console.log(`✅ GamesService: Found game ${eventId} in database.`);
+              return dbGame;
+            }
+          } catch (dbError) {
+            console.warn(`⚠️ GamesService: Database lookup for game ${eventId} failed:`, dbError.message);
+          }
+
+          // 2. Fallback: Search through all available sports' games
+          console.log(`🔄 GamesService: Game ${eventId} not in DB, searching all sports...`);
+          const sports = await this.getAvailableSports();
+          for (const sport of sports) {
+            const games = await this.getGamesForSport(sport.sport_key, { useCache: false });
+            const foundGame = games.find(g => g.event_id === eventId);
+            if (foundGame) {
+              console.log(`✅ GamesService: Found game ${eventId} in ${sport.sport_key}.`);
+              return foundGame;
+            }
+          }
+          
+          console.warn(`⚠️ GamesService: Could not find game with ID: ${eventId}`);
+          return null;
+        },
+        { context: { operation: 'getGameById', eventId }, fallbackOnError: true }
+      );
+    } catch (error) {
+      console.error(`❌ GamesService: CRITICAL failure getting game by ID ${eventId}:`, error.message);
+      return null;
     }
   }
 
