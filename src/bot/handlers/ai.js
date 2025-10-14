@@ -82,7 +82,7 @@ export function registerAICallbacks(bot) {
           break;
         case 'sport':
           state.sportKey = parts.slice(2).join('_');
-          state.page = 0; // Reset game page
+          state.page = 0;
           await setUserState(chatId, state);
           await sendGameSelection(bot, chatId, message.message_id);
           break;
@@ -236,7 +236,7 @@ async function executeAiRequest(bot, chatId, messageId = null) {
     if (messageId) {
         sentMessage = { chat: { id: chatId }, message_id: messageId };
     } else {
-        sentMessage = await bot.sendMessage(chatId, '🤖 <b>Analyzing...</b>', { parse_mode: 'HTML' });
+        sentMessage = await bot.sendMessage(chatId, '🤖 <b>Analyzing... Please wait.</b>', { parse_mode: 'HTML' });
     }
     const state = await getUserState(chatId);
     const { sportKey, numLegs, mode, betType, aiModel, quantitativeMode, gameId } = state || {};
@@ -249,12 +249,12 @@ async function executeAiRequest(bot, chatId, messageId = null) {
     const gameTitle = game ? `${game.away_team} @ ${game.home_team}` : 'Selected Game';
     
     const sportTitle = getSportEmoji(sportKey) + ' ' + getSportTitle(sportKey);
-    const text = `🤖 <b>Analyzing...</b>\n\n` +
+    const text = `🤖 <b>Analyzing... This may take up to 90 seconds.</b>\n\n` +
                  `<b>Game:</b> ${escapeHTML(gameTitle)}\n`+
                  `<b>Strategy:</b> ${escapeHTML(numLegs)}-Leg Parlay\n` +
                  `<b>Sport:</b> ${escapeHTML(sportTitle)}\n` +
                  `<b>Mode:</b> ${escapeHTML(mode.toUpperCase())}\n\n` +
-                 `<i>Scanning the market for value and running quantitative checks...</i>`;
+                 `<i>The AI is performing deep web research and running quantitative checks...</i>`;
 
     await safeEditMessage(chatId, sentMessage.message_id, text, { parse_mode: 'HTML' });
 
@@ -268,19 +268,21 @@ async function executeAiRequest(bot, chatId, messageId = null) {
         await sendParlayResult(bot, chatId, parlay, state, mode, sentMessage.message_id);
     } catch (error) {
         console.error('AI handler execution error:', error.message);
-        const errorMessage = `❌ Critical error during analysis: <code>${escapeHTML(error.message)}</code>`;
-        await safeEditMessage(chatId, sentMessage.message_id, errorMessage, { parse_mode: 'HTML' });
+        const errorMessage = `❌ <b>AI Analysis Failed</b>\n\nThe AI provider failed to generate a parlay after multiple attempts. This can happen during periods of high demand or if the selected game has limited available data.\n\n` +
+                             `<i>Please try again in a few moments or select a different game.</i>\n\n` +
+                             `<b>Error Details:</b> <code>${escapeHTML(error.message)}</code>`;
+        await safeEditMessage(chatId, sentMessage.message_id, errorMessage, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔄 Try Again', callback_data: `ai_game_${gameId}` }, { text: '« Change Game', callback_data: 'ai_back_game' }]] } });
     }
 }
 
 async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
-    const { sportKey } = state;
+    const { sportKey, numLegs } = state;
     const { legs, parlay_price_american, quantitative_analysis, research_metadata, portfolio_construction } = parlay;
     const sportTitle = getSportTitle(sportKey);
     
-    if (!legs || legs.length < state.numLegs) {
+    if (!legs || legs.length < numLegs) {
         const errorText = `❌ <b>No Profitable Parlay Found</b>\n\n` +
-                         `The AI and quantitative models could not construct a valid ${state.numLegs}-leg parlay with a positive expected value (+EV) from the selected game.\n\n`+
+                         `The AI and quantitative models could not construct a valid ${numLegs}-leg parlay with a positive expected value (+EV) from the selected game.\n\n`+
                          `This is a feature, not a bug. A disciplined analyst does not force a bet when there's no value. Try another game or adjust your settings.`;
         const keyboard = [[{ text: '🔄 Try a Different Game', callback_data: 'ai_back_game' }, { text: '🔄 New Sport', callback_data: 'ai_back_sport' }]];
         return safeEditMessage(chatId, messageId, errorText, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
