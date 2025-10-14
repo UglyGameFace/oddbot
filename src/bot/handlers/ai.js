@@ -246,7 +246,8 @@ async function executeAiRequest(bot, chatId, messageId = null) {
     }
 
     const game = await gamesService.getGameById(gameId);
-
+    
+    // CRITICAL FIX: Check for fallback data source
     if (!game || game.source === 'fallback') {
         const errorMessage = `❌ <b>Cannot Analyze Game: Invalid Data Source</b>\n\n` +
                              `The bot has detected that its live odds providers are failing. This usually means your API keys are expired or invalid.\n\n` +
