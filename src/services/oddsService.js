@@ -6,6 +6,7 @@ import { withTimeout, TimeoutError } from '../utils/asyncUtils.js';
 import { TheOddsProvider } from './providers/theOddsProvider.js';
 import { SportRadarProvider } from './providers/sportRadarProvider.js';
 import { ApiSportsProvider } from './providers/apiSportsProvider.js';
+import { ApiNinjaProvider } from './providers/apiNinjaProvider.js';
 
 // Cache configuration
 const CACHE_TTL = {
@@ -277,6 +278,14 @@ class OddsService {
       console.log('✅ The Odds API provider registered');
     } else {
       console.warn('❌ The Odds API provider SKIPPED - invalid or missing key');
+    }
+    
+    // API-Ninja Provider
+    if (env.ODDS_API_NINJA_KEY && !env.ODDS_API_NINJA_KEY.includes('expired') && env.ODDS_API_NINJA_KEY.length >= 10) {
+      this.providers.push(new ApiNinjaProvider(env.ODDS_API_NINJA_KEY));
+      console.log('✅ API-Ninja provider registered');
+    } else {
+      console.warn('❌ API-Ninja provider SKIPPED - invalid or missing key');
     }
 
     // SportRadar API Provider
