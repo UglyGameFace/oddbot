@@ -64,21 +64,20 @@ async function eliteGameValidation(sportKey, proposedLegs, hours) {
     try {
         const realGames = await gamesService.getVerifiedRealGames(sportKey, hours);
         if (realGames.length === 0) {
-            // If no real games are found, we can't validate, so we trust the AI had to invent.
-            // This is a fallback for when web scraping might fail.
             console.warn(`⚠️ Elite validation skipped for ${sportKey}: No real games found to validate against.`);
             return proposedLegs || [];
         }
         const realGameMap = new Map(realGames.map(game => [`${(game.away_team || '').toLowerCase().trim()} @ ${(game.home_team || '').toLowerCase().trim()}`, game]));
 
-        const validated = (proposedLegs || []).filter(leg => {
+        const validated = (proposedLegs || []).map(leg => {
             const legEvent = (leg.event || '').toLowerCase().trim();
-            const isValid = realGameMap.has(legEvent);
-            if (!isValid) {
-                console.warn(`[Validation] Discarding invalid game: ${leg.event}`);
+            const realGame = realGameMap.get(legEvent);
+            if (realGame) {
+                return { ...leg, commence_time: realGame.commence_time };
             }
-            return isValid;
-        });
+            console.warn(`[Validation] Discarding invalid game: ${leg.event}`);
+            return null;
+        }).filter(Boolean);
         return validated;
     } catch (error) {
         console.warn(`⚠️ Elite validation failed for ${sportKey}, using raw AI proposals:`, error.message);
@@ -154,13 +153,11 @@ class AIService {
       parlayData.legs = this._ensureLegsHaveOdds(parlayData.legs);
       const validatedLegs = await eliteGameValidation(sportKey, parlayData.legs, options.horizonHours || 72);
       
-      // If validation returns results, use them. Otherwise, trust the AI's output as a last resort.
-      if (validatedLegs.length > 0) {
-        parlayData.legs = validatedLegs.slice(0, numLegs);
-      } else {
-        console.warn(`[Web Mode] Could not validate any AI-proposed games against real schedules. Using AI output directly.`);
-        parlayData.legs = parlayData.legs.slice(0, numLegs);
+      if (validatedLegs.length < numLegs) {
+          console.warn(`[Web Mode] Validation failed to find all requested legs. Found ${validatedLegs.length}/${numLegs}. Using what was found.`);
       }
+
+      parlayData.legs = validatedLegs.length > 0 ? validatedLegs.slice(0, numLegs) : parlayData.legs.slice(0, numLegs);
       
       parlayData.parlay_price_decimal = parlayDecimal(parlayData.legs);
       parlayData.parlay_price_american = decimalToAmerican(parlayData.parlay_price_decimal);
@@ -172,7 +169,7 @@ class AIService {
         parlayData.quantitative_analysis = { note: 'Advanced analysis temporarily limited', riskAssessment: { overallRisk: 'CALCULATED' } };
       }
       
-      parlayData.research_metadata = { quantum_mode: true, real_games_validated: validatedLegs.length > 0, prompt_strategy: 'quantum_web' };
+      parlayData.research_metadata = { quantum_mode: true, real_games_validated: validatedLegs.length, prompt_strategy: 'quantum_web' };
       return parlayData;
   }
   
@@ -258,6 +255,7 @@ class AIService {
         
         const parlayLegs = topPlays.map(play => ({
             event: `${play.game.away_team} @ ${play.game.home_team}`,
+            commence_time: play.game.commence_time,
             market: play.market.key,
             selection: `${play.outcome.name} ${play.outcome.point || ''}`.trim(),
             odds: {
@@ -296,11 +294,17 @@ class AIService {
 
   async _generateFallbackParlay(sportKey, numLegs, betType) {
       console.log(`🎯 Generating QUANTUM fallback for ${sportKey}`);
-      const prompt = ElitePromptService.getFallbackPrompt(sportKey, numLegs, betType);
+      const scheduleContext = await buildEliteScheduleContext(sportKey, 168); // Wider window for fallback
+      const prompt = ElitePromptService.getFallbackPrompt(sportKey, numLegs, betType, { scheduleInfo: scheduleContext });
       const parlayData = await this._callAIProvider(prompt);
       
+      if (!parlayData.legs || !Array.isArray(parlayData.legs)) throw new Error('AI response lacked valid parlay structure in fallback');
+
       parlayData.legs = this._ensureLegsHaveOdds(parlayData.legs);
       
+      const validatedLegs = await eliteGameValidation(sportKey, parlayData.legs, 168);
+      parlayData.legs = validatedLegs.length > 0 ? validatedLegs.slice(0, numLegs) : parlayData.legs.slice(0, numLegs);
+
       parlayData.parlay_price_decimal = parlayDecimal(parlayData.legs);
       parlayData.parlay_price_american = decimalToAmerican(parlayData.parlay_price_decimal);
       
