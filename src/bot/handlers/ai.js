@@ -4,6 +4,7 @@ import gamesService from '../../services/gamesService.js';
 import { setUserState, getUserState } from '../state.js';
 import { getSportEmoji, getSportTitle, sortSports } from '../../services/sportsService.js';
 import { safeEditMessage } from '../../bot.js';
+import { formatGameTimeTZ } from '../../utils/botUtils.js';
 
 const escapeHTML = (text) => {
   if (typeof text !== 'string' && typeof text !== 'number') return '';
@@ -265,7 +266,10 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
         const pick = escapeHTML(leg.selection || 'Unknown pick');
         const oddsValue = leg.odds?.american;
         const odds = (oddsValue && Number.isFinite(oddsValue)) ? (oddsValue > 0 ? `+${oddsValue}` : oddsValue) : '';
+        const gameTime = leg.commence_time ? formatGameTimeTZ(leg.commence_time) : 'Time TBD';
+
         response += `<b>Leg ${index + 1}: ${game}</b>\n`;
+        response += `  <b>Time:</b> ${escapeHTML(gameTime)}\n`;
         response += `  <b>Pick:</b> ${pick} (${escapeHTML(odds)})\n`;
         if (leg.quantum_analysis?.analytical_basis) {
             response += `  <i>Rationale: ${escapeHTML(leg.quantum_analysis.analytical_basis)}</i>\n\n`;
