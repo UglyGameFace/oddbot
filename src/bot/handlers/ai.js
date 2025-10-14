@@ -1,7 +1,7 @@
 // src/bot/handlers/ai.js - FINAL, COMPLETE, AND CORRECTED
 import aiService from '../../services/aiService.js';
 import gamesService from '../../services/gamesService.js';
-import { setUserState, getUserState } from '../state.js';
+import { getAIConfig, setUserState, getUserState } from '../state.js';
 import { getSportEmoji, getSportTitle, sortSports } from '../../services/sportsService.js';
 import { safeEditMessage } from '../../bot.js';
 import { formatGameTimeTZ } from '../../utils/botUtils.js';
@@ -48,24 +48,6 @@ export function registerAI(bot) {
       await bot.sendMessage(chatId, '❌ Failed to start AI Parlay Builder. Please try again.');
     }
   });
-
-  bot.onText(/^\/ai_quick(?:\s|$)/, async (msg) => {
-    const chatId = msg.chat.id;
-    try {
-      await setUserState(chatId, {
-        sportKey: 'basketball_nba',
-        numLegs: 3,
-        mode: 'web',
-        betType: 'mixed',
-        aiModel: 'perplexity',
-        quantitativeMode: 'conservative'
-      });
-      await executeAiRequest(bot, chatId);
-    } catch (error) {
-      console.error('❌ AI quick command error:', error);
-      await bot.sendMessage(chatId, '❌ Quick AI parlay failed. Please try /ai for full builder.');
-    }
-  });
 }
 
 export function registerAICallbacks(bot) {
@@ -89,14 +71,20 @@ export function registerAICallbacks(bot) {
     try {
       switch (action) {
         case 'page':
-          state.page = parseInt(parts[2], 10) || 0;
+          const newPage = parseInt(parts[2], 10) || 0;
+          state.page = newPage;
           await setUserState(chatId, state);
-          await sendSportSelection(bot, chatId, message.message_id, state.page);
+          if (parts.length > 3 && parts[3] === 'games') {
+              await sendGameSelection(bot, chatId, message.message_id, newPage);
+          } else {
+              await sendSportSelection(bot, chatId, message.message_id, newPage);
+          }
           break;
         case 'sport':
           state.sportKey = parts.slice(2).join('_');
+          state.page = 0; // Reset game page
           await setUserState(chatId, state);
-          await sendGameSelection(bot, chatId, message.message_id); // New Step: Select a game
+          await sendGameSelection(bot, chatId, message.message_id);
           break;
         case 'game':
           state.gameId = parts.slice(2).join('_');
@@ -127,7 +115,7 @@ export function registerAICallbacks(bot) {
         case 'back':
           const to = parts[2];
           if (to === 'sport') await sendSportSelection(bot, chatId, message.message_id, state.page || 0);
-          if (to === 'game') await sendGameSelection(bot, chatId, message.message_id);
+          if (to === 'game') await sendGameSelection(bot, chatId, message.message_id, state.page || 0);
           if (to === 'legs') await sendLegSelection(bot, chatId, message.message_id);
           if (to === 'mode') await sendModeSelection(bot, chatId, message.message_id);
           if (to === 'bettype') await sendBetTypeSelection(bot, chatId, message.message_id);
@@ -166,16 +154,32 @@ async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
     else await bot.sendMessage(chatId, text, opts);
 }
 
-async function sendGameSelection(bot, chatId, messageId) {
+async function sendGameSelection(bot, chatId, messageId, page = 0) {
     const state = await getUserState(chatId);
-    const games = await gamesService.getGamesForSport(state.sportKey, { hoursAhead: 72 });
+    const config = await getAIConfig(chatId);
+    const games = await gamesService.getGamesForSport(state.sportKey, { hoursAhead: config.horizonHours || 72 });
+
     if (!games || games.length === 0) {
-        const text = '⚠️ No upcoming games found for this sport. Please select another.';
+        const text = '⚠️ No upcoming games found for this sport within the selected time horizon. Please select another sport or adjust your settings.';
         return safeEditMessage(chatId, messageId, text, { reply_markup: { inline_keyboard: [[{ text: '« Back to Sports', callback_data: 'ai_back_sport' }]] } });
     }
-    const keyboard = games.slice(0, 20).map(game => {
-        return [{ text: `${game.away_team} @ ${game.home_team}`, callback_data: `ai_game_${game.event_id}` }];
+
+    const totalPages = Math.ceil(games.length / PAGE_SIZE) || 1;
+    page = Math.min(Math.max(0, page), totalPages - 1);
+
+    const keyboard = pageOf(games, page).map(game => {
+        const gameTime = formatGameTimeTZ(game.commence_time);
+        return [{ text: `${game.away_team} @ ${game.home_team}\n(${gameTime})`, callback_data: `ai_game_${game.event_id}` }];
     });
+    
+    if (totalPages > 1) {
+        const nav = [];
+        if (page > 0) nav.push({ text: '‹ Prev', callback_data: `ai_page_${page - 1}_games` });
+        nav.push({ text: `Page ${page + 1}/${totalPages}`, callback_data: 'ai_noop' });
+        if (page < totalPages - 1) nav.push({ text: 'Next ›', callback_data: `ai_page_${page + 1}_games` });
+        keyboard.push(nav);
+    }
+
     keyboard.push([{ text: '« Back to Sports', callback_data: 'ai_back_sport' }]);
     const text = `🤖 <b>AI Parlay Builder</b>\n\n<b>Step 2:</b> Select a game to analyze.`;
     const opts = { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
@@ -257,7 +261,7 @@ async function executeAiRequest(bot, chatId, messageId = null) {
     try {
         const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, { 
             quantitativeMode, 
-            horizonHours: 72,
+            horizonHours: (await getAIConfig(chatId)).horizonHours || 72,
             chatId: chatId,
             gameContext: game 
         });
@@ -274,9 +278,9 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
     const { legs, parlay_price_american, quantitative_analysis, research_metadata, portfolio_construction } = parlay;
     const sportTitle = getSportTitle(sportKey);
     
-    if (!legs || legs.length === 0) {
-        const errorText = `❌ <b>No Profitable Bets Found</b>\n\n` +
-                         `The AI and quantitative models scanned all available markets but could not construct a valid, positive Expected Value (+EV) parlay based on your criteria.\n\n`+
+    if (!legs || legs.length < state.numLegs) {
+        const errorText = `❌ <b>No Profitable Parlay Found</b>\n\n` +
+                         `The AI and quantitative models could not construct a valid ${state.numLegs}-leg parlay with a positive expected value (+EV) from the selected game.\n\n`+
                          `This is a feature, not a bug. A disciplined analyst does not force a bet when there's no value. Try another game or adjust your settings.`;
         const keyboard = [[{ text: '🔄 Try a Different Game', callback_data: 'ai_back_game' }, { text: '🔄 New Sport', callback_data: 'ai_back_sport' }]];
         return safeEditMessage(chatId, messageId, errorText, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
