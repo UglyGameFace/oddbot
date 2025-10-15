@@ -9,33 +9,33 @@ export class SportRadarProvider {
   constructor(apiKey) {
     this.apiKey = apiKey;
     this.name = 'sportradar';
-    this.priority = 20; // Lower priority than OddsAPI and Ninja, higher than others
+    this.priority = 20; // Lower priority than OddsAPI and Ninja
   }
 
   async fetchSportOdds(sportKey, options = {}) {
-    const endpoint = this._getEndpointForSport(sportKey, 'summary');
+    const endpoint = this._getEndpointForSport(sportKey);
     if (!endpoint) {
       console.warn(`[SportRadar] No summary endpoint configured for ${sportKey}`);
       return [];
     }
 
     try {
-      const summaryUrl = `${SR_BASE}${endpoint}?api_key=${this.apiKey}`;
-      const summaryResponse = await withTimeout(axios.get(summaryUrl), 8000, `sportradar_summary_${sportKey}`);
-      const games = summaryResponse.data.games || [];
+      const today = new Date();
+      const year = today.getFullYear();
+      const month = String(today.getMonth() + 1).padStart(2, '0');
+      const day = String(today.getDate()).padStart(2, '0');
       
-      const oddsEndpoint = this._getEndpointForSport(sportKey, 'odds');
-      if (!oddsEndpoint) return this.transformSummaryData(games, sportKey);
-
-      const oddsUrl = `${SR_BASE}${oddsEndpoint}?api_key=${this.apiKey}`;
-      const oddsResponse = await withTimeout(axios.get(oddsUrl), 8000, `sportradar_odds_${sportKey}`);
-      const oddsData = oddsResponse.data;
-
-      return this.combineSummaryAndOdds(games, oddsData, sportKey);
+      const url = `${SR_BASE}${endpoint}/${year}/${month}/${day}/schedule.json?api_key=${this.apiKey}`;
+      
+      const response = await withTimeout(axios.get(url), 8000, `sportradar_schedule_${sportKey}`);
+      await rateLimitService.saveProviderQuota(this.name, response.headers);
+      
+      const games = response.data.games || [];
+      return this.transformScheduleData(games, sportKey);
 
     } catch (error) {
       if (error.response && error.response.status === 403) {
-          console.error(`❌ SportRadar 403 Forbidden: Your API key for the "${this._getFeedName(sportKey)}" feed may not be active. Please verify your subscriptions on the Sportradar dashboard.`);
+          console.error(`❌ SportRadar 403 Forbidden: Your API key for the "${this._getFeedName(sportKey)}" feed may not be active or the URL path is incorrect for your plan. Please verify your subscriptions on the Sportradar dashboard.`);
       } else {
           console.error(`[SportRadar] Failed to fetch data for ${sportKey}:`, error.message);
       }
@@ -43,48 +43,51 @@ export class SportRadarProvider {
     }
   }
 
-  combineSummaryAndOdds(summaryGames, oddsData, sportKey) {
-      const oddsMap = new Map((oddsData.games || []).map(g => [g.id, g.consensus_odds]));
-      
-      return summaryGames.map(game => {
-          const gameOdds = oddsMap.get(game.id);
-          return {
-              ...game,
-              odds: gameOdds,
-              sport_key: sportKey
-          };
-      });
-  }
+  transformScheduleData(games, sportKey) {
+    if (!Array.isArray(games)) {
+      console.warn('⚠️ SportRadar (schedule) returned non-array data');
+      return [];
+    }
 
-  transformSummaryData(data, sportKey) {
-    if (!data || !Array.isArray(data)) return [];
-    return data.map(game => ({
+    return games.reduce((acc, game) => {
+      if (!game?.id || !game?.scheduled || !game?.home || !game?.away) {
+        return acc;
+      }
+      
+      const enhancedGame = {
         id: game.id,
-        commence_time: game.scheduled,
-        home_team: game.home?.name,
-        away_team: game.away?.name,
+        event_id: game.id.replace('sr:match:', ''),
         sport_key: sportKey,
-        bookmakers: [] // No odds in summary data
-    }));
+        commence_time: game.scheduled,
+        home_team: game.home.name,
+        away_team: game.away.name,
+        bookmakers: [], // SportRadar schedule endpoint does not contain odds.
+        sport_title: this.titleFromKey(sportKey),
+        source: 'sportradar'
+      };
+
+      acc.push(enhancedGame);
+      return acc;
+    }, []);
   }
   
-  _getEndpointForSport(sportKey, type) {
+  _getEndpointForSport(sportKey) {
+    // These paths are for daily schedules, which are often included in base packages.
+    // NOTE: These may need to be adjusted based on the user's specific SportRadar subscription.
     const mapping = {
-      americanfootball_nfl: { summary: '/nfl/official/v7/en/games/current_season.json', odds: '/nfl/official/v7/en/odds/live.json' },
-      basketball_nba: { summary: '/nba/trial/v8/en/games/current_season.json', odds: '/nba/trial/v8/en/odds/live.json' },
+      americanfootball_nfl: '/nfl/official/trial/v7/en/games',
+      basketball_nba: '/nba/trial/v8/en/games',
+      icehockey_nhl: '/nhl/trial/v7/en/games',
+      baseball_mlb: '/mlb/trial/v7/en/games',
     };
-    return mapping[sportKey] ? mapping[sportKey][type] : null;
+    return mapping[sportKey];
   }
   
   _getFeedName(sportKey){
       const nameMap = {
-          americanfootball_nfl: "US Football Odds",
-          basketball_nba: "NBA Odds"
+          americanfootball_nfl: "NFL",
+          basketball_nba: "NBA",
+          icehockey_nhl: "NHL",
+          baseball_mlb: "MLB"
       };
-      return nameMap[sportKey] || "Unknown";
-  }
-
-  async getProviderStatus() {
-    return { name: this.name, status: 'active', priority: this.priority };
-  }
-}
+      return name
