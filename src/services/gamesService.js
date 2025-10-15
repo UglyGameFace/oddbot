@@ -301,7 +301,7 @@ class GamesService {
   async getGameById(eventId) {
     await this._ensureInitialized();
     const cacheKey = `game_by_id_${eventId}_v3`;
-
+  
     try {
       return await cacheService.getOrSetJSON(
         cacheKey,
@@ -319,7 +319,7 @@ class GamesService {
           } catch (dbError) {
             console.warn(`⚠️ GamesService: Database lookup for game ${eventId} failed:`, dbError.message);
           }
-
+  
           // 2. Fallback: Search through all available sports' games
           console.log(`🔄 GamesService: Game ${eventId} not in DB, searching all sports...`);
           const sports = await this.getAvailableSports();
@@ -334,8 +334,7 @@ class GamesService {
           
           console.warn(`⚠️ GamesService: Could not find game with ID: ${eventId}`);
           return null;
-        },
-        { context: { operation: 'getGameById', eventId }, fallbackOnError: true }
+        }
       );
     } catch (error) {
       console.error(`❌ GamesService: CRITICAL failure getting game by ID ${eventId}:`, error.message);
@@ -394,12 +393,10 @@ class GamesService {
           console.log(`📅 GamesService: VERIFIED - ${uniqueGames.length} real ${sportKey} games in next ${hours}h`);
           
           return uniqueGames;
-        },
-        { context: { operation: 'getVerifiedRealGames', sport: sportKey }, fallbackOnError: true }
+        }
       );
-      
     } catch (error) {
-      console.error('❌ GamesService: Verified real games fetch failed:', error);
+      console.error('❌ GamesService: Verified real games fetch failed:', error.message);
       return [];
     }
   }
@@ -594,6 +591,7 @@ class GamesService {
           has_mapping: !!COMPREHENSIVE_SPORTS[key]
         });
       } else {
+        const existing = seen.get(key);
         existing.game_count = existing.game_count || sport.game_count || 0;
         existing.sport_title = existing.sport_title || sport.sport_title;
         existing.active = existing.active || sport.active;
