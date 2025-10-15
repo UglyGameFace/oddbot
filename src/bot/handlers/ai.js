@@ -159,15 +159,20 @@ async function sendGameSelection(bot, chatId, messageId, page = 0) {
     const config = await getAIConfig(chatId);
     const games = await gamesService.getGamesForSport(state.sportKey, { hoursAhead: config.horizonHours || 72 });
 
-    if (!games || games.length === 0) {
-        const text = '⚠️ No upcoming games found for this sport within the selected time horizon. Please select another sport or adjust your settings.';
-        return safeEditMessage(chatId, messageId, text, { reply_markup: { inline_keyboard: [[{ text: '« Back to Sports', callback_data: 'ai_back_sport' }]] } });
+    const realGames = games.filter(g => g.source !== 'fallback');
+
+    if (!realGames || realGames.length === 0) {
+        const errorMessage = `❌ <b>No Real Games Found</b>\n\nAll live odds providers failed to return data for this sport. This usually means your API keys are expired, invalid, or your plan doesn't include this sport.\n\nPlease check your API keys and try again.`;
+        return safeEditMessage(chatId, messageId, errorMessage, { 
+            parse_mode: 'HTML', 
+            reply_markup: { inline_keyboard: [[{ text: '« Back to Sports', callback_data: 'ai_back_sport' }]] } 
+        });
     }
 
-    const totalPages = Math.ceil(games.length / PAGE_SIZE) || 1;
+    const totalPages = Math.ceil(realGames.length / PAGE_SIZE) || 1;
     page = Math.min(Math.max(0, page), totalPages - 1);
 
-    const keyboard = pageOf(games, page).map(game => {
+    const keyboard = pageOf(realGames, page).map(game => {
         const gameTime = formatGameTimeTZ(game.commence_time);
         return [{ text: `${game.away_team} @ ${game.home_team}\n(${gameTime})`, callback_data: `ai_game_${game.event_id}` }];
     });
@@ -247,7 +252,6 @@ async function executeAiRequest(bot, chatId, messageId = null) {
 
     const game = await gamesService.getGameById(gameId);
     
-    // CRITICAL FIX: Check for fallback data source
     if (!game || game.source === 'fallback') {
         const errorMessage = `❌ <b>Cannot Analyze Game: Invalid Data Source</b>\n\n` +
                              `The bot has detected that its live odds providers are failing. This usually means your API keys are expired or invalid.\n\n` +
