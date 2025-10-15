@@ -72,7 +72,16 @@ export class ApiSportsProvider {
       return games;
 
     } catch (error) {
-      console.error(`❌ ApiSportsProvider failed for ${sportKey}:`, error.message);
+      // --- CHANGE START ---
+      // Added specific logging for 401/403 errors to make API key issues more visible in logs.
+      if (error.response?.status === 401) {
+          console.error(`❌ ApiSportsProvider 401 Unauthorized: The API key is invalid, missing, or has no subscription for this sport. Please check your .env file for APISPORTS_API_KEY.`);
+      } else if (error.response?.status === 403) {
+          console.error(`❌ ApiSportsProvider 403 Forbidden: Your API key does not have access to this resource. This could be due to country restrictions or subscription level.`);
+      } else {
+          console.error(`❌ ApiSportsProvider failed for ${sportKey}:`, error.message);
+      }
+      // --- CHANGE END ---
       
       if (!(error instanceof TimeoutError)) {
         sentryService.captureError(error, {
