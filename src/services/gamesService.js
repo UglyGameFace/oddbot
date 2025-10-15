@@ -396,7 +396,7 @@ class GamesService {
         }
       );
     } catch (error) {
-      console.error('❌ GamesService: Verified real games fetch failed:', error.message);
+      console.error('❌ GamesService: Verified real games fetch failed:', error);
       return [];
     }
   }
@@ -572,7 +572,8 @@ class GamesService {
     for (const sport of sortedSports) {
       if (!sport.sport_key) continue;
       const key = sport.sport_key;
-      if (!seen.has(key)) {
+      const existing = seen.get(key);
+      if (!existing) {
         const comprehensiveData = COMPREHENSIVE_SPORTS[key];
         seen.set(key, {
           sport_key: key,
@@ -591,7 +592,6 @@ class GamesService {
           has_mapping: !!COMPREHENSIVE_SPORTS[key]
         });
       } else {
-        const existing = seen.get(key);
         existing.game_count = existing.game_count || sport.game_count || 0;
         existing.sport_title = existing.sport_title || sport.sport_title;
         existing.active = existing.active || sport.active;
