@@ -183,12 +183,14 @@ class FallbackProvider {
     // Return minimal mock data structure
     return [{
       id: `fallback_${sportKey}_${Date.now()}`,
+      event_id: `fallback_${sportKey}_${Date.now()}`,
       sport_key: sportKey,
       sport_title: this._formatSportKey(sportKey),
       commence_time: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // Tomorrow
       home_team: 'Home Team',
       away_team: 'Away Team',
-      bookmakers: []
+      bookmakers: [],
+      source: 'fallback'
     }];
   }
 
