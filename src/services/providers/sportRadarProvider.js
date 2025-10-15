@@ -90,4 +90,40 @@ export class SportRadarProvider {
           icehockey_nhl: "NHL",
           baseball_mlb: "MLB"
       };
-      return name
+      return nameMap[sportKey] || "Unknown";
+  }
+
+  async fetchAvailableSports() {
+    // SportRadar's API structure is sport-specific, so we return a hardcoded list of configured sports.
+    return [
+        { key: 'americanfootball_nfl', title: 'NFL', group: 'American Football' },
+        { key: 'basketball_nba', title: 'NBA', group: 'Basketball' },
+        { key: 'baseball_mlb', title: 'MLB', group: 'Baseball' },
+        { key: 'icehockey_nhl', title: 'NHL', group: 'Hockey' },
+    ];
+  }
+
+  titleFromKey(key) {
+      return this._getFeedName(key) || key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+  }
+
+  async getProviderStatus() {
+    try {
+      const quota = await rateLimitService.getProviderQuota(this.name);
+      return {
+        name: this.name,
+        status: 'active',
+        priority: this.priority,
+        last_quota_check: quota?.at ? new Date(quota.at).toISOString() : null,
+        remaining_requests: quota?.remaining,
+        should_bypass: await rateLimitService.shouldBypassLive(this.name)
+      };
+    } catch (error) {
+      return {
+        name: this.name,
+        status: 'error',
+        error: error.message
+      };
+    }
+  }
+}
