@@ -30,7 +30,11 @@ const env = cleanEnv(process.env, {
   PERPLEXITY_API_KEY: str(),
   THE_ODDS_API_KEY: str(),
   SPORTRADAR_API_KEY: str(),
-  APISPORTS_API_KEY: str(), // FIXED: API-Sports is BACK!
+  // --- CHANGE START ---
+  // This is the only change. It makes the app look for API_SPORTS_KEY if APISPORTS_API_KEY isn't found,
+  // fixing the mismatch between your .env and this config file.
+  APISPORTS_API_KEY: str({ default: process.env.API_SPORTS_KEY || '' }), // FIXED: API-Sports is BACK!
+  // --- CHANGE END ---
   ODDS_API_NINJA_KEY: str({ default: '' }), // NEW: Backup provider
   BETTING_API_KEY: str({ default: '' }), // NEW: Another backup
 
