@@ -1,4 +1,4 @@
-// src/bot.js - FINAL ABSOLUTE FIXED VERSION
+// src/bot.js - FINAL ABSOLUTE FIXED VERSION WITH CACHE WARMUP
 import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
@@ -18,6 +18,10 @@ import { registerSettings } from './bot/handlers/settings.js';
 import { registerSystem } from './bot/handlers/system.js';
 import { registerTools } from './bot/handlers/tools.js';
 import { registerChat } from './bot/handlers/chat.js';
+
+// --- Service imports for cache warmup ---
+import oddsService from './services/oddsService.js';
+import gamesService from './services/gamesService.js';
 
 // --- Global error hooks ---
 process.on('unhandledRejection', (reason, promise) => {
@@ -268,6 +272,18 @@ async function initializeBot() {
       
       if (!readyCheck) {
           throw new Error('Critical services failed to become ready within the startup timeout.');
+      }
+
+      // --- CACHE WARMUP ADDED HERE ---
+      console.log('🔥 Starting cache warmup...');
+      try {
+        await Promise.all([
+          oddsService.warmupCache?.().catch(e => console.warn('Odds cache warmup warning:', e.message)),
+          gamesService.warmupCache?.().catch(e => console.warn('Games cache warmup warning:', e.message))
+        ]);
+        console.log('✅ Cache warmup completed');
+      } catch (error) {
+        console.warn('⚠️ Cache warmup had issues:', error.message);
       }
 
       isServiceReady = true;
