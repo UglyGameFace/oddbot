@@ -56,39 +56,45 @@ export class WebSportsService {
 
   static _parseESPNGeneric($, sportKey) {
     const games = [];
-    // Find all schedule containers which are preceded by a date heading
-    $('.ScheduleTables').find('.Table__Title').each((_, dateEl) => {
-        const dateText = $(dateEl).text().trim();
-        const currentDate = this._parseDate(dateText);
+    let currentDate = null;
 
-        if (currentDate) {
-            // Find the table associated with this date
-            const table = $(dateEl).next('div').find('table');
-            table.find('tbody tr').each((_, rowEl) => {
-                const teams = $(rowEl).find('a[href*="/team/"]');
-                const timeEl = $(rowEl).find('td:nth-child(3) a');
+    // Iterate through all schedule table titles (dates) and content rows
+    $('.Table__Title, .Table__TBODY tr').each((_, element) => {
+        const el = $(element);
 
-                if (teams.length >= 2) {
-                    const awayTeam = $(teams[0]).text().trim();
-                    const homeTeam = $(teams[1]).text().trim();
-                    let gameTime = timeEl.text().trim();
+        // Check if the element is a date heading
+        if (el.is('h2') && el.hasClass('Table__Title')) {
+            const dateText = el.text().trim();
+            const parsedDate = this._parseDate(dateText);
+            if (parsedDate) {
+                currentDate = parsedDate;
+            }
+        } 
+        // Check if the element is a game row and we have a valid current date
+        else if (el.is('tr') && currentDate) {
+            const teams = el.find('a[href*="/team/"]');
+            const timeEl = el.find('td:nth-child(3) a');
+            
+            if (teams.length >= 2) {
+                const awayTeam = $(teams[0]).text().trim();
+                const homeTeam = $(teams[1]).text().trim();
+                let gameTime = timeEl.text().trim();
 
-                    if (awayTeam && homeTeam && gameTime) {
-                        const combinedDateTime = this._combineDateAndTime(currentDate, gameTime);
-                        if (combinedDateTime) {
-                            games.push({
-                                event_id: `web_${awayTeam.replace(/\s/g, '')}_${homeTeam.replace(/\s/g, '')}_${combinedDateTime.getTime()}`,
-                                event: `${awayTeam} @ ${homeTeam}`,
-                                away_team: awayTeam,
-                                home_team: homeTeam,
-                                commence_time: combinedDateTime.toISOString(),
-                                source: 'web',
-                                sport_key: sportKey
-                            });
-                        }
+                if (awayTeam && homeTeam && gameTime) {
+                    const combinedDateTime = this._combineDateAndTime(currentDate, gameTime);
+                    if (combinedDateTime) {
+                        games.push({
+                            event_id: `web_${awayTeam.replace(/\s/g, '')}_${homeTeam.replace(/\s/g, '')}_${combinedDateTime.getTime()}`,
+                            event: `${awayTeam} @ ${homeTeam}`,
+                            away_team: awayTeam,
+                            home_team: homeTeam,
+                            commence_time: combinedDateTime.toISOString(),
+                            source: 'web',
+                            sport_key: sportKey
+                        });
                     }
                 }
-            });
+            }
         }
     });
     return games;
@@ -107,7 +113,7 @@ export class WebSportsService {
           // Handles format like "Tuesday, October 14, 2025"
           const date = new Date(dateText);
           if (!isNaN(date.getTime())) {
-              date.setUTCHours(0,0,0,0); // Use UTC to avoid timezone shifts from the server's local time
+              date.setUTCHours(0,0,0,0); // Use UTC to avoid timezone shifts from the date part
               return date;
           }
       } catch (e) {
@@ -133,8 +139,8 @@ export class WebSportsService {
           // Create a new date object to avoid mutating the original
           const newDate = new Date(date);
           
-          // ESPN times are US/Eastern. During October, this is EDT (UTC-4).
-          // We set the UTC hours to correctly offset this.
+          // Assuming the times from ESPN are US Eastern Time. We convert them to UTC.
+          // In October, EDT is UTC-4.
           newDate.setUTCHours(hours + 4, minutes, 0, 0); 
 
           return newDate;
