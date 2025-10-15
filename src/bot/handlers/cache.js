@@ -1,4 +1,4 @@
-// src/bot/handlers/cache.js - COMPLETELY FIXED
+// src/bot/handlers/cache.js - COMPLETELY FIXED WITH CACHE WARMUP COMMAND
 
 import gamesService from '../../services/gamesService.js';
 import oddsService from '../../services/oddsService.js';
@@ -429,6 +429,107 @@ class CacheHandler {
   }
 
   /**
+   * Cache warmup command - preloads popular data
+   */
+  async warmupCache() {
+    const operationId = `warmup_${Date.now()}`;
+    console.log(`🔥 Starting cache warmup (${operationId})...`);
+    
+    const startTime = Date.now();
+    const results = {
+      operationId,
+      type: 'warmup',
+      startTime: new Date().toISOString(),
+      services: [],
+      totalProcessed: 0,
+      successful: 0,
+      failed: 0
+    };
+
+    this.refreshOperations.set(operationId, {
+      startTime,
+      status: 'running',
+      progress: 0
+    });
+
+    try {
+      // Warm up odds service
+      try {
+        this.refreshOperations.get(operationId).progress = 25;
+        if (oddsService.warmupCache) {
+          await oddsService.warmupCache();
+          results.services.push({ service: 'odds', status: 'success', timestamp: new Date().toISOString() });
+          results.successful++;
+        } else {
+          results.services.push({ service: 'odds', status: 'skipped', message: 'warmupCache method not available', timestamp: new Date().toISOString() });
+        }
+        results.totalProcessed++;
+      } catch (error) {
+        console.error('❌ Odds service warmup failed:', error.message);
+        results.services.push({ service: 'odds', status: 'failed', error: error.message, timestamp: new Date().toISOString() });
+        results.failed++;
+        results.totalProcessed++;
+      }
+
+      // Warm up games service
+      try {
+        this.refreshOperations.get(operationId).progress = 75;
+        if (gamesService.warmupCache) {
+          await gamesService.warmupCache();
+          results.services.push({ service: 'games', status: 'success', timestamp: new Date().toISOString() });
+          results.successful++;
+        } else {
+          results.services.push({ service: 'games', status: 'skipped', message: 'warmupCache method not available', timestamp: new Date().toISOString() });
+        }
+        results.totalProcessed++;
+      } catch (error) {
+        console.error('❌ Games service warmup failed:', error.message);
+        results.services.push({ service: 'games', status: 'failed', error: error.message, timestamp: new Date().toISOString() });
+        results.failed++;
+        results.totalProcessed++;
+      }
+
+      // Update progress and stats
+      this.refreshOperations.get(operationId).progress = 100;
+      this._updateCacheStats(results, startTime);
+      
+      results.endTime = new Date().toISOString();
+      results.duration = Date.now() - startTime;
+      results.finalStatus = results.failed === 0 ? 'completed' : 'completed_with_errors';
+
+      this.refreshOperations.set(operationId, {
+        ...this.refreshOperations.get(operationId),
+        status: 'completed',
+        results
+      });
+
+      console.log(`✅ Cache warmup completed in ${results.duration}ms: ${results.successful} successful, ${results.failed} failed`);
+      return results;
+
+    } catch (error) {
+      console.error('❌ Cache warmup failed:', error);
+      
+      results.endTime = new Date().toISOString();
+      results.duration = Date.now() - startTime;
+      results.finalStatus = 'failed';
+      results.error = error.message;
+
+      this.refreshOperations.set(operationId, {
+        ...this.refreshOperations.get(operationId),
+        status: 'failed',
+        results
+      });
+
+      sentryService.captureError(error, { 
+        component: 'cache_handler', 
+        operation: 'cache_warmup_overall' 
+      });
+
+      return results;
+    }
+  }
+
+  /**
    * Get cache statistics and status
    */
   async getCacheStatus() {
@@ -537,15 +638,31 @@ class CacheHandler {
    * Format cache results for Telegram
    */
   _formatResultsForTelegram(results) {
-    const { type, finalStatus, duration, totalProcessed, successful, failed, sports = [] } = results;
+    const { type, finalStatus, duration, totalProcessed, successful, failed, sports = [], services = [] } = results;
     
-    let message = `🔄 *Cache Refresh ${type.toUpperCase()}* \\- ${finalStatus}\n\n`;
+    let message = `🔄 *Cache ${type.toUpperCase()}* \\- ${finalStatus}\n\n`;
     message += `⏱️ Duration: ${duration}ms\n`;
     message += `📊 Processed: ${totalProcessed}\n`;
     message += `✅ Successful: ${successful}\n`;
     
     if (failed > 0) {
       message += `❌ Failed: ${failed}\n`;
+    }
+
+    // Add service summary for warmup operations
+    if (services.length > 0) {
+      message += `\n*Services:*\n`;
+      services.forEach(service => {
+        const safeService = escapeMarkdownV2(service.service);
+        if (service.status === 'success') {
+          message += `✅ ${safeService}: warmed\n`;
+        } else if (service.status === 'failed') {
+          const safeError = escapeMarkdownV2(service.error?.substring(0, 50) || 'Unknown error');
+          message += `❌ ${safeService}: ${safeError}\n`;
+        } else {
+          message += `⚠️ ${safeService}: ${service.message || 'skipped'}\n`;
+        }
+      });
     }
 
     // Add sport summary for multi-sport operations
@@ -619,7 +736,7 @@ export function registerCacheHandler(bot) {
       message += `• Games: ${status.services.games.status}\n`;
       message += `• Database: ${status.services.database.status}\n\n`;
       
-      message += `Use /cache_refresh for quick refresh or /cache_full for comprehensive refresh`;
+      message += `Use /cache_warmup for optimal performance or /cache_refresh for quick refresh`;
 
       await bot.editMessageText(message, {
         chat_id: chatId,
@@ -633,6 +750,38 @@ export function registerCacheHandler(bot) {
       await bot.sendMessage(
         chatId, 
         `❌ Failed to get cache status: \`${safeError}\``, 
+        { parse_mode: 'MarkdownV2' }
+      );
+    }
+  });
+
+  // --- Cache warmup command ---
+  bot.onText(/^\/cache_warmup$/, async (msg) => {
+    const chatId = msg.chat.id;
+    console.log(`🎯 /cache_warmup command from ${chatId}`);
+    
+    try {
+      const sentMsg = await bot.sendMessage(
+        chatId, 
+        '🔥 Warming up cache for optimal performance...\nThis may take 30-60 seconds.', 
+        { parse_mode: 'Markdown' }
+      );
+
+      const results = await cacheHandler.warmupCache();
+      const message = cacheHandler._formatResultsForTelegram(results);
+      
+      await bot.editMessageText(message, {
+        chat_id: chatId,
+        message_id: sentMsg.message_id,
+        parse_mode: 'MarkdownV2'
+      });
+
+    } catch (error) {
+      console.error('Cache warmup command failed:', error);
+      const safeError = escapeMarkdownV2(error.message);
+      await bot.sendMessage(
+        chatId, 
+        `❌ Cache warmup failed: \`${safeError}\``, 
         { parse_mode: 'MarkdownV2' }
       );
     }
