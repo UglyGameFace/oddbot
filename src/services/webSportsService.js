@@ -16,7 +16,6 @@ export class WebSportsService {
           console.log(`🔍 Checking ${source.name}...`);
           const games = await this._scrapeSource(source.url, sportKey, source.parser);
           if (games && games.length > 0) {
-            console.log(`✅ ${source.name}: Found ${games.length} games`);
             allGames = [...allGames, ...games];
           }
         } catch (error) {
@@ -24,7 +23,6 @@ export class WebSportsService {
         }
       }
       
-      // Deduplicate games
       const uniqueGames = this._deduplicateGames(allGames);
       console.log(`🎯 Total unique ${sportKey} games found: ${uniqueGames.length}`);
       
@@ -37,265 +35,140 @@ export class WebSportsService {
   }
 
   static _getVerifiedSources(sportKey) {
+    // Sticking to a single, reliable source (ESPN) prevents conflicting data and simplifies parsing.
     const sources = {
-      'basketball_nba': [
-        {
-          name: 'ESPN NBA Schedule',
-          url: 'https://www.espn.com/nba/schedule',
-          parser: 'espn_nba'
-        },
-        {
-          name: 'NBA Official Schedule', 
-          url: 'https://www.nba.com/schedule',
-          parser: 'nba_official'
-        }
-      ],
-      'americanfootball_nfl': [
-        {
-          name: 'ESPN NFL Schedule',
-          url: 'https://www.espn.com/nfl/schedule',
-          parser: 'espn_nfl'
-        },
-        {
-          name: 'NFL Official Schedule',
-          url: 'https://www.nfl.com/schedules',
-          parser: 'nfl_official'
-        }
-      ],
-      'baseball_mlb': [
-        {
-          name: 'ESPN MLB Schedule',
-          url: 'https://www.espn.com/mlb/schedule',
-          parser: 'espn_mlb'
-        },
-        {
-          name: 'MLB Official Schedule',
-          url: 'https://www.mlb.com/schedule',
-          parser: 'mlb_official'
-        }
-      ],
-      'icehockey_nhl': [
-        {
-          name: 'ESPN NHL Schedule',
-          url: 'https://www.espn.com/nhl/schedule',
-          parser: 'espn_nhl'
-        },
-        {
-          name: 'NHL Official Schedule',
-          url: 'https://www.nhl.com/schedule',
-          parser: 'nhl_official'
-        }
-      ]
+      'basketball_nba': [{ name: 'ESPN NBA Schedule', url: 'https://www.espn.com/nba/schedule', parser: 'espn_generic' }],
+      'americanfootball_nfl': [{ name: 'ESPN NFL Schedule', url: 'https://www.espn.com/nfl/schedule', parser: 'espn_generic' }],
+      'baseball_mlb': [{ name: 'ESPN MLB Schedule', url: 'https://www.espn.com/mlb/schedule', parser: 'espn_generic' }],
+      'icehockey_nhl': [{ name: 'ESPN NHL Schedule', url: 'https://www.espn.com/nhl/schedule', parser: 'espn_generic' }]
     };
-    
     return sources[sportKey] || [];
   }
 
   static async _scrapeSource(url, sportKey, parserType) {
-    try {
-      const response = await axios.get(url, {
-        timeout: 10000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-      });
-      
-      const $ = cheerio.load(response.data);
-      
-      switch (parserType) {
-        case 'espn_nba':
-          return this._parseESPNNBA($);
-        case 'espn_nfl':
-          return this._parseESPNNFL($);
-        case 'espn_mlb':
-          return this._parseESPNMLB($);
-        case 'espn_nhl':
-          return this._parseESPNNHL($);
-        default:
-          return this._parseGenericSchedule($, sportKey);
-      }
-    } catch (error) {
-      throw new Error(`Scraping failed: ${error.message}`);
-    }
+    const { data } = await axios.get(url, {
+      timeout: 10000,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36' }
+    });
+    const $ = cheerio.load(data);
+    return this._parseESPNGeneric($, sportKey);
   }
 
-  static _parseESPNNBA($) {
+  static _parseESPNGeneric($, sportKey) {
     const games = [];
-    
-    // ESPN NBA schedule parsing
-    $('.Table__TBODY tr').each((index, row) => {
-      const teams = $(row).find('.Table__TD .AnchorLink');
-      if (teams.length >= 2) {
-        const awayTeam = $(teams[0]).text().trim();
-        const homeTeam = $(teams[1]).text().trim();
-        
-        if (awayTeam && homeTeam && awayTeam !== 'TBD' && homeTeam !== 'TBD') {
-          const dateElement = $(row).closest('table').prev().find('h2');
-          const dateText = dateElement.text() || new Date().toISOString().split('T')[0];
-          
-          games.push({
-            event: `${awayTeam} @ ${homeTeam}`,
-            away_team: awayTeam,
-            home_team: homeTeam,
-            commence_time: this._parseDate(dateText),
-            source: 'ESPN',
-            sport_key: 'basketball_nba'
-          });
+    let currentDate = null;
+
+    // Iterate through all schedule table titles (dates) and content rows
+    $('.Table__Title, .Table__TBODY tr').each((_, element) => {
+        const el = $(element);
+
+        // Check if the element is a date heading
+        if (el.is('h2') && el.hasClass('Table__Title')) {
+            const dateText = el.text().trim();
+            const parsedDate = this._parseDate(dateText);
+            if (parsedDate) {
+                currentDate = parsedDate;
+            }
+        } 
+        // Check if the element is a game row and we have a valid current date
+        else if (el.is('tr') && currentDate) {
+            const teams = el.find('a[href*="/team/"]');
+            const timeEl = el.find('td:nth-child(3) a');
+            
+            if (teams.length >= 2) {
+                const awayTeam = $(teams[0]).text().trim();
+                const homeTeam = $(teams[1]).text().trim();
+                let gameTime = timeEl.text().trim();
+
+                if (awayTeam && homeTeam && gameTime) {
+                    const combinedDateTime = this._combineDateAndTime(currentDate, gameTime);
+                    if (combinedDateTime) {
+                        games.push({
+                            event_id: `web_${awayTeam.replace(/\s/g, '')}_${homeTeam.replace(/\s/g, '')}_${combinedDateTime.getTime()}`,
+                            event: `${awayTeam} @ ${homeTeam}`,
+                            away_team: awayTeam,
+                            home_team: homeTeam,
+                            commence_time: combinedDateTime.toISOString(),
+                            source: 'web',
+                            sport_key: sportKey
+                        });
+                    }
+                }
+            }
         }
-      }
     });
-    
     return games;
   }
-
-  static _parseESPNNFL($) {
-    const games = [];
-    
-    $('.Table__TBODY tr').each((index, row) => {
-      const teams = $(row).find('.Table__TD .AnchorLink');
-      if (teams.length >= 2) {
-        const awayTeam = $(teams[0]).text().trim();
-        const homeTeam = $(teams[1]).text().trim();
-        
-        if (awayTeam && homeTeam) {
-          games.push({
-            event: `${awayTeam} @ ${homeTeam}`,
-            away_team: awayTeam,
-            home_team: homeTeam,
-            commence_time: new Date(Date.now() + (index + 1) * 24 * 60 * 60 * 1000).toISOString(),
-            source: 'ESPN',
-            sport_key: 'americanfootball_nfl'
-          });
-        }
-      }
-    });
-    
-    return games;
-  }
-
-  static _parseESPNMLB($) {
-    const games = [];
-    
-    $('.Table__TBODY tr').each((index, row) => {
-      const teams = $(row).find('.Table__TD .AnchorLink');
-      if (teams.length >= 2) {
-        const awayTeam = $(teams[0]).text().trim();
-        const homeTeam = $(teams[1]).text().trim();
-        
-        if (awayTeam && homeTeam) {
-          games.push({
-            event: `${awayTeam} @ ${homeTeam}`,
-            away_team: awayTeam,
-            home_team: homeTeam,
-            commence_time: new Date(Date.now() + (index + 1) * 24 * 60 * 60 * 1000).toISOString(),
-            source: 'ESPN', 
-            sport_key: 'baseball_mlb'
-          });
-        }
-      }
-    });
-    
-    return games;
-  }
-
-  static _parseESPNNHL($) {
-    const games = [];
-    
-    $('.Table__TBODY tr').each((index, row) => {
-      const teams = $(row).find('.Table__TD .AnchorLink');
-      if (teams.length >= 2) {
-        const awayTeam = $(teams[0]).text().trim();
-        const homeTeam = $(teams[1]).text().trim();
-        
-        if (awayTeam && homeTeam) {
-          games.push({
-            event: `${awayTeam} @ ${homeTeam}`,
-            away_team: awayTeam,
-            home_team: homeTeam,
-            commence_time: new Date(Date.now() + (index + 1) * 24 * 60 * 60 * 1000).toISOString(),
-            source: 'ESPN',
-            sport_key: 'icehockey_nhl'
-          });
-        }
-      }
-    });
-    
-    return games;
-  }
-
-  static _parseGenericSchedule($, sportKey) {
-    const games = [];
-    
-    // Generic parser for any schedule page
-    $('tr, .game, .matchup, .event').each((index, element) => {
-      const text = $(element).text();
-      const teams = text.match(/([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)\s+@\s+([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)/);
-      
-      if (teams && teams.length >= 3) {
-        games.push({
-          event: `${teams[1]} @ ${teams[2]}`,
-          away_team: teams[1],
-          home_team: teams[2],
-          commence_time: new Date(Date.now() + (index + 1) * 24 * 60 * 60 * 1000).toISOString(),
-          source: 'Generic',
-          sport_key: sportKey
-        });
-      }
-    });
-    
-    return games;
-  }
-
+  
   static _parseDate(dateText) {
-    try {
-      // Simple date parser for ESPN dates
-      if (dateText.includes('Today')) {
-        return new Date().toISOString();
-      } else if (dateText.includes('Tomorrow')) {
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        return tomorrow.toISOString();
-      } else {
-        // Try to parse actual date, fallback to near future
-        const parsed = new Date(dateText);
-        if (!isNaN(parsed.getTime())) {
-          return parsed.toISOString();
-        }
+      if (!dateText) return null;
+      try {
+          const today = new Date();
+          today.setHours(0, 0, 0, 0); // Normalize to start of day
+          if (dateText.toLowerCase().includes('today')) return today;
+          if (dateText.toLowerCase().includes('tomorrow')) {
+              today.setDate(today.getDate() + 1);
+              return today;
+          }
+          // Handles format like "Tuesday, October 14, 2025"
+          const date = new Date(dateText);
+          if (!isNaN(date.getTime())) {
+              date.setHours(0,0,0,0);
+              return date;
+          }
+      } catch (e) {
+          console.warn(`Could not parse date: ${dateText}`);
       }
-      
-      // Default: schedule games over next 3 days
-      const defaultDate = new Date();
-      defaultDate.setDate(defaultDate.getDate() + Math.floor(Math.random() * 3) + 1);
-      return defaultDate.toISOString();
-      
-    } catch (error) {
-      return new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-    }
+      return null;
+  }
+
+  static _combineDateAndTime(date, timeString) {
+      if (!date || !timeString) return null;
+      try {
+          // Handles "7:00 PM ET" or "10:30 AM"
+          const [time, period] = timeString.replace(/ ET$/, '').split(' ');
+          let [hours, minutes] = time.split(':').map(Number);
+  
+          if (period && period.toLowerCase() === 'pm' && hours < 12) {
+              hours += 12;
+          }
+          if (period && period.toLowerCase() === 'am' && hours === 12) { // Midnight case
+              hours = 0;
+          }
+  
+          // Create a new date object to avoid mutating the original
+          const newDate = new Date(date);
+          
+          // Assuming the times from ESPN are US Eastern Time. We convert them to UTC.
+          // In October, EDT is UTC-4.
+          newDate.setUTCHours(hours + 4, minutes, 0, 0); 
+
+          return newDate;
+      } catch (e) {
+          console.warn(`Could not combine date and time: ${date}, ${timeString}`);
+          return null;
+      }
   }
 
   static _deduplicateGames(games) {
     const seen = new Set();
     return games.filter(game => {
-      const key = `${game.away_team}|${game.home_team}`;
-      if (seen.has(key)) {
-        return false;
-      }
-      seen.add(key);
-      return true;
+      const key = `${game.away_team}|${game.home_team}|${game.commence_time}`;
+      return seen.has(key) ? false : seen.add(key);
     });
   }
 
   static async getUpcomingGames(sportKey, hours = 72) {
     const allGames = await this.getGamesFromVerifiedSources(sportKey);
-    const now = new Date();
-    const cutoff = new Date(now.getTime() + hours * 60 * 60 * 1000);
+    const now = Date.now();
+    const cutoff = now + hours * 60 * 60 * 1000;
     
     return allGames.filter(game => {
       try {
-        const gameTime = new Date(game.commence_time);
+        const gameTime = new Date(game.commence_time).getTime();
         return gameTime > now && gameTime <= cutoff;
       } catch {
-        return true; // Keep games with invalid dates for now
+        return false;
       }
     });
   }
