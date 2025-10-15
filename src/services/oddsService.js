@@ -238,6 +238,7 @@ class OddsService {
     this.providers = [];
     this.initialized = false;
     this.providerStatus = new Map();
+    this.fetchLocks = new Map(); // QUOTA SAVER
     
     console.log('🎯 OddsService: Initializing providers...');
     this._initializeProviders();
@@ -281,14 +282,16 @@ class OddsService {
     } else {
       console.warn('❌ The Odds API provider SKIPPED - invalid or missing key');
     }
-    
-    // API-Ninja Provider
-    if (env.ODDS_API_NINJA_KEY && !env.ODDS_API_NINJA_KEY.includes('expired') && env.ODDS_API_NINJA_KEY.length >= 10) {
+
+    // --- CHANGE START ---
+    // API-Ninja Provider is now included
+    if (env.ODDS_API_NINJA_KEY && !env.ODDS_API_NINJA_KEY.includes('expired')) {
       this.providers.push(new ApiNinjaProvider(env.ODDS_API_NINJA_KEY));
       console.log('✅ API-Ninja provider registered');
     } else {
       console.warn('❌ API-Ninja provider SKIPPED - invalid or missing key');
     }
+    // --- CHANGE END ---
 
     // SportRadar API Provider
     if (env.SPORTRADAR_API_KEY && !env.SPORTRADAR_API_KEY.includes('expired') && env.SPORTRADAR_API_KEY.length >= 10) {
@@ -440,8 +443,8 @@ class OddsService {
     }
 
     try {
-      const fetchOdds = async () => {
-        return await this._fetchSportOddsWithFallback(sportKey, options);
+      const fetchOdds = () => {
+        return this._fetchSportOddsWithFallback(sportKey, options);
       };
 
       if (useCache && cacheService.isAvailable()) {
@@ -670,80 +673,51 @@ class OddsService {
   }
 
   async _fetchSportOddsWithFallback(sportKey, options) {
-    console.log(`🔄 OddsService: Fetching odds for ${sportKey}...`);
-    
-    if (!this._validateSportKey(sportKey)) {
-      return [];
+    // --- CHANGE START: QUOTA SAVER ---
+    const lockKey = `fetch:${sportKey}`;
+    if (this.fetchLocks.has(lockKey)) {
+        console.log(`[QUOTA SAVER] Call for ${sportKey} is already in progress. Awaiting result.`);
+        return this.fetchLocks.get(lockKey);
     }
 
-    let lastError = null;
-    let successfulProvider = null;
+    const fetchPromise = (async () => {
+        console.log(`🔄 OddsService: Fetching fresh odds for ${sportKey}...`);
+        
+        if (!this._validateSportKey(sportKey)) {
+            return [];
+        }
+
+        for (const provider of this.providers) {
+            try {
+                console.log(`🔧 OddsService: Trying ${provider.name} for ${sportKey}...`);
+                const games = await withTimeout(provider.fetchSportOdds(sportKey, options), 12000, `FetchOdds_${provider.name}_${sportKey}`);
+
+                if (games && games.length > 0) {
+                    const normalizedGames = games.map(game => GameEnhancementService.normalizeGameData(game, provider.name)).filter(Boolean);
+                    console.log(`✅ OddsService: ${provider.name} returned ${normalizedGames.length} valid games for ${sportKey}.`);
+                    return GameEnhancementService.enhanceGameData(normalizedGames, sportKey, provider.name);
+                }
+                console.log(`⚠️ OddsService: ${provider.name} returned no valid data for ${sportKey}.`);
+            } catch (error) {
+                console.error(`❌ OddsService: ${provider.name} failed for ${sportKey}:`, error.message);
+                if (error?.response?.status === 401 || error?.response?.status === 403) {
+                    console.error(`🔐 OddsService: ${provider.name} authentication failed - check API key.`);
+                }
+            }
+        }
+
+        console.log(`❌ OddsService: All primary providers failed for ${sportKey}. Using fallback.`);
+        const fallbackProvider = this.providers.find(p => p.name === 'fallback');
+        return fallbackProvider.fetchSportOdds(sportKey, options);
+    })();
     
-    for (const provider of this.providers) {
-      try {
-        console.log(`🔧 OddsService: Trying ${provider.name} for ${sportKey}...`);
-
-        const games = await withTimeout(
-          provider.fetchSportOdds(sportKey, options), 
-          12000,
-          `FetchOdds_${provider.name}_${sportKey}`
-        );
-
-        if (games && games.length > 0) {
-          const normalizedGames = games
-            .map(game => GameEnhancementService.normalizeGameData(game, provider.name))
-            .filter(game => game !== null && GameEnhancementService.validateGameData(game));
-          
-          console.log(`✅ OddsService: ${provider.name} returned ${normalizedGames.length} valid games for ${sportKey} (from ${games.length} raw)`);
-          
-          successfulProvider = provider.name;
-          return GameEnhancementService.enhanceGameData(normalizedGames, sportKey, provider.name);
-        }
-
-        console.log(`⚠️ OddsService: ${provider.name} returned no valid data for ${sportKey}`);
-
-      } catch (error) {
-        lastError = error;
-        console.error(`❌ OddsService: ${provider.name} failed for ${sportKey}:`, error.message);
-
-        if (error?.response?.status === 401 || error?.response?.status === 403) {
-          console.error(`🔐 OddsService: ${provider.name} authentication failed - check API key`);
-          continue;
-        }
-        
-        if (error?.response?.status === 429) {
-          console.log(`🚫 OddsService: ${provider.name} rate limited, trying next provider...`);
-          continue;
-        }
-        
-        if (error.code === 'ENOTFOUND') {
-          console.error(`🌐 OddsService: Network error for ${provider.name} - check DNS/network`);
-          continue;
-        }
-        
-        if (!(error instanceof TimeoutError)) {
-          sentryService.captureError(error, {
-            component: 'odds_service_provider_failure',
-            provider: provider.name,
-            sportKey,
-            options
-          });
-        }
-      }
+    this.fetchLocks.set(lockKey, fetchPromise);
+    try {
+        return await fetchPromise;
+    } finally {
+        this.fetchLocks.delete(lockKey);
     }
-
-    console.log(`❌ OddsService: All providers failed for ${sportKey}`);
-    if (lastError) {
-      console.error(`📋 OddsService: Last error details:`, lastError.message);
-    }
-    
-    const fallbackProvider = this.providers.find(p => p.name === 'fallback');
-    const fallbackGames = await fallbackProvider.fetchSportOdds(sportKey, options);
-    const normalizedFallback = fallbackGames
-      .map(game => GameEnhancementService.normalizeGameData(game, 'fallback'))
-      .filter(game => game !== null);
-    
-    return GameEnhancementService.enhanceGameData(normalizedFallback, sportKey, 'fallback');
+    // --- CHANGE END ---
   }
 
   async getUsage() {
