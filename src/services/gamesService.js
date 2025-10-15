@@ -1,4 +1,4 @@
-// src/services/gamesService.js - COMPLETE FIXED VERSION
+// src/services/gamesService.js - COMPLETE FIXED VERSION WITH CACHE WARMUP
 import databaseService from './databaseService.js';
 import oddsService from './oddsService.js';
 import env from '../config/env.js';
@@ -7,10 +7,10 @@ import { COMPREHENSIVE_SPORTS } from '../config/sportDefinitions.js';
 import { withTimeout, TimeoutError } from '../utils/asyncUtils.js';
 
 const CACHE_TTL = {
-  SPORTS_LIST: 300,      // 5 minutes
-  GAMES_DATA: 120,       // 2 minutes  
-  ODDS_DATA: 60,         // 1 minute
-  VERIFIED_GAMES: 180    // 3 minutes
+  SPORTS_LIST: 600,      // Increased from 300 to 600 seconds (10 minutes)
+  GAMES_DATA: 180,       // Increased from 120 to 180 seconds (3 minutes)  
+  ODDS_DATA: 90,         // Increased from 60 to 90 seconds (1.5 minutes)
+  VERIFIED_GAMES: 300    // Increased from 180 to 300 seconds (5 minutes)
 };
 
 class GameEnhancementService {
@@ -129,6 +129,21 @@ class GamesService {
     }
     
     this.initialized = true;
+  }
+
+  async warmupCache() {
+    console.log('🔥 GamesService: Warming up cache...');
+    try {
+        // Pre-load popular sports to cache
+        await this.preloadPopularSports();
+        
+        // Pre-load sports list
+        await this.getAvailableSports();
+        
+        console.log('✅ GamesService: Cache warmup completed');
+    } catch (error) {
+        console.warn('⚠️ GamesService: Cache warmup failed:', error.message);
+    }
   }
 
   async _incrementRequestCount(sportKey) {
@@ -290,7 +305,7 @@ class GamesService {
       console.error(`❌ GamesService: CRITICAL failure for ${sportKey || 'all'}:`, error.message);
       
       if (error instanceof TimeoutError) {
-        console.warn(`⏰ GamesService: Timeout for ${sportKey || 'all'}, returning empty results`);
+        console.warn(`⏰ GamesService: Timeout for ${sportKey || 'all'}, returning empty results');
         return [];
       }
       
