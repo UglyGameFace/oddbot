@@ -1,4 +1,4 @@
-// src/services/healthService.js - COMPLETE RESILIENT VERSION
+// src/services/healthService.js - COMPLETE RESILIENT VERSION WITH FIXED ODDS CHECK
 
 import { getRedisClient } from './redisService.js';
 import databaseService from './databaseService.js';
@@ -36,20 +36,14 @@ class ServiceHealthChecker {
   static async checkOddsService() {
     const checkStart = Date.now();
     try {
-      // --- CHANGE START: QUOTA SAVER ---
-      // This health check should not make a live API call. 
-      // It will now check if sports are available (likely from cache) to verify service health.
-      const availableSports = await withTimeout(
-        oddsService.getAvailableSports(),
-        HEALTH_CHECK_TIMEOUT,
+      // Just check if service is responsive, don't trigger API calls
+      const status = await withTimeout(
+        oddsService.getServiceStatus(), 
+        5000, 
         'OddsService_Health_Check'
       );
-      const isHealthy = availableSports && availableSports.length > 0;
-      if (!isHealthy) {
-          console.warn('⚠️ Health Check: No available sports found from odds service to test against.');
-      }
+      const isHealthy = status && status.status !== 'error';
       return { healthy: isHealthy, latency: Date.now() - checkStart };
-      // --- CHANGE END ---
     } catch (error) {
       return { healthy: false, error: error.message, latency: Date.now() - checkStart };
     }
