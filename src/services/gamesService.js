@@ -305,7 +305,8 @@ class GamesService {
       console.error(`❌ GamesService: CRITICAL failure for ${sportKey || 'all'}:`, error.message);
       
       if (error instanceof TimeoutError) {
-        console.warn(`⏰ GamesService: Timeout for ${sportKey || 'all'}, returning empty results');
+        // --- FIXED LINE 308: Added missing backtick ---
+        console.warn(`⏰ GamesService: Timeout for ${sportKey || 'all'}, returning empty results`);
         return [];
       }
       
