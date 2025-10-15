@@ -2,8 +2,9 @@
 import axios from 'axios';
 import { rateLimitService } from '../rateLimitService.js';
 import { withTimeout } from '../../utils/asyncUtils.js';
+import { sentryService } from '../sentryService.js';
 
-const NINJA_BASE = 'https://api.api-ninjas.com/v1/sportsodds';
+const NINJA_BASE = 'https://api.api-ninjas.com/v1/odds';
 
 export class ApiNinjaProvider {
   constructor(apiKey) {
@@ -13,9 +14,9 @@ export class ApiNinjaProvider {
   }
 
   async fetchSportOdds(sportKey, options = {}) {
-    const league = this.getLeagueForSport(sportKey);
-    if (!league) {
-      console.warn(`⚠️ ApiNinja: No mapping found for sport key: ${sportKey}`);
+    const sport = this.getSportForApiKey(sportKey);
+    if (!sport) {
+      console.warn(`[ApiNinja] No mapping found for sport key: ${sportKey}`);
       return [];
     }
 
@@ -23,25 +24,31 @@ export class ApiNinjaProvider {
       throw new Error('Rate limit exceeded for API-Ninja');
     }
 
-    const url = `${NINJA_BASE}?league=${league}`;
+    const url = `${NINJA_BASE}?sport=${sport}`;
     
-    const response = await withTimeout(
-        axios.get(url, { headers: { 'X-Api-Key': this.apiKey } }),
-        10000,
-        `apininja_${sportKey}`
-    );
+    try {
+        const response = await withTimeout(
+            axios.get(url, { headers: { 'X-Api-Key': this.apiKey } }),
+            10000,
+            `apininja_${sportKey}`
+        );
 
-    await rateLimitService.saveProviderQuota(this.name, response.headers);
-    return this.transformData(response.data, sportKey);
+        await rateLimitService.saveProviderQuota(this.name, response.headers);
+        return this.transformData(response.data, sportKey);
+    } catch (error) {
+        sentryService.captureError(error, { component: 'ApiNinjaProvider', sportKey });
+        throw error;
+    }
   }
 
-  getLeagueForSport(sportKey) {
+  getSportForApiKey(sportKey) {
     const mapping = {
-      'americanfootball_nfl': 'nfl',
-      'basketball_nba': 'nba',
-      'icehockey_nhl': 'nhl',
-      'baseball_mlb': 'mlb',
-      'soccer_epl': 'epl', // Note: API-Ninja may use different keys
+      'americanfootball_nfl': 'football_nfl',
+      'basketball_nba': 'basketball_nba',
+      'icehockey_nhl': 'hockey_nhl',
+      'baseball_mlb': 'baseball_mlb',
+      'soccer_epl': 'soccer_epl',
+      'soccer_england_premier_league': 'soccer_epl'
     };
     return mapping[sportKey];
   }
@@ -57,27 +64,30 @@ export class ApiNinjaProvider {
         console.warn(`[Data Validation] ApiNinja: Discarding invalid game data.`);
         return acc;
       }
+      
+      const eventId = `apininja_${game.home_team.replace(/\s/g, '')}_${game.away_team.replace(/\s/g, '')}_${game.start_time}`;
+
       acc.push({
-        event_id: `${this.name}_${game.home_team}_${game.away_team}_${game.start_time}`,
+        event_id: eventId,
+        id: eventId,
         sport_key: sportKey,
-        league_key: this.titleFromKey(sportKey),
-        commence_time: new Date(game.start_time * 1000).toISOString(),
+        sport_title: this.titleFromKey(sportKey),
+        commence_time: new Date(game.start_time).toISOString(),
         home_team: game.home_team,
         away_team: game.away_team,
-        bookmakers: this.transformBookmakers(game.odds),
-        sport_title: this.titleFromKey(sportKey),
+        bookmakers: this.transformBookmakers(game.bookmakers),
         source: this.name
       });
       return acc;
     }, []);
   }
 
-  transformBookmakers(odds) {
-      if (!odds || !Array.isArray(odds.bookmakers)) return [];
-      return odds.bookmakers.map(bookmaker => ({
+  transformBookmakers(bookmakers) {
+      if (!Array.isArray(bookmakers)) return [];
+      return bookmakers.map(bookmaker => ({
           key: bookmaker.key,
           title: bookmaker.title,
-          last_update: new Date(bookmaker.last_update * 1000).toISOString(),
+          last_update: new Date(bookmaker.last_update).toISOString(),
           markets: this.transformMarkets(bookmaker.markets)
       }));
   }
@@ -98,6 +108,17 @@ export class ApiNinjaProvider {
     const required = ['home_team', 'away_team', 'start_time'];
     return required.every(field => game[field] !== undefined && game[field] !== null);
   }
+  
+  async fetchAvailableSports() {
+    // API-Ninja does not provide a sports endpoint, so we return a hardcoded list of supported sports.
+    return [
+        { key: 'americanfootball_nfl', title: 'NFL', group: 'American Football' },
+        { key: 'basketball_nba', title: 'NBA', group: 'Basketball' },
+        { key: 'baseball_mlb', title: 'MLB', group: 'Baseball' },
+        { key: 'icehockey_nhl', title: 'NHL', group: 'Hockey' },
+        { key: 'soccer_england_premier_league', title: 'Premier League', group: 'Soccer' }
+    ];
+  }
 
   titleFromKey(key) {
     const mapping = {
@@ -105,7 +126,7 @@ export class ApiNinjaProvider {
       'basketball_nba': 'NBA',
       'baseball_mlb': 'MLB',
       'icehockey_nhl': 'NHL',
-      'soccer_epl': 'Premier League'
+      'soccer_england_premier_league': 'Premier League'
     };
     return mapping[key] || key.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
   }
