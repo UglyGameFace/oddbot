@@ -30,7 +30,7 @@ const env = cleanEnv(process.env, {
   PERPLEXITY_API_KEY: str(),
   THE_ODDS_API_KEY: str(),
   SPORTRADAR_API_KEY: str(),
-  API_SPORTS_API_KEY: str(), // FIXED: API-Sports is BACK!
+  APISPORTS_API_KEY: str(), // FIXED: API-Sports is BACK!
   ODDS_API_NINJA_KEY: str({ default: '' }), // NEW: Backup provider
   BETTING_API_KEY: str({ default: '' }), // NEW: Another backup
 
