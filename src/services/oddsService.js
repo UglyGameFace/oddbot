@@ -1,4 +1,4 @@
-// src/services/oddsService.js - COMPLETE FIXED VERSION
+// src/services/oddsService.js - COMPLETE FIXED VERSION WITH CACHE WARMUP
 import env from '../config/env.js';
 import cacheService from './cacheService.js';
 import { sentryService } from './sentryService.js';
@@ -8,13 +8,13 @@ import { SportRadarProvider } from './providers/sportRadarProvider.js';
 import { ApiSportsProvider } from './providers/apiSportsProvider.js';
 import { ApiNinjaProvider } from './providers/apiNinjaProvider.js';
 
-// Cache configuration
+// Cache configuration - INCREASED TTLs
 const CACHE_TTL = {
-  ODDS: 60,        // 1 minute for live odds
-  PROPS: 120,      // 2 minutes for player props
-  SPORTS: 300,     // 5 minutes for sports lists
-  LIVE_GAMES: 30,  // 30 seconds for live games
-  USAGE: 180       // 3 minutes for usage stats
+  ODDS: 90,        // Increased from 60 to 90 seconds (1.5 minutes)
+  PROPS: 180,      // Increased from 120 to 180 seconds (3 minutes)
+  SPORTS: 600,     // Increased from 300 to 600 seconds (10 minutes)
+  LIVE_GAMES: 45,  // Slightly increased from 30 to 45 seconds
+  USAGE: 300       // Increased from 180 to 300 seconds (5 minutes)
 };
 
 // Helper classes
@@ -242,6 +242,24 @@ class OddsService {
     
     console.log('🎯 OddsService: Initializing providers...');
     this._initializeProviders();
+  }
+
+  async warmupCache() {
+    console.log('🔥 OddsService: Warming up cache...');
+    try {
+        // Pre-load sports list
+        await this.getAvailableSports();
+        
+        // Pre-load popular sports odds
+        const popularSports = ['americanfootball_nfl', 'basketball_nba', 'baseball_mlb'];
+        for (const sport of popularSports) {
+            await this.getSportOdds(sport, { useCache: true }).catch(() => {});
+        }
+        
+        console.log('✅ OddsService: Cache warmup completed');
+    } catch (error) {
+        console.warn('⚠️ OddsService: Cache warmup failed:', error.message);
+    }
   }
 
   async _ensureInitialized() {
