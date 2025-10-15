@@ -2,67 +2,89 @@
 import axios from 'axios';
 import { rateLimitService } from '../rateLimitService.js';
 import { withTimeout } from '../../utils/asyncUtils.js';
+import { sentryService } from '../sentryService.js';
 
-const SR_BASE = 'https://api.sportradar.com';
+const SPORTRADAR_BASE = 'https://api.sportradar.us';
 
 export class SportRadarProvider {
   constructor(apiKey) {
     this.apiKey = apiKey;
     this.name = 'sportradar';
-    this.priority = 20; // Lower priority than OddsAPI and Ninja
+    this.priority = 20;
   }
 
   async fetchSportOdds(sportKey, options = {}) {
-    const endpoint = this._getEndpointForSport(sportKey);
-    if (!endpoint) {
-      console.warn(`[SportRadar] No summary endpoint configured for ${sportKey}`);
+    const endpointConfig = this.getEndpointForSport(sportKey);
+    if (!endpointConfig) {
+      console.warn(`⚠️ SportRadar: No mapping found for sport key: ${sportKey}`);
       return [];
     }
 
+    const url = `${SPORTRADAR_BASE}/${endpointConfig.path}`;
+    
     try {
-      const today = new Date();
-      const year = today.getFullYear();
-      const month = String(today.getMonth() + 1).padStart(2, '0');
-      const day = String(today.getDate()).padStart(2, '0');
-      
-      const url = `${SR_BASE}${endpoint}/${year}/${month}/${day}/schedule.json?api_key=${this.apiKey}`;
-      
-      const response = await withTimeout(axios.get(url), 8000, `sportradar_schedule_${sportKey}`);
-      await rateLimitService.saveProviderQuota(this.name, response.headers);
-      
-      const games = response.data.games || [];
-      return this.transformScheduleData(games, sportKey);
+        const response = await withTimeout(
+            axios.get(url, { params: { api_key: this.apiKey } }),
+            10000,
+            `sportradar_${sportKey}`
+        );
 
+        await rateLimitService.saveProviderQuota(this.name, response.headers);
+        return this.transformScheduleData(response.data?.sport_events, sportKey);
     } catch (error) {
-      if (error.response && error.response.status === 403) {
-          console.error(`❌ SportRadar 403 Forbidden: Your API key for the "${this._getFeedName(sportKey)}" feed may not be active or the URL path is incorrect for your plan. Please verify your subscriptions on the Sportradar dashboard.`);
-      } else {
-          console.error(`[SportRadar] Failed to fetch data for ${sportKey}:`, error.message);
-      }
-      return [];
+        // --- CHANGE START ---
+        // Added specific logging for 401 Unauthorized errors to make API key issues obvious in the logs.
+        if (error.response?.status === 401) {
+            console.error(`❌ SportRadar 401 Unauthorized: The API key is invalid or missing. Please check your .env file for SPORTRADAR_API_KEY.`);
+        } else if (error.response?.status === 403) {
+            console.error(`❌ SportRadar 403 Forbidden: Your API key for the "${endpointConfig.name}" feed may not be active. Please verify your subscriptions on the Sportradar dashboard.`);
+        }
+        // The error is re-thrown and will be logged by the calling service (oddsService).
+        // --- CHANGE END ---
+        throw error;
     }
   }
 
-  transformScheduleData(games, sportKey) {
-    if (!Array.isArray(games)) {
+  getEndpointForSport(sportKey) {
+    const mapping = {
+      'americanfootball_nfl': { path: `us/odds/v2/en/sports/sr:sport:16/schedule.json`, name: 'US Football Odds' },
+      'basketball_nba': { path: `us/odds/v2/en/sports/sr:sport:1/schedule.json`, name: 'US Basketball Odds' },
+      'icehockey_nhl': { path: `us/odds/v2/en/sports/sr:sport:4/schedule.json`, name: 'US Hockey Odds' },
+      'baseball_mlb': { path: `us/odds/v2/en/sports/sr:sport:3/schedule.json`, name: 'US Baseball Odds' },
+      'soccer_england_premier_league': { path: `us/odds/v2/en/sports/sr:sport:25/schedule.json`, name: 'US Soccer Odds' },
+      'soccer_uefa_champions_league': { path: `us/odds/v2/en/sports/sr:sport:27/schedule.json`, name: 'UEFA Champions League' },
+      'mma_ufc': { path: `us/odds/v2/en/sports/sr:sport:38/schedule.json`, name: 'UFC MMA' }
+    };
+    return mapping[sportKey];
+  }
+
+  transformScheduleData(events, sportKey) {
+    if (!Array.isArray(events)) {
       console.warn('⚠️ SportRadar (schedule) returned non-array data');
       return [];
     }
 
-    return games.reduce((acc, game) => {
-      if (!game?.id || !game?.scheduled || !game?.home || !game?.away) {
+    return events.reduce((acc, event) => {
+      if (!event?.id || !event?.start_time || !event?.competitors) {
         return acc;
       }
+
+      const homeTeam = event.competitors.find(c => c.qualifier === 'home')?.name || 'N/A';
+      const awayTeam = event.competitors.find(c => c.qualifier === 'away')?.name || 'N/A';
       
       const enhancedGame = {
-        id: game.id,
-        event_id: game.id.replace('sr:match:', ''),
+        event_id: event.id.replace('sr:match:', ''),
         sport_key: sportKey,
-        commence_time: game.scheduled,
-        home_team: game.home.name,
-        away_team: game.away.name,
-        bookmakers: [], // SportRadar schedule endpoint does not contain odds.
+        league_key: event.sport_event_context?.competition?.name || this.titleFromKey(sportKey),
+        commence_time: event.start_time,
+        home_team: homeTeam,
+        away_team: awayTeam,
+        market_data: { 
+          bookmakers: [], 
+          last_updated: new Date().toISOString()
+        },
         sport_title: this.titleFromKey(sportKey),
+        data_quality: this.assessGameDataQuality(event),
         source: 'sportradar'
       };
 
@@ -70,41 +92,50 @@ export class SportRadarProvider {
       return acc;
     }, []);
   }
-  
-  _getEndpointForSport(sportKey) {
-    // These paths are for daily schedules, which are often included in base packages.
-    // NOTE: These may need to be adjusted based on the user's specific SportRadar subscription.
-    const mapping = {
-      americanfootball_nfl: '/nfl/official/trial/v7/en/games',
-      basketball_nba: '/nba/trial/v8/en/games',
-      icehockey_nhl: '/nhl/trial/v7/en/games',
-      baseball_mlb: '/mlb/trial/v7/en/games',
+
+  convertToAmericanOdds(decimalOdds) {
+    if (decimalOdds >= 2.0) {
+      return Math.round((decimalOdds - 1) * 100);
+    } else {
+      return Math.round(-100 / (decimalOdds - 1));
+    }
+  }
+
+  assessGameDataQuality(game) {
+    let score = 0;
+    const factors = [];
+    if (game.competitors && game.competitors.length === 2) {
+        score += 50;
+        factors.push('valid_teams');
+    }
+    if (game.start_time) {
+        score += 30;
+        factors.push('start_time');
+    }
+    if (game.sport_event_context?.competition?.name) {
+        score += 20;
+        factors.push('league_info');
+    }
+    return {
+      score,
+      factors,
+      rating: score >= 80 ? 'excellent' : 'good'
     };
-    return mapping[sportKey];
   }
   
-  _getFeedName(sportKey){
-      const nameMap = {
-          americanfootball_nfl: "NFL",
-          basketball_nba: "NBA",
-          icehockey_nhl: "NHL",
-          baseball_mlb: "MLB"
-      };
-      return nameMap[sportKey] || "Unknown";
-  }
-
-  async fetchAvailableSports() {
-    // SportRadar's API structure is sport-specific, so we return a hardcoded list of configured sports.
-    return [
-        { key: 'americanfootball_nfl', title: 'NFL', group: 'American Football' },
-        { key: 'basketball_nba', title: 'NBA', group: 'Basketball' },
-        { key: 'baseball_mlb', title: 'MLB', group: 'Baseball' },
-        { key: 'icehockey_nhl', title: 'NHL', group: 'Hockey' },
-    ];
-  }
-
   titleFromKey(key) {
-      return this._getFeedName(key) || key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+    const sportMapping = {
+      'americanfootball_nfl': 'NFL',
+      'americanfootball_ncaaf': 'NCAAF',
+      'basketball_nba': 'NBA',
+      'basketball_wnba': 'WNBA',
+      'baseball_mlb': 'MLB',
+      'icehockey_nhl': 'NHL',
+      'soccer_england_premier_league': 'Premier League'
+    };
+    return sportMapping[key] || key.split('_').map(word => 
+      word.charAt(0).toUpperCase() + word.slice(1)
+    ).join(' ');
   }
 
   async getProviderStatus() {
