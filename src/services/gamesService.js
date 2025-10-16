@@ -23,8 +23,8 @@ class GameEnhancementService {
       enhancement_source: source,
       last_enhanced: new Date().toISOString(),
       has_odds: !!(game.bookmakers && game.bookmakers.length > 0),
-      sport_key: sportKey,
-      cache_timestamp: new Date().toISOString()
+      sport_key: sportKey
+      // REMOVED: cache_timestamp was here
     }));
   }
 
@@ -56,8 +56,6 @@ class GameEnhancementService {
       return false;
     }
 
-    // --- CHANGE START ---
-    // Increased the time window to 4 hours to allow for games in progress.
     const gameTime = new Date(game.commence_time);
     const now = new Date();
     const isWithinWindow = gameTime > new Date(now.getTime() - 4 * 60 * 60 * 1000); // Up to 4 hours in past
@@ -66,7 +64,6 @@ class GameEnhancementService {
       console.warn(`⚠️ Game validation failed - commence_time too far in past:`, game.event_id, game.commence_time);
       return false;
     }
-    // --- CHANGE END ---
 
     return true;
   }
@@ -120,7 +117,6 @@ class GamesService {
     
     console.log('🔄 GamesService: Performing first-time initialization...');
     
-    // Warm up the cache service
     try {
       await cacheService.healthCheck();
       console.log('✅ GamesService: Cache service ready');
@@ -134,12 +130,8 @@ class GamesService {
   async warmupCache() {
     console.log('🔥 GamesService: Warming up cache...');
     try {
-        // Pre-load popular sports to cache
         await this.preloadPopularSports();
-        
-        // Pre-load sports list
         await this.getAvailableSports();
-        
         console.log('✅ GamesService: Cache warmup completed');
     } catch (error) {
         console.warn('⚠️ GamesService: Cache warmup failed:', error.message);
@@ -305,7 +297,6 @@ class GamesService {
       console.error(`❌ GamesService: CRITICAL failure for ${sportKey || 'all'}:`, error.message);
       
       if (error instanceof TimeoutError) {
-        // --- FIXED LINE 308: Added missing backtick ---
         console.warn(`⏰ GamesService: Timeout for ${sportKey || 'all'}, returning empty results`);
         return [];
       }
@@ -321,11 +312,10 @@ class GamesService {
     try {
       return await cacheService.getOrSetJSON(
         cacheKey,
-        CACHE_TTL.GAMES_DATA, // Use a reasonable TTL
+        CACHE_TTL.GAMES_DATA,
         async () => {
           console.log(`🔍 GamesService: Fetching game by ID: ${eventId}`);
           
-          // 1. Try database first (most efficient)
           try {
             const dbGame = await databaseService.getGameById(eventId);
             if (dbGame) {
@@ -336,11 +326,10 @@ class GamesService {
             console.warn(`⚠️ GamesService: Database lookup for game ${eventId} failed:`, dbError.message);
           }
   
-          // 2. Fallback: Search through all available sports' games
           console.log(`🔄 GamesService: Game ${eventId} not in DB, searching all sports...`);
           const sports = await this.getAvailableSports();
           for (const sport of sports) {
-            const games = await this.getGamesForSport(sport.sport_key, { useCache: false, hoursAhead: 168 }); // Wide window
+            const games = await this.getGamesForSport(sport.sport_key, { useCache: false, hoursAhead: 168 });
             const foundGame = games.find(g => g.event_id === eventId);
             if (foundGame) {
               console.log(`✅ GamesService: Found game ${eventId} in ${sport.sport_key}.`);
