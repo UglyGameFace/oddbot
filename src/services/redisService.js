@@ -10,14 +10,15 @@ class RedisService {
     this.connectionPromise = null;
     this.connectionEstablished = false;
     this.connectionAttempts = 0;
-    this.maxConnectionAttempts = 5; // Increased attempts
+    this.maxConnectionAttempts = 5;
     this.syntaxErrorCount = 0;
+    this.lastSyntaxError = null;
 
     if (env.REDIS_URL) {
       console.log('🔄 RedisService: Initializing Redis connection...');
       this.connect();
     } else {
-      console.warn('🟡 RedisService: REDIS_URL not found, Redis disabled.');
+      console.warn('⚠️ RedisService: REDIS_URL not found, Redis disabled.');
     }
   }
 
@@ -42,30 +43,42 @@ class RedisService {
           commandTimeout: 5000,
           maxRetriesPerRequest: 3,
           retryStrategy: (times) => {
-            const delay = Math.min(times * 100, 2000); // Reconnect with increasing delay
+            const delay = Math.min(times * 100, 2000);
             return delay;
           },
           reconnectOnError: (err) => {
             const targetError = 'read ECONNRESET';
             if (err.message.includes(targetError)) {
-              return true; // Attempt to reconnect on ECONNRESET
+              return true;
             }
             return false;
           },
           lazyConnect: true,
+          showFriendlyErrorStack: true, // Better error messages
+          enableAutoPipelining: false, // Disable to avoid syntax issues
         });
 
+        // Apply command safety wrappers
         this.applyCommandSafetyWrappers(newClient);
 
         newClient.on('error', (error) => {
-          const errorMessage = (error && error.message) ? error.message.toLowerCase() : '';
+          const errorMessage = error?.message?.toLowerCase() || '';
           
           if (errorMessage.includes('syntax error')) {
             this.syntaxErrorCount++;
+            this.lastSyntaxError = {
+              message: error.message,
+              timestamp: new Date().toISOString(),
+              stack: error.stack
+            };
+            console.error('❌ RedisService: Syntax Error:', error.message);
             return;
           }
           
-          console.error('❌ RedisService: Unhandled Client Error:', (error && error.message) ? error.message : String(error));
+          // Don't log connection errors during initial connection attempts
+          if (!errorMessage.includes('connect') || this.connectionEstablished) {
+            console.error('❌ RedisService: Client Error:', error.message);
+          }
           this.connectionEstablished = false;
         });
 
@@ -83,16 +96,16 @@ class RedisService {
         });
 
         newClient.on('reconnecting', (delay) => {
-          console.log(`🔁 RedisService: Reconnecting in ${delay}ms...`);
+          console.log(`🔄 RedisService: Reconnecting in ${delay}ms...`);
         });
 
         newClient.on('close', () => {
-          console.warn('🟡 RedisService: Connection closed');
+          console.warn('⚠️ RedisService: Connection closed');
           this.connectionEstablished = false;
         });
 
         newClient.on('end', () => {
-          console.warn('🟡 RedisService: Connection ended');
+          console.warn('⚠️ RedisService: Connection ended');
           this.connectionEstablished = false;
           this.client = null;
         });
@@ -122,18 +135,110 @@ class RedisService {
   applyCommandSafetyWrappers(client) {
     if (!client) return;
 
+    // Store original methods
     const originalEval = client.eval;
+    const originalKeys = client.keys;
+    const originalScan = client.scan;
+    const originalDel = client.del;
+
+    // Wrap EVAL command
     client.eval = async function(script, numKeys, ...args) {
       try {
-        if (typeof script !== 'string' || script.trim().length === 0) throw new Error('Invalid Lua script');
+        if (typeof script !== 'string' || script.trim().length === 0) {
+          throw new Error('Invalid Lua script');
+        }
         const keysCount = parseInt(numKeys, 10);
-        if (isNaN(keysCount) || keysCount < 0) throw new Error(`Invalid keys count: ${numKeys}`);
+        if (isNaN(keysCount) || keysCount < 0) {
+          throw new Error(`Invalid keys count: ${numKeys}`);
+        }
         return await originalEval.apply(this, [script, keysCount, ...args]);
       } catch (error) {
-        if (error && error.message && error.message.includes('ERR syntax error')) {
+        if (error?.message?.includes('ERR syntax error')) {
           this.syntaxErrorCount++;
+          this.lastSyntaxError = {
+            message: error.message,
+            timestamp: new Date().toISOString(),
+            operation: 'eval',
+            script: script.substring(0, 100) + '...'
+          };
           console.error('❌ RedisService: EVAL syntax error:', error.message);
-          throw new Error(`Lua script execution failed: ${error.message}`);
+        }
+        throw error;
+      }
+    }.bind(this);
+
+    // Wrap KEYS command
+    client.keys = async function(pattern) {
+      try {
+        // Validate pattern
+        if (typeof pattern !== 'string') {
+          throw new Error('Pattern must be a string');
+        }
+        if (pattern.length > 500) {
+          throw new Error('Pattern too long');
+        }
+        return await originalKeys.call(this, pattern);
+      } catch (error) {
+        if (error?.message?.includes('ERR syntax error')) {
+          this.syntaxErrorCount++;
+          this.lastSyntaxError = {
+            message: error.message,
+            timestamp: new Date().toISOString(),
+            operation: 'keys',
+            pattern: pattern
+          };
+          console.error('❌ RedisService: KEYS syntax error:', error.message);
+        }
+        throw error;
+      }
+    }.bind(this);
+
+    // Wrap SCAN command
+    client.scan = async function(cursor, ...args) {
+      try {
+        // Validate cursor
+        if (typeof cursor !== 'string' && typeof cursor !== 'number') {
+          throw new Error('Cursor must be string or number');
+        }
+        return await originalScan.call(this, cursor, ...args);
+      } catch (error) {
+        if (error?.message?.includes('ERR syntax error')) {
+          this.syntaxErrorCount++;
+          this.lastSyntaxError = {
+            message: error.message,
+            timestamp: new Date().toISOString(),
+            operation: 'scan',
+            cursor: cursor,
+            args: args
+          };
+          console.error('❌ RedisService: SCAN syntax error:', error.message);
+        }
+        throw error;
+      }
+    }.bind(this);
+
+    // Wrap DEL command
+    client.del = async function(...keys) {
+      try {
+        // Validate keys
+        if (keys.length === 0) {
+          throw new Error('No keys provided for deletion');
+        }
+        if (keys.length > 1000) {
+          console.warn('⚠️ RedisService: Large DEL operation, consider batching');
+        }
+        return await originalDel.call(this, ...keys);
+      } catch (error) {
+        if (error?.message?.includes('ERR syntax error')) {
+          this.syntaxErrorCount++;
+          this.lastSyntaxError = {
+            message: error.message,
+            timestamp: new Date().toISOString(),
+            operation: 'del',
+            keyCount: keys.length,
+            firstKey: keys[0]
+          };
+          console.error('❌ RedisService: DEL syntax error:', error.message);
         }
         throw error;
       }
@@ -179,14 +284,16 @@ class RedisService {
       return { 
         connected: isConnected, 
         latency: latency,
-        status: client.status
+        status: client.status,
+        syntaxErrors: this.syntaxErrorCount
       };
     } catch (error) {
       console.error('❌ RedisService: Connection test FAILED:', error.message);
       return { 
         connected: false, 
         latency: -1, 
-        error: error.message
+        error: error.message,
+        syntaxErrors: this.syntaxErrorCount
       };
     }
   }
@@ -215,8 +322,55 @@ class RedisService {
     return this.syntaxErrorCount;
   }
 
+  getLastSyntaxError() {
+    return this.lastSyntaxError;
+  }
+
   resetSyntaxErrorCount() {
     this.syntaxErrorCount = 0;
+    this.lastSyntaxError = null;
+  }
+
+  // Method to get detailed connection status
+  getConnectionStatus() {
+    return {
+      connected: this.isConnected(),
+      status: this.client?.status || 'disconnected',
+      connectionAttempts: this.connectionAttempts,
+      syntaxErrorCount: this.syntaxErrorCount,
+      lastSyntaxError: this.lastSyntaxError,
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  // Safe command execution with error handling
+  async executeCommand(command, ...args) {
+    try {
+      const client = await this.getClient();
+      if (!client) {
+        throw new Error('Redis client not available');
+      }
+      
+      // Validate command exists
+      if (typeof client[command] !== 'function') {
+        throw new Error(`Invalid Redis command: ${command}`);
+      }
+      
+      return await client[command](...args);
+    } catch (error) {
+      console.error(`❌ RedisService: Command ${command} failed:`, error.message);
+      
+      // Capture to Sentry if it's not a syntax error
+      if (!error.message.includes('syntax error')) {
+        sentryService.captureError(error, {
+          component: 'redis_service',
+          operation: command,
+          args: args.slice(0, 3) // Limit args for privacy
+        });
+      }
+      
+      throw error;
+    }
   }
 }
 
