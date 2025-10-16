@@ -5,7 +5,6 @@ import { sentryService } from './sentryService.js';
 import { COMPREHENSIVE_SPORTS } from '../config/sportDefinitions.js';
 import { withTimeout, TimeoutError } from '../utils/asyncUtils.js';
 
-// --- HELPER CLASS DEFINITION ---
 class GameEnhancementService {
   static enhanceGameData(games, sportKey, source) {
     if (!Array.isArray(games)) return [];
@@ -14,11 +13,10 @@ class GameEnhancementService {
   static enhanceSingleGame(game, sportKey, source) {
     return {
       ...game,
-      source: source, // This temporary field will be stripped before DB insert.
+      source: source,
     };
   }
 }
-// -----------------------------
 
 const COMPREHENSIVE_FALLBACK_SPORTS = Object.entries(COMPREHENSIVE_SPORTS).map(([sport_key, data]) => ({
   sport_key,
@@ -72,7 +70,7 @@ class DatabaseService {
       // --- DEFINITIVE FIX START ---
       // This is the correct and final solution. We define the exact columns your 'games' table has.
       // Then, we create a new, clean object for each game that ONLY includes these valid columns.
-      // This strips away any and all extra metadata (like 'enhancement_source', 'enhanced', etc.)
+      // This strips away any and all extra metadata (like 'enhancement_source', 'enhanced', 'last_updated')
       // that other services may have added, preventing all schema-related errors permanently.
       const VALID_GAME_COLUMNS = [
         'event_id',
@@ -82,7 +80,6 @@ class DatabaseService {
         'home_team',
         'away_team',
         'bookmakers',
-        'last_updated',
         'scores',
         'status'
       ];
@@ -94,7 +91,7 @@ class DatabaseService {
             cleanGame[col] = game[col];
           }
         });
-        cleanGame.last_updated = new Date().toISOString();
+        // We no longer add 'last_updated' here, as it's not a valid column in your schema.
         return cleanGame;
       });
       // --- DEFINITIVE FIX END ---
