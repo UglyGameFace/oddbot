@@ -7,10 +7,10 @@ import { COMPREHENSIVE_SPORTS } from '../config/sportDefinitions.js';
 import { withTimeout, TimeoutError } from '../utils/asyncUtils.js';
 
 const CACHE_TTL = {
-  SPORTS_LIST: 600,      // Increased from 300 to 600 seconds (10 minutes)
-  GAMES_DATA: 180,       // Increased from 120 to 180 seconds (3 minutes)  
-  ODDS_DATA: 90,         // Increased from 60 to 90 seconds (1.5 minutes)
-  VERIFIED_GAMES: 300    // Increased from 180 to 300 seconds (5 minutes)
+  SPORTS_LIST: 600,
+  GAMES_DATA: 180,
+  ODDS_DATA: 90,
+  VERIFIED_GAMES: 300
 };
 
 class GameEnhancementService {
@@ -19,12 +19,10 @@ class GameEnhancementService {
 
     return games.map((game) => ({
       ...game,
-      enhanced: true,
       enhancement_source: source,
       last_enhanced: new Date().toISOString(),
       has_odds: !!(game.bookmakers && game.bookmakers.length > 0),
       sport_key: sportKey
-      // REMOVED: cache_timestamp was here
     }));
   }
 
@@ -58,7 +56,7 @@ class GameEnhancementService {
 
     const gameTime = new Date(game.commence_time);
     const now = new Date();
-    const isWithinWindow = gameTime > new Date(now.getTime() - 4 * 60 * 60 * 1000); // Up to 4 hours in past
+    const isWithinWindow = gameTime > new Date(now.getTime() - 4 * 60 * 60 * 1000);
     
     if (!isWithinWindow) {
       console.warn(`⚠️ Game validation failed - commence_time too far in past:`, game.event_id, game.commence_time);
