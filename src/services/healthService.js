@@ -18,7 +18,7 @@ class ServiceHealthChecker {
       if (!redis) return { healthy: false, error: 'Redis not configured' };
       
       // Use a simpler ping test that doesn't rely on complex Redis operations
-      const pingResult = await withTimeout(redis.ping(), 3000, 'Redis_Ping');
+      const pingResult = await withTimeout(redis.ping(), 60000, 'Redis_Ping');
       return { 
         healthy: pingResult === 'PONG', 
         latency: Date.now() - checkStart,
