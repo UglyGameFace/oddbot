@@ -37,7 +37,7 @@ export class SportRadarProvider {
         if (error.response?.status === 401) {
             console.error(`❌ SportRadar 401 Unauthorized: The API key is invalid. Please verify SPORTRADAR_API_KEY in your .env file.`);
         } else if (error.response?.status === 403) {
-            console.error(`❌ SportRadar 403 Forbidden: Your API key is valid but does not have access to the "${endpointConfig.name}" feed. Please verify your subscriptions on the Sportradar dashboard.`);
+            console.error(`❌ SportRadar 403 Forbidden: Your API key does not have access to the "${endpointConfig.name}" feed. Please verify your subscriptions on the Sportradar dashboard.`);
         }
         throw error;
     }
@@ -71,7 +71,22 @@ export class SportRadarProvider {
       return [];
     }
 
-    return events.reduce((acc, event) => {
+    // --- FIX START ---
+    // Filter out games that have already started.
+    const now = new Date();
+    const upcomingEvents = events.filter(event => {
+        if (!event.scheduled) return false;
+        try {
+            const gameTime = new Date(event.scheduled);
+            return gameTime > now;
+        } catch (e) {
+            return false;
+        }
+    });
+    // --- FIX END ---
+
+
+    return upcomingEvents.reduce((acc, event) => {
       if (!event?.id || !event?.scheduled || !(event.home?.name && event.away?.name)) {
         return acc;
       }
