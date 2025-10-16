@@ -67,11 +67,7 @@ class DatabaseService {
     try {
       console.log(`🔄 Upserting ${gamesData.length} games...`);
       
-      // --- DEFINITIVE FIX START ---
-      // This is the correct and final solution. We define the exact columns your 'games' table has.
-      // Then, we create a new, clean object for each game that ONLY includes these valid columns.
-      // This strips away any and all extra metadata (like 'enhancement_source', 'enhanced', 'last_updated')
-      // that other services may have added, preventing all schema-related errors permanently.
+      // Updated VALID_GAME_COLUMNS to include league_key
       const VALID_GAME_COLUMNS = [
         'event_id',
         'sport_key',
@@ -81,7 +77,8 @@ class DatabaseService {
         'away_team',
         'bookmakers',
         'scores',
-        'status'
+        'status',
+        'league_key' // Added league_key to fix the null constraint error
       ];
 
       const gamesToUpsert = gamesData.map(game => {
@@ -91,15 +88,20 @@ class DatabaseService {
             cleanGame[col] = game[col];
           }
         });
-        // We no longer add 'last_updated' here, as it's not a valid column in your schema.
+        
+        // CRITICAL FIX: Ensure league_key always has a value
+        // Use sport_key as fallback for league_key if not provided
+        if (!cleanGame.league_key) {
+          cleanGame.league_key = cleanGame.sport_key || 'unknown_league';
+        }
+        
         return cleanGame;
       });
-      // --- DEFINITIVE FIX END ---
 
       const { data, error } = await withTimeout(
         this.client
           .from('games')
-          .upsert(gamesToUpsert, { // Use the cleaned data
+          .upsert(gamesToUpsert, {
             onConflict: 'event_id',
             ignoreDuplicates: false
           })
@@ -571,6 +573,15 @@ class DatabaseService {
       console.error('❌ Supabase getSportGameCounts CRITICAL error:', error.message);
       throw error;
     }
+  }
+
+  _assessSportDataQuality(sport) {
+    return {
+      has_upcoming_games: sport.upcoming_games > 0,
+      team_variety: sport.teams.size > 2,
+      game_frequency: sport.game_count > 0,
+      recent_data: sport.last_game_time && new Date(sport.last_game_time) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+    };
   }
 }
 
