@@ -1,4 +1,4 @@
-// src/services/gamesService.js - COMPLETE FIXED VERSION WITH CACHE WARMUP
+// src/services/gamesService.js - COMPLETE FIXED VERSION
 import databaseService from './databaseService.js';
 import oddsService from './oddsService.js';
 import env from '../config/env.js';
@@ -17,13 +17,14 @@ class GameEnhancementService {
   static enhanceGameData(games, sportKey, source) {
     if (!Array.isArray(games)) return [];
 
+    // --- FIX START ---
+    // REMOVED ALL EXTRA METADATA FIELDS.
+    // The function now only ensures the sport_key is present.
     return games.map((game) => ({
       ...game,
-      enhancement_source: source,
-      last_enhanced: new Date().toISOString(),
-      has_odds: !!(game.bookmakers && game.bookmakers.length > 0),
       sport_key: sportKey
     }));
+    // --- FIX END ---
   }
 
   static filterGamesByTime(games, hoursAhead, includeLive = false) {
