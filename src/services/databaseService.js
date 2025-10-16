@@ -1,11 +1,11 @@
-// src/services/databaseService.js - COMPLETE UPDATE WITH CENTRALIZED ENHANCEMENT
+// src/services/databaseService.js - FINAL CORRECTED VERSION
 import { createClient } from '@supabase/supabase-js';
 import env from '../config/env.js';
 import { sentryService } from './sentryService.js';
 import { COMPREHENSIVE_SPORTS } from '../config/sportDefinitions.js';
 import { withTimeout, TimeoutError } from '../utils/asyncUtils.js';
 
-// --- HELPER CLASS DEFINITION (Inserted to fix "is not defined" error) ---
+// --- HELPER CLASS DEFINITION ---
 class GameEnhancementService {
   static enhanceGameData(games, sportKey, source) {
     if (!Array.isArray(games)) return [];
@@ -14,12 +14,11 @@ class GameEnhancementService {
   static enhanceSingleGame(game, sportKey, source) {
     return {
       ...game,
-      enhancement_source: source,
-      source: source,
+      source: source, // This temporary field will be stripped before DB insert.
     };
   }
 }
-// -----------------------------------------------------------------------
+// -----------------------------
 
 const COMPREHENSIVE_FALLBACK_SPORTS = Object.entries(COMPREHENSIVE_SPORTS).map(([sport_key, data]) => ({
   sport_key,
@@ -57,6 +56,80 @@ let supabaseClient = buildClient();
 class DatabaseService {
   get client() { 
     return supabaseClient || (supabaseClient = buildClient()); 
+  }
+
+  // ========== DATA MANAGEMENT METHODS ==========
+
+  async upsertGames(gamesData) {
+    if (!this.client || !gamesData?.length) {
+      console.warn('❌ No client or games data for upsert');
+      return { data: [], error: null };
+    }
+    
+    try {
+      console.log(`🔄 Upserting ${gamesData.length} games...`);
+      
+      // --- DEFINITIVE FIX START ---
+      // This is the correct and final solution. We define the exact columns your 'games' table has.
+      // Then, we create a new, clean object for each game that ONLY includes these valid columns.
+      // This strips away any and all extra metadata (like 'enhancement_source', 'enhanced', etc.)
+      // that other services may have added, preventing all schema-related errors permanently.
+      const VALID_GAME_COLUMNS = [
+        'event_id',
+        'sport_key',
+        'sport_title',
+        'commence_time',
+        'home_team',
+        'away_team',
+        'bookmakers',
+        'last_updated',
+        'scores',
+        'status'
+      ];
+
+      const gamesToUpsert = gamesData.map(game => {
+        const cleanGame = {};
+        VALID_GAME_COLUMNS.forEach(col => {
+          if (game[col] !== undefined) {
+            cleanGame[col] = game[col];
+          }
+        });
+        cleanGame.last_updated = new Date().toISOString();
+        return cleanGame;
+      });
+      // --- DEFINITIVE FIX END ---
+
+      const { data, error } = await withTimeout(
+        this.client
+          .from('games')
+          .upsert(gamesToUpsert, { // Use the cleaned data
+            onConflict: 'event_id',
+            ignoreDuplicates: false
+          })
+          .select(),
+        15000,
+        `upsertGames_${gamesToUpsert.length}`
+      );
+
+      if (error) throw error;
+
+      console.log(`✅ Successfully upserted ${data?.length || 0} games`);
+      return { data, error: null };
+
+    } catch (error) {
+       if (error instanceof TimeoutError) {
+         console.error('❌ Supabase upsert TIMEOUT:', error.message);
+         return { data: null, error: new Error('Upsert Timeout') };
+       }
+       
+      console.error('❌ Supabase upsert CRITICAL error:', error.message);
+      sentryService.captureError(error, { 
+        component: 'database_service', 
+        operation: 'upsertGames',
+        game_count: gamesData.length
+      });
+      throw error;
+    }
   }
 
   // ========== CORE SPORTS METHODS ==========
@@ -244,8 +317,6 @@ class DatabaseService {
     }
   }
 
-  // ========== ENHANCED GAME METHODS ==========
-
   async getGameById(eventId) {
     if (!this.client) return null;
     
@@ -397,55 +468,6 @@ class DatabaseService {
     }
   }
 
-  // ========== DATA MANAGEMENT METHODS ==========
-
-  async upsertGames(gamesData) {
-    if (!this.client || !gamesData?.length) {
-      console.warn('❌ No client or games data for upsert');
-      return { data: [], error: null };
-    }
-    
-    try {
-      console.log(`🔄 Upserting ${gamesData.length} games...`);
-      
-      const gamesWithMetadata = gamesData.map(game => ({
-        ...game,
-        last_updated: new Date().toISOString()
-      }));
-
-      const { data, error } = await withTimeout(
-        this.client
-          .from('games')
-          .upsert(gamesWithMetadata, { 
-            onConflict: 'event_id',
-            ignoreDuplicates: false
-          })
-          .select(),
-        15000,
-        `upsertGames_${gamesData.length}`
-      );
-
-      if (error) throw error;
-
-      console.log(`✅ Successfully upserted ${data?.length || 0} games`);
-      return { data, error: null };
-
-    } catch (error) {
-       if (error instanceof TimeoutError) {
-         console.error('❌ Supabase upsert TIMEOUT:', error.message);
-         return { data: null, error: new Error('Upsert Timeout') };
-       }
-       
-      console.error('❌ Supabase upsert CRITICAL error:', error.message);
-      sentryService.captureError(error, { 
-        component: 'database_service', 
-        operation: 'upsertGames',
-        game_count: gamesData.length
-      });
-      throw error;
-    }
-  }
-
   async getOddsDateRange(sportKey = null) {
     if (!this.client) return { min_date: null, max_date: null, game_count: 0 };
     
@@ -552,219 +574,6 @@ class DatabaseService {
       console.error('❌ Supabase getSportGameCounts CRITICAL error:', error.message);
       throw error;
     }
-  }
-
-  // ========== USER MANAGEMENT METHODS ==========
-
-  async findOrCreateUser(telegramId, firstName = '', username = '') {
-    if (!this.client) return null;
-    
-    try {
-      let { data: user, error } = await this.client
-        .from('users')
-        .select('*')
-        .eq('tg_id', telegramId)
-        .single();
-
-      if (error && error.code === 'PGRST116') {
-        const initialPreferences = {
-            favorite_sports: [],
-            bet_preferences: {
-              max_legs: 5,
-              include_props: true,
-              preferred_mode: 'web',
-              risk_tolerance: 'medium'
-            },
-            notifications: {
-              ai_parlays: true,
-              live_odds: false,
-              results: true
-            },
-            created_at: new Date().toISOString(),
-            last_active: new Date().toISOString()
-        };
-
-        const { data: newUser, error: insertError } = await this.client
-          .from('users')
-          .insert({
-            tg_id: telegramId,
-            first_name: firstName,
-            username: username,
-            preferences: initialPreferences
-          })
-          .select()
-          .single();
-
-        if (insertError) throw insertError;
-        user = newUser;
-        console.log(`✅ Created new user: ${firstName} (${telegramId})`);
-        
-      } else if (error) {
-        throw error;
-      } else {
-        const updatedPreferences = {
-            ...(user.preferences || {}),
-            last_active: new Date().toISOString()
-        };
-        await this.client
-          .from('users')
-          .update({ preferences: updatedPreferences })
-          .eq('tg_id', telegramId);
-      }
-
-      return user;
-
-    } catch (error) {
-      console.error(`❌ Supabase findOrCreateUser CRITICAL error for ${telegramId}:`, error.message);
-      sentryService.captureError(error, { component: 'database_service', operation: 'findOrCreateUser' });
-      throw error;
-    }
-  }
-
-  async getUserSettings(telegramId) {
-    const user = await this.findOrCreateUser(telegramId);
-    return user?.preferences || {};
-  }
-
-  async updateUserSettings(telegramId, newSettings) {
-    if (!this.client) return null;
-    
-    try {
-      const updatedPreferences = {
-          ...newSettings,
-          updated_at: new Date().toISOString(),
-          last_active: new Date().toISOString()
-      };
-
-      const { data, error } = await this.client
-        .from('users')
-        .update({ 
-          preferences: updatedPreferences
-        })
-        .eq('tg_id', telegramId)
-        .select()
-        .single();
-
-      if (error) throw error;
-      
-      console.log(`✅ Updated settings for user: ${telegramId}`);
-      return data;
-
-    } catch (error) {
-      console.error(`❌ Supabase updateUserSettings CRITICAL error for ${telegramId}:`, error.message);
-      sentryService.captureError(error, { component: 'database_service', operation: 'updateUserSettings' });
-      throw error;
-    }
-  }
-
-  // ========== SERVICE MANAGEMENT METHODS ==========
-
-  async testConnection() {
-    if (!this.client) return true;
-    
-    try {
-      const { data, error } = await withTimeout(
-        this.client.from('games').select('count').limit(1),
-        5000,
-        'testConnection'
-      );
-
-      if (error) throw error;
-      
-      console.log('✅ Database connection test passed');
-      return true;
-
-    } catch (error) {
-      if (error instanceof TimeoutError) {
-         console.error('❌ Database connection test TIMEOUT:', error.message);
-         return false;
-      }
-      
-      console.error('❌ Database connection test FAILED:', error.message);
-      return false;
-    }
-  }
-
-  async getDatabaseStats() {
-    if (!this.client) return null;
-    
-    try {
-      const results = await withTimeout(
-          Promise.all([
-            this.client.from('games').select('*', { count: 'exact', head: true }),
-            this.client.from('users').select('*', { count: 'exact', head: true }),
-            this.client.from('games').select('sport_key', { count: 'exact', head: true }),
-            this.getOddsDateRange()
-          ]),
-          10000,
-          'getDatabaseStats'
-      );
-      
-      const [
-        gamesCount,
-        usersCount,
-        sportsCount,
-        dateRange
-      ] = results;
-
-      return {
-        total_games: gamesCount.count || 0,
-        total_users: usersCount.count || 0,
-        total_sports: sportsCount.count || 0,
-        date_range: dateRange,
-        last_updated: new Date().toISOString(),
-        status: 'healthy'
-      };
-
-    } catch (error) {
-      if (error instanceof TimeoutError) {
-         console.error('❌ Database stats TIMEOUT:', error.message);
-         return {
-            total_games: 0,
-            total_users: 0,
-            total_sports: 0,
-            date_range: { min_date: null, max_date: null, game_count: 0 },
-            status: 'timeout',
-            error: error.message
-          };
-      }
-
-      console.error('❌ Database stats CRITICAL error:', error.message);
-      return {
-        total_games: 0,
-        total_users: 0,
-        total_sports: 0,
-        date_range: { min_date: null, max_date: null, game_count: 0 },
-        status: 'error',
-        error: error.message
-      };
-    }
-  }
-
-  // ========== PRIVATE UTILITY METHODS ==========
-
-  _assessSportDataQuality(sport) {
-    const score = Math.min(100, 
-      (sport.upcoming_games > 0 ? 40 : 0) +
-      (sport.game_count > 10 ? 30 : sport.game_count > 5 ? 20 : 10) +
-      (sport.team_count > 5 ? 30 : sport.team_count > 2 ? 20 : 10)
-    );
-
-    return {
-      score,
-      rating: score >= 80 ? 'excellent' : score >= 60 ? 'good' : score >= 40 ? 'fair' : 'poor'
-    };
-  }
-
-  _generateGameChecksum(game) {
-    const str = `${game.event_id}|${game.home_team}|${game.away_team}|${game.commence_time}`;
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      const char = str.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash;
-    }
-    return hash.toString(36);
   }
 }
 
