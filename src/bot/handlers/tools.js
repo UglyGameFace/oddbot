@@ -2,6 +2,7 @@
 import { getRedisClient } from '../../services/redisService.js';
 import databaseService from '../../services/databaseService.js';
 import rateLimitService from '../../services/rateLimitService.js';
+import healthService from '../../services/healthService.js'; // ADD THIS IMPORT
 import env from '../../config/env.js';
 import axios from 'axios';
 
@@ -283,11 +284,11 @@ async function handleApiStatus(bot, chatId, messageId) {
     statuses['API-Sports'] = '🔴 Not Configured';
   }
 
-  // Check Supabase
+  // FIXED: Check Supabase using healthService instead of non-existent databaseService.getDatabaseStats()
   try {
-    const stats = await databaseService.getDatabaseStats();
-    if (stats && stats.status === 'healthy') {
-      statuses['Supabase Database'] = `✅ Online (${stats.total_games || 0} games)`;
+    const health = await healthService.getHealth();
+    if (health?.services?.database?.ok) {
+      statuses['Supabase Database'] = '✅ Online';
     } else {
       statuses['Supabase Database'] = '❌ Unhealthy';
     }
