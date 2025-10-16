@@ -56,6 +56,31 @@ class DatabaseService {
     return supabaseClient || (supabaseClient = buildClient()); 
   }
 
+  async testConnection() {
+    if (!this.client) {
+      console.warn('⚠️ DatabaseService: No Supabase client available');
+      return false;
+    }
+    
+    try {
+      const { data, error } = await withTimeout(
+        this.client
+          .from('games')
+          .select('count')
+          .limit(1),
+        5000,
+        'testConnection'
+      );
+      
+      const isConnected = !error;
+      console.log(`✅ DatabaseService: Connection test ${isConnected ? 'PASSED' : 'FAILED'}`);
+      return isConnected;
+    } catch (error) {
+      console.error('❌ DatabaseService: Connection test failed:', error.message);
+      return false;
+    }
+  }
+
   // ========== DATA MANAGEMENT METHODS ==========
 
   async upsertGames(gamesData) {
@@ -67,7 +92,6 @@ class DatabaseService {
     try {
       console.log(`🔄 Upserting ${gamesData.length} games...`);
       
-      // Updated VALID_GAME_COLUMNS to include league_key
       const VALID_GAME_COLUMNS = [
         'event_id',
         'sport_key',
@@ -78,7 +102,7 @@ class DatabaseService {
         'bookmakers',
         'scores',
         'status',
-        'league_key' // Added league_key to fix the null constraint error
+        'league_key'
       ];
 
       const gamesToUpsert = gamesData.map(game => {
@@ -89,8 +113,6 @@ class DatabaseService {
           }
         });
         
-        // CRITICAL FIX: Ensure league_key always has a value
-        // Use sport_key as fallback for league_key if not provided
         if (!cleanGame.league_key) {
           cleanGame.league_key = cleanGame.sport_key || 'unknown_league';
         }
