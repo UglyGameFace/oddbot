@@ -1,4 +1,4 @@
-// src/bot/handlers/ai.js - FINAL, COMPLETE, AND CORRECTED
+// src/bot/handlers/ai.js - FINAL WITH VALIDATION ERROR HANDLING
 import aiService from '../../services/aiService.js';
 import gamesService from '../../services/gamesService.js';
 import { getAIConfig, setUserState, getUserState } from '../state.js';
@@ -82,7 +82,7 @@ export function registerAICallbacks(bot) {
           break;
         case 'sport':
           state.sportKey = parts.slice(2).join('_');
-          state.page = 0; // Reset game page
+          state.page = 0;
           await setUserState(chatId, state);
           await sendGameSelection(bot, chatId, message.message_id);
           break;
@@ -253,9 +253,7 @@ async function executeAiRequest(bot, chatId, messageId = null) {
     const game = await gamesService.getGameById(gameId);
     
     if (!game || game.source === 'fallback') {
-        const errorMessage = `❌ <b>Cannot Analyze Game: Invalid Data Source</b>\n\n` +
-                             `The bot has detected that its live odds providers are failing. This usually means your API keys are expired or invalid.\n\n` +
-                             `A real parlay cannot be generated without a working data source. Please check your API keys and try again.`;
+        const errorMessage = `❌ <b>Cannot Analyze Game: Invalid Data Source</b>\n\nThe bot has detected that its live odds providers are failing. This usually means your API keys are expired or invalid.\n\nA real parlay cannot be generated without a working data source. Please check your API keys and try again.`;
         return safeEditMessage(chatId, sentMessage.message_id, errorMessage, { 
             parse_mode: 'HTML', 
             reply_markup: { inline_keyboard: [[{ text: '« Change Game', callback_data: 'ai_back_game' }]] } 
@@ -281,27 +279,59 @@ async function executeAiRequest(bot, chatId, messageId = null) {
             chatId: chatId,
             gameContext: game 
         });
+        
+        // ENHANCED VALIDATION ERROR HANDLING
+        if (parlay.validation && parlay.validation.errors.length > 0) {
+            console.warn('AI validation warnings:', parlay.validation.errors);
+            
+            if (parlay.validation.validCount === 0) {
+                const errorMessage = `❌ <b>AI Generated Factually Incorrect Analysis</b>\n\nThe AI produced bets with multiple factual errors that failed validation:\n\n• ${parlay.validation.errors.slice(0, 3).join('\n• ')}\n\nThis usually happens when the AI hallucinates players or stats. Please try again.`;
+                return safeEditMessage(chatId, sentMessage.message_id, errorMessage, { 
+                    parse_mode: 'HTML', 
+                    reply_markup: { inline_keyboard: [[{ text: '🔄 Try Again', callback_data: `ai_game_${gameId}` }]] } 
+                });
+            }
+        }
+        
         await sendParlayResult(bot, chatId, parlay, state, mode, sentMessage.message_id);
     } catch (error) {
         console.error('AI handler execution error:', error.message);
-        const errorMessage = `❌ <b>AI Analysis Failed</b>\n\nThe AI provider failed to generate a parlay after multiple attempts. This can happen during periods of high demand or if the selected game has limited available data.\n\n` +
-                             `<i>Please try again in a few moments or select a different game.</i>\n\n` +
-                             `<b>Error Details:</b> <code>${escapeHTML(error.message)}</code>`;
-        await safeEditMessage(chatId, sentMessage.message_id, errorMessage, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔄 Try Again', callback_data: `ai_game_${gameId}` }, { text: '« Change Game', callback_data: 'ai_back_game' }]] } });
+        
+        // ENHANCED ERROR MESSAGES FOR VALIDATION FAILURES
+        let errorMessage;
+        if (error.message.includes('factual errors') || error.message.includes('validation')) {
+            errorMessage = `❌ <b>AI Quality Control Failed</b>\n\nThe AI generated bets that didn't pass our fact-checking system. This usually happens when:\n\n• Wrong players are mentioned (e.g., Aaron Rodgers in Steelers-Bengals)\n• Implausible betting lines are suggested\n• Contradictory advice is given\n\n<b>Please try again with a different game or sport.</b>`;
+        } else {
+            errorMessage = `❌ <b>AI Analysis Failed</b>\n\nThe AI provider failed to generate a parlay after multiple attempts. This can happen during periods of high demand or if the selected game has limited available data.\n\n<i>Please try again in a few moments or select a different game.</i>\n\n<b>Error Details:</b> <code>${escapeHTML(error.message)}</code>`;
+        }
+        
+        await safeEditMessage(chatId, sentMessage.message_id, errorMessage, { 
+            parse_mode: 'HTML', 
+            reply_markup: { 
+                inline_keyboard: [
+                    [{ text: '🔄 Try Again', callback_data: `ai_game_${gameId}` }], 
+                    [{ text: '« Change Game', callback_data: 'ai_back_game' }]
+                ] 
+            } 
+        });
     }
 }
 
 async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
     const { sportKey, numLegs } = state;
-    const { legs, parlay_price_american, quantitative_analysis, research_metadata, portfolio_construction } = parlay;
+    const { legs, parlay_price_american, quantitative_analysis, research_metadata, portfolio_construction, validation } = parlay;
     const sportTitle = getSportTitle(sportKey);
     
     if (!legs || legs.length < numLegs) {
-        const errorText = `❌ <b>No Profitable Parlay Found</b>\n\n` +
-                         `The AI and quantitative models could not construct a valid ${numLegs}-leg parlay with a positive expected value (+EV) from the selected game.\n\n`+
-                         `This is a feature, not a bug. A disciplined analyst does not force a bet when there's no value. Try another game or adjust your settings.`;
+        const errorText = `❌ <b>No Profitable Parlay Found</b>\n\nThe AI and quantitative models could not construct a valid ${numLegs}-leg parlay with a positive expected value (+EV) from the selected game.\n\nThis is a feature, not a bug. A disciplined analyst does not force a bet when there's no value. Try another game or adjust your settings.`;
         const keyboard = [[{ text: '🔄 Try a Different Game', callback_data: 'ai_back_game' }, { text: '🔄 New Sport', callback_data: 'ai_back_sport' }]];
         return safeEditMessage(chatId, messageId, errorText, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
+    }
+    
+    // ADD VALIDATION WARNING IF NEEDED
+    let validationNote = '';
+    if (validation && validation.errors.length > 0) {
+        validationNote = `\n\n⚠️ <i>Note: Some AI suggestions were filtered out due to factual inaccuracies.</i>`;
     }
     
     let response = `🧠 <b>QUANTUM PARLAY REPORT</b>\n`;
@@ -336,6 +366,8 @@ async function sendParlayResult(bot, chatId, parlay, state, mode, messageId) {
         response += `<b>Win Probability:</b> ${escapeHTML((calibrated.jointProbability * 100).toFixed(1))}%\n`;
         response += `<b>Risk Level:</b> ${escapeHTML(riskAssessment.overallRisk)}\n`;
     }
+    
+    response += validationNote;
 
     const finalKeyboard = [[{ text: '🔄 Build Another', callback_data: 'ai_back_sport' }]];
     await safeEditMessage(chatId, messageId, response, { parse_mode: 'HTML', reply_markup: { inline_keyboard: finalKeyboard } });
