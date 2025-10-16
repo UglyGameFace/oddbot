@@ -274,7 +274,10 @@ async function initializeBot() {
           throw new Error('Critical services failed to become ready within the startup timeout.');
       }
 
-      // --- CACHE WARMUP ADDED HERE ---
+      isServiceReady = true;
+      console.log('🎯 Service marked as ready for health checks');
+
+      // --- CACHE WARMUP MOVED HERE ---
       console.log('🔥 Starting cache warmup...');
       try {
         await Promise.all([
@@ -285,9 +288,6 @@ async function initializeBot() {
       } catch (error) {
         console.warn('⚠️ Cache warmup had issues:', error.message);
       }
-
-      isServiceReady = true;
-      console.log('🎯 Service marked as ready for health checks');
 
       try {
         const me = await bot.getMe();
