@@ -1,4 +1,4 @@
-// src/services/oddsService.js - COMPLETE FIXED VERSION WITH CACHE WARMUP
+// src/services/oddsService.js - FINAL FIXED VERSION
 import env from '../config/env.js';
 import cacheService from './cacheService.js';
 import { sentryService } from './sentryService.js';
@@ -17,7 +17,6 @@ const CACHE_TTL = {
   USAGE: 300
 };
 
-// Helper classes
 class GameEnhancementService {
   static enhanceGameData(games, sportKey, source) {
     if (!Array.isArray(games)) return [];
@@ -46,42 +45,42 @@ class GameEnhancementService {
     });
   }
 
-static validateGameData(game) {
-  if (!game) return false;
-  
-  const hasBasicInfo = (
-    (game.id || game.event_id || game.game_id) && 
-    game.sport_key &&
-    game.commence_time && 
-    (game.home_team || game.homeTeam) &&
-    (game.away_team || game.awayTeam)
-  );
-
-  if (!hasBasicInfo) {
-    console.warn(`❌ Game validation failed - missing basic info:`, game.id || game.event_id);
-    return false;
-  }
-
-  try {
-    const gameTime = new Date(game.commence_time);
-    const now = new Date();
-    const maxPastHours = 24;
-    const maxFutureDays = 365;
+  static validateGameData(game) {
+    if (!game) return false;
     
-    const isReasonableTime = gameTime > new Date(now.getTime() - maxPastHours * 60 * 60 * 1000) &&
-                            gameTime < new Date(now.getTime() + maxFutureDays * 24 * 60 * 60 * 1000);
-    
-    if (!isReasonableTime) {
-      console.warn(`❌ Game validation failed - unreasonable commence_time:`, game.commence_time);
+    const hasBasicInfo = (
+      (game.id || game.event_id || game.game_id) && 
+      game.sport_key &&
+      game.commence_time && 
+      (game.home_team || game.homeTeam) &&
+      (game.away_team || game.awayTeam)
+    );
+
+    if (!hasBasicInfo) {
+      console.warn(`❌ Game validation failed - missing basic info:`, game.id || game.event_id);
       return false;
     }
-  } catch (dateError) {
-    console.warn(`❌ Game validation failed - invalid commence_time:`, game.commence_time);
-    return false;
-  }
 
-  return true;
-}
+    try {
+      const gameTime = new Date(game.commence_time);
+      const now = new Date();
+      const maxPastHours = 24;
+      const maxFutureDays = 365;
+      
+      const isReasonableTime = gameTime > new Date(now.getTime() - maxPastHours * 60 * 60 * 1000) &&
+                              gameTime < new Date(now.getTime() + maxFutureDays * 24 * 60 * 60 * 1000);
+      
+      if (!isReasonableTime) {
+        console.warn(`❌ Game validation failed - unreasonable commence_time:`, game.commence_time);
+        return false;
+      }
+    } catch (dateError) {
+      console.warn(`❌ Game validation failed - invalid commence_time:`, game.commence_time);
+      return false;
+    }
+
+    return true;
+  }
 
   static normalizeGameData(game, provider) {
     if (!game) return null;
@@ -151,17 +150,15 @@ class FallbackProvider {
   constructor() {
     this.name = 'fallback';
     this.priority = 100;
-    this.initialized = false;
+    this.initialized = true; // CRITICAL FIX: Fallback is always ready
   }
 
   async initialize() {
-    if (this.initialized) return;
-    console.log('🔄 FallbackProvider: Initializing...');
-    this.initialized = true;
+    // No-op - fallback is always ready
+    return Promise.resolve();
   }
 
   async fetchSportOdds(sportKey, options = {}) {
-    await this.initialize();
     console.log(`🔄 FallbackProvider: Using fallback for ${sportKey} (no real odds)`);
     
     return [{
@@ -179,7 +176,6 @@ class FallbackProvider {
   }
 
   async fetchAvailableSports() {
-    await this.initialize();
     console.log('🔄 FallbackProvider: Using comprehensive sports list');
     
     try {
@@ -220,70 +216,54 @@ class FallbackProvider {
 class OddsService {
   constructor() {
     this.providers = [];
-    this.initialized = false;
+    this.initialized = true; // CRITICAL FIX: Mark as initialized immediately
     this.providerStatus = new Map();
     this.fetchLocks = new Map();
-    this.initializationPromise = null;
     
     console.log('🎯 OddsService: Initializing providers...');
     this._initializeProviders();
     
-    this._ensureInitialized().catch(error => {
-      console.warn('⚠️ OddsService: Initial background initialization failed:', error.message);
+    // CRITICAL FIX: Start background initialization but don't wait for it
+    this._initializeProvidersInBackground().catch(error => {
+      console.warn('⚠️ OddsService: Background provider initialization failed:', error.message);
     });
+  }
+
+  async _initializeProvidersInBackground() {
+    console.log('🔄 OddsService: Starting background provider initialization...');
+    
+    for (const provider of this.providers) {
+      if (provider.initialize && provider.name !== 'fallback') {
+        try {
+          await provider.initialize();
+          this.providerStatus.set(provider.name, 'initialized');
+          console.log(`✅ OddsService: ${provider.name} initialized successfully`);
+        } catch (error) {
+          console.error(`❌ OddsService: Failed to initialize ${provider.name}:`, error.message);
+          this.providerStatus.set(provider.name, 'initialization_failed');
+        }
+      } else {
+        // Fallback provider doesn't need initialization
+        this.providerStatus.set(provider.name, 'initialized');
+      }
+    }
+    
+    console.log('✅ OddsService: Background provider initialization completed');
   }
 
   async warmupCache() {
     console.log('🔥 OddsService: Warming up cache...');
     try {
-        await this.getAvailableSports();
-        
-        const popularSports = ['americanfootball_nfl', 'basketball_nba', 'baseball_mlb'];
-        for (const sport of popularSports) {
-            await this.getSportOdds(sport, { useCache: true }).catch(() => {});
-        }
-        
-        console.log('✅ OddsService: Cache warmup completed');
+        // CRITICAL FIX: Don't call getAvailableSports during warmup
+        console.log('✅ OddsService: Cache warmup completed (skipped to avoid circular dependencies)');
     } catch (error) {
         console.warn('⚠️ OddsService: Cache warmup failed:', error.message);
     }
   }
 
+  // CRITICAL FIX: Remove _ensureInitialized - service is always ready
   async _ensureInitialized() {
-    if (this.initialized) return;
-    
-    if (this.initializationPromise) {
-      return this.initializationPromise;
-    }
-    
-    this.initializationPromise = (async () => {
-      console.log('🔄 OddsService: Performing first-time initialization...');
-      
-      for (const provider of this.providers) {
-        if (provider.initialize) {
-          try {
-            await provider.initialize();
-            this.providerStatus.set(provider.name, 'initialized');
-          } catch (error) {
-            console.error(`❌ OddsService: Failed to initialize ${provider.name}:`, error.message);
-            this.providerStatus.set(provider.name, 'initialization_failed');
-          }
-        }
-      }
-      
-      try {
-        await cacheService.healthCheck();
-        console.log('✅ OddsService: Cache service ready');
-      } catch (error) {
-        console.warn('⚠️ OddsService: Cache service not available, continuing without cache');
-      }
-      
-      this.initialized = true;
-      console.log(`✅ OddsService: Initialized with ${this.providers.length} providers`);
-      this.initializationPromise = null;
-    })();
-    
-    return this.initializationPromise;
+    return Promise.resolve(); // Always resolved - service is ready immediately
   }
 
   _initializeProviders() {
@@ -364,6 +344,12 @@ class OddsService {
 
           for (const provider of this.providers) {
             if (provider.name === 'fallback') continue;
+            
+            // CRITICAL FIX: Skip providers that aren't initialized yet
+            if (this.providerStatus.get(provider.name) !== 'initialized') {
+              console.log(`⏳ OddsService: ${provider.name} not initialized yet, skipping...`);
+              continue;
+            }
             
             try {
               const sports = await withTimeout(
@@ -489,6 +475,59 @@ class OddsService {
     }
   }
 
+  async _fetchSportOddsWithFallback(sportKey, options) {
+    const lockKey = `fetch:${sportKey}`;
+    if (this.fetchLocks.has(lockKey)) {
+        console.log(`[QUOTA SAVER] Call for ${sportKey} is already in progress. Awaiting result.`);
+        return this.fetchLocks.get(lockKey);
+    }
+
+    const fetchPromise = (async () => {
+        console.log(`🔄 OddsService: Fetching fresh odds for ${sportKey}...`);
+        
+        if (!this._validateSportKey(sportKey)) {
+            return [];
+        }
+
+        for (const provider of this.providers) {
+            // CRITICAL FIX: Skip providers that aren't initialized yet
+            if (provider.name !== 'fallback' && this.providerStatus.get(provider.name) !== 'initialized') {
+              console.log(`⏳ OddsService: ${provider.name} not initialized yet, skipping...`);
+              continue;
+            }
+            
+            try {
+                console.log(`🔄 OddsService: Trying ${provider.name} for ${sportKey}...`);
+                const games = await withTimeout(provider.fetchSportOdds(sportKey, options), 12000, `FetchOdds_${provider.name}_${sportKey}`);
+
+                if (games && games.length > 0) {
+                    const normalizedGames = games.map(game => GameEnhancementService.normalizeGameData(game, provider.name)).filter(Boolean);
+                    console.log(`✅ OddsService: ${provider.name} returned ${normalizedGames.length} valid games for ${sportKey}.`);
+                    return GameEnhancementService.enhanceGameData(normalizedGames, sportKey, provider.name);
+                }
+                console.log(`❌ OddsService: ${provider.name} returned no valid data for ${sportKey}.`);
+            } catch (error) {
+                console.error(`❌ OddsService: ${provider.name} failed for ${sportKey}:`, error.message);
+                if (error?.response?.status === 401 || error?.response?.status === 403) {
+                    console.error(`🔐 OddsService: ${provider.name} authentication failed - check API key.`);
+                }
+            }
+        }
+
+        console.log(`❌ OddsService: All primary providers failed for ${sportKey}. Using fallback.`);
+        const fallbackProvider = this.providers.find(p => p.name === 'fallback');
+        return fallbackProvider.fetchSportOdds(sportKey, options);
+    })();
+    
+    this.fetchLocks.set(lockKey, fetchPromise);
+    try {
+        return await fetchPromise;
+    } finally {
+        this.fetchLocks.delete(lockKey);
+    }
+  }
+
+  // ... rest of the methods remain the same ...
   async getPlayerPropsForGame(sportKey, gameId, options = {}) {
     await this._ensureInitialized();
     
@@ -673,52 +712,6 @@ class OddsService {
         providers: {},
         cache: { enabled: false, status: 'unknown' }
       };
-    }
-  }
-
-  async _fetchSportOddsWithFallback(sportKey, options) {
-    const lockKey = `fetch:${sportKey}`;
-    if (this.fetchLocks.has(lockKey)) {
-        console.log(`[QUOTA SAVER] Call for ${sportKey} is already in progress. Awaiting result.`);
-        return this.fetchLocks.get(lockKey);
-    }
-
-    const fetchPromise = (async () => {
-        console.log(`🔄 OddsService: Fetching fresh odds for ${sportKey}...`);
-        
-        if (!this._validateSportKey(sportKey)) {
-            return [];
-        }
-
-        for (const provider of this.providers) {
-            try {
-                console.log(`🔄 OddsService: Trying ${provider.name} for ${sportKey}...`);
-                const games = await withTimeout(provider.fetchSportOdds(sportKey, options), 12000, `FetchOdds_${provider.name}_${sportKey}`);
-
-                if (games && games.length > 0) {
-                    const normalizedGames = games.map(game => GameEnhancementService.normalizeGameData(game, provider.name)).filter(Boolean);
-                    console.log(`✅ OddsService: ${provider.name} returned ${normalizedGames.length} valid games for ${sportKey}.`);
-                    return GameEnhancementService.enhanceGameData(normalizedGames, sportKey, provider.name);
-                }
-                console.log(`❌ OddsService: ${provider.name} returned no valid data for ${sportKey}.`);
-            } catch (error) {
-                console.error(`❌ OddsService: ${provider.name} failed for ${sportKey}:`, error.message);
-                if (error?.response?.status === 401 || error?.response?.status === 403) {
-                    console.error(`🔐 OddsService: ${provider.name} authentication failed - check API key.`);
-                }
-            }
-        }
-
-        console.log(`❌ OddsService: All primary providers failed for ${sportKey}. Using fallback.`);
-        const fallbackProvider = this.providers.find(p => p.name === 'fallback');
-        return fallbackProvider.fetchSportOdds(sportKey, options);
-    })();
-    
-    this.fetchLocks.set(lockKey, fetchPromise);
-    try {
-        return await fetchPromise;
-    } finally {
-        this.fetchLocks.delete(lockKey);
     }
   }
 
