@@ -17,7 +17,6 @@ class ServiceHealthChecker {
       const redis = await getRedisClient();
       if (!redis) return { healthy: false, error: 'Redis not configured' };
       
-      // Use a simpler ping test that doesn't rely on complex Redis operations
       const pingResult = await withTimeout(redis.ping(), 90000, 'Redis_Ping');
       return { 
         healthy: pingResult === 'PONG', 
@@ -57,14 +56,24 @@ class ServiceHealthChecker {
   static async checkOddsService() {
     const checkStart = Date.now();
     try {
-      // Use a simpler check that doesn't trigger API calls
       const isInitialized = oddsService.initialized;
-      const activeProviders = oddsService.getActiveProviders ? oddsService.getActiveProviders() : [];
+      let activeProviders = [];
+      
+      if (isInitialized && oddsService.getActiveProviders) {
+        try {
+          activeProviders = oddsService.getActiveProviders();
+        } catch (error) {
+          console.warn('⚠️ OddsService: getActiveProviders failed:', error.message);
+        }
+      }
+      
+      const isHealthy = isInitialized && oddsService.providers && oddsService.providers.length > 0;
       
       return { 
-        healthy: isInitialized && activeProviders.length > 0, 
+        healthy: isHealthy,
         latency: Date.now() - checkStart,
-        providers: activeProviders.length
+        providers: activeProviders.length,
+        initialized: isInitialized
       };
     } catch (error) {
       return { 
@@ -78,11 +87,12 @@ class ServiceHealthChecker {
   static async checkGamesService() {
     const checkStart = Date.now();
     try {
-      // Simple check without triggering complex operations
       const isInitialized = gamesService.initialized;
+      
       return { 
         healthy: isInitialized, 
-        latency: Date.now() - checkStart 
+        latency: Date.now() - checkStart,
+        initialized: isInitialized
       };
     } catch (error) {
       return { 
@@ -96,7 +106,6 @@ class ServiceHealthChecker {
   static async checkCacheService() {
     const checkStart = Date.now();
     try {
-      // Simple cache service check without complex Redis operations
       const cacheService = await import('./cacheService.js');
       const isAvailable = cacheService.default.isAvailable ? cacheService.default.isAvailable() : false;
       return { 
@@ -170,12 +179,14 @@ class EnhancedHealthService {
             ok: results.odds.healthy, 
             latency: results.odds.latency,
             error: results.odds.error,
-            providers: results.odds.providers
+            providers: results.odds.providers,
+            initialized: results.odds.initialized
           },
           games: { 
             ok: results.games.healthy, 
             latency: results.games.latency,
-            error: results.games.error 
+            error: results.games.error,
+            initialized: results.games.initialized
           },
           cache: { 
             ok: results.cache.healthy, 
@@ -221,12 +232,14 @@ class EnhancedHealthService {
       try {
         const report = await this.getHealth();
         
-        if (report.ok) {
-          console.log(`✅ HealthService: All services are ready!`);
+        const criticalServicesHealthy = report.services.database.ok && report.services.cache.ok;
+        const oddsAndGamesInitialized = report.services.odds.initialized && report.services.games.initialized;
+        
+        if (criticalServicesHealthy && oddsAndGamesInitialized) {
+          console.log(`✅ HealthService: Critical services ready! (Odds/Games may be degraded)`);
           return true;
         }
         
-        // Log which services are failing
         const failingServices = Object.entries(report.services)
           .filter(([_, service]) => !service.ok)
           .map(([name, _]) => name);
