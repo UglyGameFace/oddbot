@@ -1,4 +1,4 @@
-// src/services/cacheService.js - COMPLETE FIXED VERSION
+// src/services/cacheService.js - FIXED VERSION
 import { sentryService } from './sentryService.js';
 import redisServiceInstance from './redisService.js';
 
@@ -109,15 +109,14 @@ class CacheService {
       const errorMessage = (error instanceof Error && error.message) ? error.message : String(error);
       const errorMsg = errorMessage.toLowerCase();
       
-      if (!errorMsg.includes('syntax error')) {
-        console.error(`❌ CacheService: Redis command failed (${context}):`, errorMessage);
-        
-        const errorToReport = error instanceof Error ? error : new Error(errorMessage);
-        sentryService.captureError(errorToReport, {
-          component: 'cache_service',
-          operation: context
-        });
-      }
+      // Log all Redis errors, including syntax errors
+      console.error(`❌ CacheService: Redis command failed (${context}):`, errorMessage);
+      
+      const errorToReport = error instanceof Error ? error : new Error(errorMessage);
+      sentryService.captureError(errorToReport, {
+        component: 'cache_service',
+        operation: context
+      });
       
       throw error || new Error(errorMessage);
     }
@@ -272,14 +271,12 @@ class CacheService {
     } catch (error) {
       console.error(`❌ CacheService: Cache operation failed for key: ${key}`, error.message);
       
-      if (error && error.message && !error.message.includes('syntax error')) {
-        sentryService.captureError(error, {
-          component: 'cache_service',
-          operation: 'getOrSetJSON',
-          cacheKey: key,
-          ...context
-        });
-      }
+      sentryService.captureError(error, {
+        component: 'cache_service',
+        operation: 'getOrSetJSON',
+        cacheKey: key,
+        ...context
+      });
       
       if (fallbackOnError) {
         try {
@@ -344,65 +341,79 @@ class CacheService {
       return result > 0;
     } catch (error) {
       console.error(`❌ CacheService: Failed to delete cache key: ${key}`, error.message);
-      if (error && error.message && !error.message.includes('syntax error')) {
-        sentryService.captureError(error, {
-          component: 'cache_service',
-          operation: 'deleteKey',
-          cacheKey: key
-        });
-      }
+      sentryService.captureError(error, {
+        component: 'cache_service',
+        operation: 'deleteKey',
+        cacheKey: key
+      });
       return false;
     }
   }
 
+  // FIXED: Use SCAN instead of KEYS to avoid syntax errors
   async getKeys(pattern) {
     await this.ensureInitialized();
     
     try {
-      const keys = await this.safeRedisCommand(async (client) => {
-        return await client.keys(pattern);
-      }, 'getKeys');
+      const keys = [];
+      let cursor = '0';
+      
+      do {
+        const result = await this.safeRedisCommand(async (client) => {
+          return await client.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+        }, 'getKeys_scan');
+        
+        cursor = result[0];
+        keys.push(...result[1]);
+      } while (cursor !== '0');
+      
       console.log(`🔍 CacheService: Found ${keys.length} keys matching pattern: ${pattern}`);
       return keys;
     } catch (error) {
       console.error(`❌ CacheService: Failed to get keys for pattern: ${pattern}`, error.message);
-      if (error && error.message && !error.message.includes('syntax error')) {
-        sentryService.captureError(error, {
-          component: 'cache_service',
-          operation: 'getKeys',
-          pattern
-        });
-      }
+      sentryService.captureError(error, {
+        component: 'cache_service',
+        operation: 'getKeys',
+        pattern
+      });
       return [];
     }
   }
 
+  // FIXED: Use safer pattern flushing with batch deletion
   async flushPattern(pattern) {
     await this.ensureInitialized();
     
     try {
-      const keys = await this.safeRedisCommand(async (client) => {
-        return await client.keys(pattern);
-      }, 'flushPattern_keys');
+      const keys = await this.getKeys(pattern);
       
       if (keys.length > 0) {
-        await this.safeRedisCommand(async (client) => {
-          await client.del(...keys);
-        }, 'flushPattern_del');
-        console.log(`🧹 CacheService: Flushed ${keys.length} keys matching: ${pattern}`);
-        return keys.length;
+        // Delete keys in batches to avoid command size limits
+        const BATCH_SIZE = 100;
+        let totalDeleted = 0;
+        
+        for (let i = 0; i < keys.length; i += BATCH_SIZE) {
+          const batch = keys.slice(i, i + BATCH_SIZE);
+          const deleted = await this.safeRedisCommand(async (client) => {
+            return await client.del(...batch);
+          }, 'flushPattern_del_batch');
+          
+          totalDeleted += deleted;
+          console.log(`🧹 CacheService: Flushed batch of ${deleted} keys (${totalDeleted}/${keys.length})`);
+        }
+        
+        console.log(`🧹 CacheService: Flushed ${totalDeleted} keys matching: ${pattern}`);
+        return totalDeleted;
       }
       console.log(`🔍 CacheService: No keys found matching pattern: ${pattern}`);
       return 0;
     } catch (error) {
       console.error(`❌ CacheService: Failed to flush pattern: ${pattern}`, error.message);
-      if (error && error.message && !error.message.includes('syntax error')) {
-        sentryService.captureError(error, {
-          component: 'cache_service',
-          operation: 'flushPattern',
-          pattern
-        });
-      }
+      sentryService.captureError(error, {
+        component: 'cache_service',
+        operation: 'flushPattern',
+        pattern
+      });
       return 0;
     }
   }
@@ -439,16 +450,14 @@ class CacheService {
       
       for (const pattern of commonPatterns) {
         try {
-          const keys = await this.safeRedisCommand(async (client) => {
-            return await client.keys(pattern);
-          }, `getKeys_${pattern}`);
+          const keys = await this.getKeys(pattern);
           patternCounts[pattern] = keys.length;
         } catch (error) {
           patternCounts[pattern] = 0;
         }
       }
 
-      // Get memory info from INFO command instead of MEMORY command
+      // Get memory info from INFO command
       let memoryData = {};
       try {
         const memoryInfo = await this.safeRedisCommand(async (client) => {
@@ -485,17 +494,14 @@ class CacheService {
         hit_rate: hitRate,
         hit_rate_percentage: `${(hitRate * 100).toFixed(2)}%`,
         timestamp: new Date().toISOString(),
-        redis_status: redisServiceInstance.isConnected() ? 'connected' : 'disconnected',
-        syntax_errors: redisServiceInstance.getSyntaxErrorCount()
+        redis_status: redisServiceInstance.isConnected() ? 'connected' : 'disconnected'
       };
     } catch (error) {
       console.error('❌ CacheService: Failed to get cache info:', error.message);
-      if (error && error.message && !error.message.includes('syntax error')) {
-        sentryService.captureError(error, {
-          component: 'cache_service',
-          operation: 'getCacheInfo'
-        });
-      }
+      sentryService.captureError(error, {
+        component: 'cache_service',
+        operation: 'getCacheInfo'
+      });
       return { 
         error: error.message,
         timestamp: new Date().toISOString(),
@@ -522,12 +528,11 @@ class CacheService {
         this.safeRedisCommand(async (client) => await client.type(key), 'keyInfo_type')
       ]);
       
-      // Skip memory usage to avoid syntax errors
       const result = {
         exists: exists === 1,
         ttl,
         type,
-        memory_usage: 'disabled',
+        memory_usage: 'disabled', // Skip memory usage to avoid syntax errors
         ttl_human: ttl > 0 ? `${ttl} seconds` : 'no TTL',
         status: exists ? (ttl > 0 ? 'active' : 'persistent') : 'not_found',
         timestamp: new Date().toISOString()
@@ -667,8 +672,7 @@ class CacheService {
           write: true,
           read: true,
           delete: true
-        },
-        redis_syntax_errors: redisServiceInstance.getSyntaxErrorCount()
+        }
       };
 
       console.log(`❤️ CacheService: Health check: ${result.healthy ? 'HEALTHY' : 'UNHEALTHY'} (${responseTime}ms)`);
@@ -684,8 +688,7 @@ class CacheService {
           write: false,
           read: false,
           delete: false
-        },
-        redis_syntax_errors: redisServiceInstance.getSyntaxErrorCount()
+        }
       };
     }
   }
@@ -707,9 +710,6 @@ class CacheService {
     this.redis = null;
     this.isInitialized = false;
     this.initializationPromise = null;
-    
-    // Also reset Redis service syntax errors
-    redisServiceInstance.resetSyntaxErrorCount();
     
     console.log('🔄 CacheService: Connection reset, reinitializing...');
     return this.init();
