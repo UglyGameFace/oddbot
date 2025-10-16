@@ -17,14 +17,10 @@ class GameEnhancementService {
   static enhanceGameData(games, sportKey, source) {
     if (!Array.isArray(games)) return [];
 
-    // --- FIX START ---
-    // REMOVED ALL EXTRA METADATA FIELDS.
-    // The function now only ensures the sport_key is present.
     return games.map((game) => ({
       ...game,
       sport_key: sportKey
     }));
-    // --- FIX END ---
   }
 
   static filterGamesByTime(games, hoursAhead, includeLive = false) {
@@ -107,6 +103,7 @@ class GamesService {
     this.lastRefreshTimes = new Map();
     this.requestCounts = new Map();
     this.initialized = false;
+    this.initializationPromise = null;
     
     console.log('🎮 GamesService: Initializing...');
   }
@@ -114,16 +111,33 @@ class GamesService {
   async _ensureInitialized() {
     if (this.initialized) return;
     
-    console.log('🔄 GamesService: Performing first-time initialization...');
-    
-    try {
-      await cacheService.healthCheck();
-      console.log('✅ GamesService: Cache service ready');
-    } catch (error) {
-      console.warn('⚠️ GamesService: Cache service not available, continuing without cache');
+    if (this.initializationPromise) {
+      return this.initializationPromise;
     }
     
-    this.initialized = true;
+    this.initializationPromise = (async () => {
+      console.log('🔄 GamesService: Performing first-time initialization...');
+      
+      try {
+        if (cacheService && cacheService.init) {
+          await cacheService.init();
+        }
+        
+        this.getAvailableSports().catch(error => {
+          console.warn('⚠️ GamesService: Initial sports fetch failed, but continuing:', error.message);
+        });
+        
+        this.initialized = true;
+        console.log('✅ GamesService: Initialization completed');
+      } catch (error) {
+        console.error('❌ GamesService: Initialization failed:', error.message);
+        throw error;
+      } finally {
+        this.initializationPromise = null;
+      }
+    })();
+    
+    return this.initializationPromise;
   }
 
   async warmupCache() {
@@ -697,7 +711,7 @@ class GamesService {
 
   async preloadPopularSports() {
     await this._ensureInitialized();
-    const popularSports = ['americanfootball_nfl', 'basketball_nba', 'baseball_mlb', 'icehockey_nhl', 'soccer_england_premier_league'];
+    const popularSports = ['americanfootball_nfl', 'basketball_nba', 'baseball_mlb', 'icehockey_nhl'];
     console.log('🚀 GamesService: Preloading cache for popular sports...');
     const results = [];
     for (const sport of popularSports) {
