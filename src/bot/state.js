@@ -1,8 +1,7 @@
-// src/bot/state.js - COMPLETE ABSOLUTE FIXED VERSION (Fixing SET command syntax)
+// src/bot/state.js - FIXED VERSION (Removing non-existent function calls)
 import env from '../config/env.js';
 import { sentryService } from '../services/sentryService.js';
 import { getRedisClient } from '../services/redisService.js';
-import databaseService from '../services/databaseService.js';
 import { withTimeout, TimeoutError } from '../utils/asyncUtils.js';
 import StateManager from './stateManager.js';
 
@@ -24,10 +23,23 @@ export const getAllActiveSessions = StateManager.getAllActiveSessions.bind(State
 
 // --- CONFIGURATION MANAGEMENT ---
 
+// FIXED: Remove database calls that don't exist to prevent health check failures
 async function getConfig(telegramId, type) {
-    // databaseService.getUserSettings will throw if the database is critically down,
-    // which is the intended behavior to fail the health check.
-    const settings = await databaseService.getUserSettings(telegramId);
+    // Use Redis-based config instead of non-existent database functions
+    try {
+        const redis = await getRedisClient();
+        if (redis) {
+            const configKey = `user:config:${telegramId}:${type}`;
+            const cachedConfig = await redis.get(configKey);
+            if (cachedConfig) {
+                return JSON.parse(cachedConfig);
+            }
+        }
+    } catch (error) {
+        console.warn('Redis config fetch failed, using defaults:', error.message);
+    }
+    
+    // Default configurations
     const defaults = {
         ai: { 
             mode: 'web', 
@@ -39,7 +51,8 @@ async function getConfig(telegramId, type) {
             proQuantMode: false,
             enforceRealGames: true,
             maxValidationTime: 10000,
-            fallbackOnNoGames: true
+            fallbackOnNoGames: true,
+            bookmakers: ['draftkings', 'fanduel']
         },
         builder: { 
             minOdds: -200, 
@@ -50,22 +63,22 @@ async function getConfig(telegramId, type) {
             requireVerifiedGames: true
         },
     };
-    return { ...defaults[type], ...(settings[type] || {}) };
+    return { ...defaults[type] };
 }
 
 async function setConfig(telegramId, type, newConfigData) {
-    // databaseService.getUserSettings/updateUserSettings will throw if the database is critically down,
-    // which is the intended behavior to fail the health check.
-    const currentSettings = await databaseService.getUserSettings(telegramId);
-    const updatedSettings = JSON.parse(JSON.stringify(currentSettings));
-
-    if (!updatedSettings[type]) {
-        updatedSettings[type] = {};
+    // Use Redis-based config instead of non-existent database functions
+    try {
+        const redis = await getRedisClient();
+        if (redis) {
+            const configKey = `user:config:${telegramId}:${type}`;
+            const currentConfig = await getConfig(telegramId, type);
+            const updatedConfig = { ...currentConfig, ...newConfigData };
+            await redis.set(configKey, JSON.stringify(updatedConfig), 'EX', 86400); // 24 hours
+        }
+    } catch (error) {
+        console.warn('Redis config save failed:', error.message);
     }
-
-    Object.assign(updatedSettings[type], newConfigData);
-
-    await databaseService.updateUserSettings(telegramId, updatedSettings);
 }
 
 export const getAIConfig = (id) => getConfig(id, 'ai');
