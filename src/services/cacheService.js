@@ -630,59 +630,15 @@ class CacheService {
     }
   }
 
-  async healthCheck() {
-    await this.ensureInitialized();
-    
-    try {
-      if (!this.isValidRedisClient()) {
-        return {
-          healthy: false,
-          error: 'Redis client not available',
-          timestamp: new Date().toISOString(),
-          details: {
-            write: false,
-            read: false,
-            delete: false
-          }
-        };
-      }
-
-      const startTime = Date.now();
-      const testKey = `health_check_${startTime}`;
-      
-      await this.safeRedisCommand(async (client) => {
-        await client.setex(testKey, 10, 'health_check_value');
-      }, 'healthCheck_set');
-      
-      const value = await this.safeRedisCommand(async (client) => {
-        return await client.get(testKey);
-      }, 'healthCheck_get');
-      
-      await this.safeRedisCommand(async (client) => {
-        await client.del(testKey);
-      }, 'healthCheck_del');
-      
-      const responseTime = Date.now() - startTime;
-      
-      const result = {
-        healthy: value === 'health_check_value',
-        response_time: responseTime,
-        timestamp: new Date().toISOString(),
-        details: {
-          write: true,
-          read: true,
-          delete: true
-        }
-      };
-
-      console.log(`❤️ CacheService: Health check: ${result.healthy ? 'HEALTHY' : 'UNHEALTHY'} (${responseTime}ms)`);
-      return result;
-
-    } catch (error) {
-      console.error('❌ CacheService: Health check failed:', error.message);
+ // In cacheService.js - Update the healthCheck method:
+async healthCheck() {
+  await this.ensureInitialized();
+  
+  try {
+    if (!this.isValidRedisClient()) {
       return {
         healthy: false,
-        error: error.message,
+        error: 'Redis client not available',
         timestamp: new Date().toISOString(),
         details: {
           write: false,
@@ -691,7 +647,67 @@ class CacheService {
         }
       };
     }
+
+    const startTime = Date.now();
+    const testKey = `health_check_${startTime}`;
+    
+    // Verify client is still valid before each operation
+    if (!this.isValidRedisClient()) {
+      throw new Error('Redis client lost during health check');
+    }
+    
+    await this.safeRedisCommand(async (client) => {
+      await client.setex(testKey, 10, 'health_check_value');
+    }, 'healthCheck_set');
+    
+    // Verify client is still valid
+    if (!this.isValidRedisClient()) {
+      throw new Error('Redis client lost during health check');
+    }
+    
+    const value = await this.safeRedisCommand(async (client) => {
+      return await client.get(testKey);
+    }, 'healthCheck_get');
+    
+    // Verify client is still valid
+    if (!this.isValidRedisClient()) {
+      throw new Error('Redis client lost during health check');
+    }
+    
+    await this.safeRedisCommand(async (client) => {
+      await client.del(testKey);
+    }, 'healthCheck_del');
+    
+    const responseTime = Date.now() - startTime;
+    
+    const result = {
+      healthy: value === 'health_check_value',
+      response_time: responseTime,
+      timestamp: new Date().toISOString(),
+      details: {
+        write: true,
+        read: true,
+        delete: true
+      }
+    };
+
+    console.log(`❤️ CacheService: Health check: ${result.healthy ? 'HEALTHY' : 'UNHEALTHY'} (${responseTime}ms)`);
+    return result;
+
+  } catch (error) {
+    console.error('❌ CacheService: Health check failed:', error.message);
+    return {
+      healthy: false,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+      details: {
+        write: false,
+        read: false,
+        delete: false
+      }
+    };
   }
+}
 
   isAvailable() {
     return this.isInitialized && this.isValidRedisClient();
