@@ -10,11 +10,11 @@ import { ApiNinjaProvider } from './providers/apiNinjaProvider.js';
 
 // Cache configuration - INCREASED TTLs
 const CACHE_TTL = {
-  ODDS: 90,        // Increased from 60 to 90 seconds (1.5 minutes)
-  PROPS: 180,      // Increased from 120 to 180 seconds (3 minutes)
-  SPORTS: 600,     // Increased from 300 to 600 seconds (10 minutes)
-  LIVE_GAMES: 45,  // Slightly increased from 30 to 45 seconds
-  USAGE: 300       // Increased from 180 to 300 seconds (5 minutes)
+  ODDS: 90,
+  PROPS: 180,
+  SPORTS: 600,
+  LIVE_GAMES: 45,
+  USAGE: 300
 };
 
 // Helper classes
@@ -24,12 +24,10 @@ class GameEnhancementService {
 
     return games.map((game) => ({
       ...game,
-      enhanced: true,
       enhancement_source: source,
       last_enhanced: new Date().toISOString(),
       has_odds: !!(game.bookmakers && game.bookmakers.length > 0),
       odds_provider: source
-      // REMOVED: cache_timestamp was here
     }));
   }
 
@@ -48,7 +46,6 @@ class GameEnhancementService {
     });
   }
 
-// IN THE GameEnhancementService class - UPDATE THE VALIDATION METHOD:
 static validateGameData(game) {
   if (!game) return false;
   
