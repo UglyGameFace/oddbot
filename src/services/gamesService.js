@@ -1,4 +1,4 @@
-// src/services/gamesService.js - COMPLETE FIXED VERSION
+// src/services/gamesService.js - FINAL FIXED VERSION
 import databaseService from './databaseService.js';
 import oddsService from './oddsService.js';
 import env from '../config/env.js';
@@ -104,8 +104,57 @@ class GamesService {
     this.requestCounts = new Map();
     this.initialized = false;
     this.initializationPromise = null;
+    this.initializationInProgress = false;
     
     console.log('🎮 GamesService: Initializing...');
+    // Start initialization but don't wait for it
+    this._startInitialization();
+  }
+
+  async _startInitialization() {
+    if (this.initialized || this.initializationInProgress) return;
+    
+    this.initializationInProgress = true;
+    this.initializationPromise = (async () => {
+      console.log('🔄 GamesService: Performing first-time initialization...');
+      
+      try {
+        // Initialize cache service if available
+        if (cacheService && cacheService.init) {
+          await cacheService.init().catch(error => {
+            console.warn('⚠️ GamesService: Cache service init warning:', error.message);
+          });
+        }
+        
+        // MARK AS INITIALIZED IMMEDIATELY - don't wait for sports preload
+        this.initialized = true;
+        this.initializationInProgress = false;
+        console.log('✅ GamesService: Initialization completed - service is ready');
+        
+        // Start background sports preload but don't wait for it
+        this._preloadSportsInBackground();
+        
+      } catch (error) {
+        console.error('❌ GamesService: Initialization failed:', error.message);
+        // Even if initialization fails, mark as initialized to prevent deadlocks
+        this.initialized = true;
+        this.initializationInProgress = false;
+      } finally {
+        this.initializationPromise = null;
+      }
+    })();
+    
+    return this.initializationPromise;
+  }
+
+  async _preloadSportsInBackground() {
+    try {
+      console.log('🔄 GamesService: Starting background sports preload...');
+      await this.getAvailableSports();
+      console.log('✅ GamesService: Background sports preload completed');
+    } catch (error) {
+      console.warn('⚠️ GamesService: Background sports preload failed:', error.message);
+    }
   }
 
   async _ensureInitialized() {
@@ -115,36 +164,14 @@ class GamesService {
       return this.initializationPromise;
     }
     
-    this.initializationPromise = (async () => {
-      console.log('🔄 GamesService: Performing first-time initialization...');
-      
-      try {
-        if (cacheService && cacheService.init) {
-          await cacheService.init();
-        }
-        
-        this.getAvailableSports().catch(error => {
-          console.warn('⚠️ GamesService: Initial sports fetch failed, but continuing:', error.message);
-        });
-        
-        this.initialized = true;
-        console.log('✅ GamesService: Initialization completed');
-      } catch (error) {
-        console.error('❌ GamesService: Initialization failed:', error.message);
-        throw error;
-      } finally {
-        this.initializationPromise = null;
-      }
-    })();
-    
-    return this.initializationPromise;
+    // If no initialization in progress, start it
+    return this._startInitialization();
   }
 
   async warmupCache() {
     console.log('🔥 GamesService: Warming up cache...');
     try {
-        await this.preloadPopularSports();
-        await this.getAvailableSports();
+        await this._preloadSportsInBackground();
         console.log('✅ GamesService: Cache warmup completed');
     } catch (error) {
         console.warn('⚠️ GamesService: Cache warmup failed:', error.message);
