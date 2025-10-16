@@ -211,7 +211,7 @@ class EnhancedHealthService {
     }
   }
 
-  async waitForReady(timeoutMs = 30000) {
+  async waitForReady(timeoutMs = 60000) {
     const startTime = Date.now();
     const checkInterval = 2000;
     
