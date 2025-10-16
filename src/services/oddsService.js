@@ -95,6 +95,8 @@ static validateGameData(game) {
       away_team: game.away_team || game.awayTeam || 'Unknown Away',
       commence_time: game.commence_time || game.start_time || game.time,
       bookmakers: game.bookmakers || game.odds || [],
+      // CRITICAL FIX: Ensure league_key is always populated
+      league_key: game.league_key || game.sport_key || game.sport || 'unknown_league',
       raw_data: game,
       provider: provider,
       last_updated: new Date().toISOString(),
@@ -172,6 +174,8 @@ class FallbackProvider {
       home_team: 'Home Team',
       away_team: 'Away Team',
       bookmakers: [],
+      // CRITICAL FIX: Include league_key in fallback data
+      league_key: sportKey,
       source: 'fallback'
     }];
   }
