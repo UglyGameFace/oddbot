@@ -267,8 +267,8 @@ async function initializeBot() {
         sentryService.attachExpressPostRoutes(app);
       }
       
-      console.log('⏱️ Waiting for all essential services to pass health check (max 30s)...');
-      const readyCheck = await healthService.waitForReady(30000); 
+      console.log('⏱️ Waiting for all essential services to pass health check (max 60s)...');
+      const readyCheck = await healthService.waitForReady(60000); 
       
       if (!readyCheck) {
           throw new Error('Critical services failed to become ready within the startup timeout.');
