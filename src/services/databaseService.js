@@ -32,7 +32,6 @@ const COMPREHENSIVE_FALLBACK_SPORTS = Object.entries(COMPREHENSIVE_SPORTS).map((
 const SUPABASE_KEY = env.SUPABASE_SERVICE_KEY || env.SUPABASE_ANON_KEY;
 
 function buildClient() {
-  // FIX: Explicitly check for both URL and KEY before trying to build the client.
   if (!env.SUPABASE_URL || !SUPABASE_KEY) {
     console.error('❌ Supabase not configured. Database service soft-disabled.');
     return null;
@@ -58,8 +57,6 @@ function buildClient() {
 
 let supabaseClient = buildClient();
 
-// NOTE: withTimeout is imported from asyncUtils.js and not redefined here.
-
 class DatabaseService {
   get client() { 
     return supabaseClient || (supabaseClient = buildClient()); 
@@ -67,9 +64,6 @@ class DatabaseService {
 
   // ========== CORE SPORTS METHODS ==========
 
-  /**
-   * Get all distinct sports with enhanced metadata
-   */
   async getDistinctSports() {
     if (!this.client) return COMPREHENSIVE_FALLBACK_SPORTS;
     
@@ -143,22 +137,16 @@ class DatabaseService {
       return sports;
 
     } catch (error) {
-      // FIX: Only handle TimeoutError gracefully by returning fallback. 
-      // All other errors (network/Supabase connection failures) must be thrown.
       if (error instanceof TimeoutError) {
         console.error('❌ Supabase getDistinctSports TIMEOUT, returning fallback:', error.message);
         return COMPREHENSIVE_FALLBACK_SPORTS;
       }
       
-      // If it's any other error (network/Supabase being down), re-throw to fail the health check.
       console.error('❌ Supabase getDistinctSports CRITICAL error:', error.message);
-      throw error; // Re-throw to make the HealthService fail.
+      throw error;
     }
   }
 
-  /**
-   * Get upcoming games for a sport with time window
-   */
   async getUpcomingGames(sportKey, hoursAhead = 72) {
     if (!this.client) return [];
     
@@ -186,21 +174,16 @@ class DatabaseService {
       return GameEnhancementService.enhanceGameData(data || [], sportKey, 'database');
 
     } catch (error) {
-       // FIX: Only handle TimeoutError gracefully by returning empty array.
        if (error instanceof TimeoutError) {
         console.error(`❌ Supabase getUpcomingGames TIMEOUT for ${sportKey}:`, error.message);
         return [];
        }
       
-       // If it's any other error (Supabase being down), re-throw to fail the health check.
       console.error(`❌ Supabase getUpcomingGames CRITICAL error for ${sportKey}:`, error.message);
-      throw error; // Re-throw to make the HealthService fail.
+      throw error;
     }
   }
 
-  /**
-   * Enhanced method to get verified real games for schedule validation
-   */
   async getVerifiedRealGames(sportKey, hours = 72) {
     if (!this.client) return [];
     
@@ -240,37 +223,25 @@ class DatabaseService {
     }
   }
 
-  /**
-   * Get games by sport (backward compatibility)
-   */
   async getGamesBySport(sportKey) {
     return this.getUpcomingGames(sportKey, 168);
   }
 
-  /**
-   * Simple method to check if database has games for a sport
-   */
   async hasGamesForSport(sportKey, hoursAhead = 72) {
     try {
       const games = await this.getUpcomingGames(sportKey, hoursAhead);
       return games.length > 0;
     } catch (error) {
-      // NOTE: getUpcomingGames already handles TimeoutError, so only rethrow if 
-      // getUpcomingGames throws an unhandled critical error.
       console.error(`Error checking games for ${sportKey}:`, error);
       throw error;
     }
   }
 
-  /**
-   * Get the count of upcoming games for a sport
-   */
   async getUpcomingGameCount(sportKey, hoursAhead = 72) {
     try {
       const games = await this.getUpcomingGames(sportKey, hoursAhead);
       return games.length;
     } catch (error) {
-      // NOTE: getUpcomingGames already handles TimeoutError.
       console.error(`Error counting games for ${sportKey}:`, error);
       throw error;
     }
@@ -278,9 +249,6 @@ class DatabaseService {
 
   // ========== ENHANCED GAME METHODS ==========
 
-  /**
-   * Get game by ID with full details
-   */
   async getGameById(eventId) {
     if (!this.client) return null;
     
@@ -305,7 +273,6 @@ class DatabaseService {
       return null;
 
     } catch (error) {
-       // FIX: Only handle TimeoutError gracefully by returning null.
        if (error instanceof TimeoutError) {
         console.error(`❌ Supabase getGameById TIMEOUT for ${eventId}:`, error.message);
         return null;
@@ -316,9 +283,6 @@ class DatabaseService {
     }
   }
 
-  /**
-   * Search games by query across all sports
-   */
   async searchGames(query, sportKey = null) {
     if (!this.client) return [];
     
@@ -349,7 +313,6 @@ class DatabaseService {
       return GameEnhancementService.enhanceGameData(data || [], sportKey || 'mixed', 'database_search');
 
     } catch (error) {
-       // FIX: Only handle TimeoutError gracefully by returning empty array.
        if (error instanceof TimeoutError) {
         console.error(`❌ Supabase searchGames TIMEOUT for "${query}":`, error.message);
         return [];
@@ -360,9 +323,6 @@ class DatabaseService {
     }
   }
 
-  /**
-   * Get active games (scheduled or live)
-   */
   async getActiveGames(sportKey = null) {
     if (!this.client) return [];
     
@@ -390,7 +350,6 @@ class DatabaseService {
       return GameEnhancementService.enhanceGameData(data || [], sportKey || 'mixed', 'database');
 
     } catch (error) {
-       // FIX: Only handle TimeoutError gracefully by returning empty array.
        if (error instanceof TimeoutError) {
         console.error('❌ getActiveGames TIMEOUT:', error.message);
         return [];
@@ -401,9 +360,6 @@ class DatabaseService {
     }
   }
 
-  /**
-   * Get recently completed games for analysis
-   */
   async getRecentlyCompletedGames(hoursBack = 24, sportKey = null) {
     if (!this.client) return [];
     
@@ -434,7 +390,6 @@ class DatabaseService {
       return data || [];
 
     } catch (error) {
-       // FIX: Only handle TimeoutError gracefully by returning empty array.
        if (error instanceof TimeoutError) {
         console.error('❌ getRecentlyCompletedGames TIMEOUT:', error.message);
         return [];
@@ -447,9 +402,6 @@ class DatabaseService {
 
   // ========== DATA MANAGEMENT METHODS ==========
 
-  /**
-   * Enhanced upsert with better conflict handling
-   */
   async upsertGames(gamesData) {
     if (!this.client || !gamesData?.length) {
       console.warn('❌ No client or games data for upsert');
@@ -462,8 +414,8 @@ class DatabaseService {
       const gamesWithMetadata = gamesData.map(game => ({
         ...game,
         last_updated: new Date().toISOString(),
-        data_source: 'odds_api_ingestion',
-        checksum: this._generateGameChecksum(game)
+        data_source: 'odds_api_ingestion'
+        // REMOVED: checksum was here
       }));
 
       const { data, error } = await withTimeout(
@@ -484,7 +436,6 @@ class DatabaseService {
       return { data, error: null };
 
     } catch (error) {
-       // FIX: Only handle TimeoutError gracefully.
        if (error instanceof TimeoutError) {
          console.error('❌ Supabase upsert TIMEOUT:', error.message);
          return { data: null, error: new Error('Upsert Timeout') };
@@ -500,9 +451,6 @@ class DatabaseService {
     }
   }
 
-  /**
-   * Get data freshness and date ranges
-   */
   async getOddsDateRange(sportKey = null) {
     if (!this.client) return { min_date: null, max_date: null, game_count: 0 };
     
@@ -523,7 +471,6 @@ class DatabaseService {
         queryBuilder
       ];
       
-      // FIX: Apply withTimeout to Promise.all to prevent hang
       const results = await withTimeout(
           Promise.all([
             minDataPromise,
@@ -550,7 +497,6 @@ class DatabaseService {
       };
 
     } catch (error) {
-       // FIX: Only handle TimeoutError gracefully.
        if (error instanceof TimeoutError) {
          console.error('❌ Supabase getOddsDateRange TIMEOUT:', error.message);
          return { min_date: null, max_date: null, game_count: 0 };
@@ -561,9 +507,6 @@ class DatabaseService {
     }
   }
 
-  /**
-   * Get sport statistics and game counts
-   */
   async getSportGameCounts() {
     if (!this.client) return [];
     
@@ -618,9 +561,6 @@ class DatabaseService {
 
   // ========== USER MANAGEMENT METHODS ==========
 
-  /**
-   * Enhanced user management with better preferences
-   */
   async findOrCreateUser(telegramId, firstName = '', username = '') {
     if (!this.client) return null;
     
@@ -724,11 +664,8 @@ class DatabaseService {
 
   // ========== SERVICE MANAGEMENT METHODS ==========
 
-  /**
-   * Test database connection and health
-   */
   async testConnection() {
-    if (!this.client) return true; // Soft-disable check
+    if (!this.client) return true;
     
     try {
       const { data, error } = await withTimeout(
@@ -743,25 +680,20 @@ class DatabaseService {
       return true;
 
     } catch (error) {
-      // FIX: Only treat non-TimeoutError as a critical failure.
       if (error instanceof TimeoutError) {
          console.error('❌ Database connection test TIMEOUT:', error.message);
          return false;
       }
       
       console.error('❌ Database connection test FAILED:', error.message);
-      return false; // Return false for all other errors.
+      return false;
     }
   }
 
-  /**
-   * Get database statistics and health
-   */
   async getDatabaseStats() {
     if (!this.client) return null;
     
     try {
-      // FIX: Apply withTimeout to Promise.all to prevent hang
       const results = await withTimeout(
           Promise.all([
             this.client.from('games').select('*', { count: 'exact', head: true }),
@@ -790,7 +722,6 @@ class DatabaseService {
       };
 
     } catch (error) {
-      // FIX: Only handle TimeoutError gracefully.
       if (error instanceof TimeoutError) {
          console.error('❌ Database stats TIMEOUT:', error.message);
          return {
