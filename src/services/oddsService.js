@@ -28,8 +28,8 @@ class GameEnhancementService {
       enhancement_source: source,
       last_enhanced: new Date().toISOString(),
       has_odds: !!(game.bookmakers && game.bookmakers.length > 0),
-      odds_provider: source,
-      cache_timestamp: new Date().toISOString()
+      odds_provider: source
+      // REMOVED: cache_timestamp was here
     }));
   }
 
@@ -52,7 +52,6 @@ class GameEnhancementService {
 static validateGameData(game) {
   if (!game) return false;
   
-  // More flexible required fields - different providers use different field names
   const hasBasicInfo = (
     (game.id || game.event_id || game.game_id) && 
     game.sport_key &&
@@ -66,12 +65,11 @@ static validateGameData(game) {
     return false;
   }
 
-  // Validate commence_time format and reasonable date - MUCH MORE PERMISSIVE
   try {
     const gameTime = new Date(game.commence_time);
     const now = new Date();
-    const maxPastHours = 24; // Allow games up to 24 hours in past (for live games)
-    const maxFutureDays = 365; // Allow games up to 1 year in future
+    const maxPastHours = 24;
+    const maxFutureDays = 365;
     
     const isReasonableTime = gameTime > new Date(now.getTime() - maxPastHours * 60 * 60 * 1000) &&
                             gameTime < new Date(now.getTime() + maxFutureDays * 24 * 60 * 60 * 1000);
@@ -92,32 +90,20 @@ static validateGameData(game) {
     if (!game) return null;
     
     const normalized = {
-      // Standardize ID field
       id: game.id || game.event_id || game.game_id,
       event_id: game.id || game.event_id || game.game_id,
-      
-      // Standardize sport fields
       sport_key: game.sport_key || game.sport,
       sport_title: game.sport_title || game.sport_name,
-      
-      // Standardize team fields
       home_team: game.home_team || game.homeTeam || 'Unknown Home',
       away_team: game.away_team || game.awayTeam || 'Unknown Away',
-      
-      // Standardize time field
       commence_time: game.commence_time || game.start_time || game.time,
-      
-      // Preserve original data
       bookmakers: game.bookmakers || game.odds || [],
       raw_data: game,
       provider: provider,
-      
-      // Metadata
       last_updated: new Date().toISOString(),
       normalized: true
     };
 
-    // Clean up undefined fields
     Object.keys(normalized).forEach(key => {
       if (normalized[key] === undefined) {
         delete normalized[key];
@@ -180,13 +166,12 @@ class FallbackProvider {
     await this.initialize();
     console.log(`🔄 FallbackProvider: Using fallback for ${sportKey} (no real odds)`);
     
-    // Return minimal mock data structure
     return [{
       id: `fallback_${sportKey}_${Date.now()}`,
       event_id: `fallback_${sportKey}_${Date.now()}`,
       sport_key: sportKey,
       sport_title: this._formatSportKey(sportKey),
-      commence_time: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // Tomorrow
+      commence_time: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
       home_team: 'Home Team',
       away_team: 'Away Team',
       bookmakers: [],
@@ -238,7 +223,7 @@ class OddsService {
     this.providers = [];
     this.initialized = false;
     this.providerStatus = new Map();
-    this.fetchLocks = new Map(); // QUOTA SAVER
+    this.fetchLocks = new Map();
     
     console.log('🎯 OddsService: Initializing providers...');
     this._initializeProviders();
@@ -247,10 +232,8 @@ class OddsService {
   async warmupCache() {
     console.log('🔥 OddsService: Warming up cache...');
     try {
-        // Pre-load sports list
         await this.getAvailableSports();
         
-        // Pre-load popular sports odds
         const popularSports = ['americanfootball_nfl', 'basketball_nba', 'baseball_mlb'];
         for (const sport of popularSports) {
             await this.getSportOdds(sport, { useCache: true }).catch(() => {});
@@ -267,7 +250,6 @@ class OddsService {
     
     console.log('🔄 OddsService: Performing first-time initialization...');
     
-    // Initialize all providers
     for (const provider of this.providers) {
       if (provider.initialize) {
         try {
@@ -280,7 +262,6 @@ class OddsService {
       }
     }
     
-    // Warm up cache service
     try {
       await cacheService.healthCheck();
       console.log('✅ OddsService: Cache service ready');
@@ -293,7 +274,6 @@ class OddsService {
   }
 
   _initializeProviders() {
-    // The Odds API Provider
     if (env.THE_ODDS_API_KEY && !env.THE_ODDS_API_KEY.includes('expired') && env.THE_ODDS_API_KEY.length >= 20) {
       this.providers.push(new TheOddsProvider(env.THE_ODDS_API_KEY));
       console.log('✅ The Odds API provider registered');
@@ -301,17 +281,13 @@ class OddsService {
       console.warn('❌ The Odds API provider SKIPPED - invalid or missing key');
     }
 
-    // --- CHANGE START ---
-    // API-Ninja Provider is now included
     if (env.ODDS_API_NINJA_KEY && !env.ODDS_API_NINJA_KEY.includes('expired')) {
       this.providers.push(new ApiNinjaProvider(env.ODDS_API_NINJA_KEY));
       console.log('✅ API-Ninja provider registered');
     } else {
       console.warn('❌ API-Ninja provider SKIPPED - invalid or missing key');
     }
-    // --- CHANGE END ---
 
-    // SportRadar API Provider
     if (env.SPORTRADAR_API_KEY && !env.SPORTRADAR_API_KEY.includes('expired') && env.SPORTRADAR_API_KEY.length >= 10) {
       this.providers.push(new SportRadarProvider(env.SPORTRADAR_API_KEY));
       console.log('✅ SportRadar API provider registered');
@@ -319,7 +295,6 @@ class OddsService {
       console.warn('❌ SportRadar API provider SKIPPED - invalid or missing key');
     }
 
-    // API-Sports Provider
     if (env.APISPORTS_API_KEY && !env.APISPORTS_API_KEY.includes('expired') && env.APISPORTS_API_KEY.length >= 10) {
       this.providers.push(new ApiSportsProvider(env.APISPORTS_API_KEY));
       console.log('✅ API-Sports provider registered');
@@ -327,11 +302,9 @@ class OddsService {
       console.warn('❌ API-Sports provider SKIPPED - invalid or missing key');
     }
 
-    // Always include fallback provider
     this.providers.push(new FallbackProvider());
     console.log('✅ Fallback provider registered');
 
-    // Sort by priority (lower number = higher priority)
     this.providers.sort((a, b) => (a.priority || 100) - (b.priority || 100));
     
     console.log(`🎯 OddsService: ${this.providers.length} providers ready:`, this.providers.map(p => p.name).join(', '));
@@ -691,7 +664,6 @@ class OddsService {
   }
 
   async _fetchSportOddsWithFallback(sportKey, options) {
-    // --- CHANGE START: QUOTA SAVER ---
     const lockKey = `fetch:${sportKey}`;
     if (this.fetchLocks.has(lockKey)) {
         console.log(`[QUOTA SAVER] Call for ${sportKey} is already in progress. Awaiting result.`);
@@ -735,7 +707,6 @@ class OddsService {
     } finally {
         this.fetchLocks.delete(lockKey);
     }
-    // --- CHANGE END ---
   }
 
   async getUsage() {
