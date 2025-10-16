@@ -58,7 +58,7 @@ static validateGameData(game) {
   );
 
   if (!hasBasicInfo) {
-    console.warn(`⚠️ Game validation failed - missing basic info:`, game.id || game.event_id);
+    console.warn(`❌ Game validation failed - missing basic info:`, game.id || game.event_id);
     return false;
   }
 
@@ -72,11 +72,11 @@ static validateGameData(game) {
                             gameTime < new Date(now.getTime() + maxFutureDays * 24 * 60 * 60 * 1000);
     
     if (!isReasonableTime) {
-      console.warn(`⚠️ Game validation failed - unreasonable commence_time:`, game.commence_time);
+      console.warn(`❌ Game validation failed - unreasonable commence_time:`, game.commence_time);
       return false;
     }
   } catch (dateError) {
-    console.warn(`⚠️ Game validation failed - invalid commence_time:`, game.commence_time);
+    console.warn(`❌ Game validation failed - invalid commence_time:`, game.commence_time);
     return false;
   }
 
@@ -95,7 +95,6 @@ static validateGameData(game) {
       away_team: game.away_team || game.awayTeam || 'Unknown Away',
       commence_time: game.commence_time || game.start_time || game.time,
       bookmakers: game.bookmakers || game.odds || [],
-      // CRITICAL FIX: Ensure league_key is always populated
       league_key: game.league_key || game.sport_key || game.sport || 'unknown_league',
       raw_data: game,
       provider: provider,
@@ -174,7 +173,6 @@ class FallbackProvider {
       home_team: 'Home Team',
       away_team: 'Away Team',
       bookmakers: [],
-      // CRITICAL FIX: Include league_key in fallback data
       league_key: sportKey,
       source: 'fallback'
     }];
@@ -225,9 +223,14 @@ class OddsService {
     this.initialized = false;
     this.providerStatus = new Map();
     this.fetchLocks = new Map();
+    this.initializationPromise = null;
     
     console.log('🎯 OddsService: Initializing providers...');
     this._initializeProviders();
+    
+    this._ensureInitialized().catch(error => {
+      console.warn('⚠️ OddsService: Initial background initialization failed:', error.message);
+    });
   }
 
   async warmupCache() {
@@ -249,29 +252,38 @@ class OddsService {
   async _ensureInitialized() {
     if (this.initialized) return;
     
-    console.log('🔄 OddsService: Performing first-time initialization...');
+    if (this.initializationPromise) {
+      return this.initializationPromise;
+    }
     
-    for (const provider of this.providers) {
-      if (provider.initialize) {
-        try {
-          await provider.initialize();
-          this.providerStatus.set(provider.name, 'initialized');
-        } catch (error) {
-          console.error(`❌ OddsService: Failed to initialize ${provider.name}:`, error.message);
-          this.providerStatus.set(provider.name, 'initialization_failed');
+    this.initializationPromise = (async () => {
+      console.log('🔄 OddsService: Performing first-time initialization...');
+      
+      for (const provider of this.providers) {
+        if (provider.initialize) {
+          try {
+            await provider.initialize();
+            this.providerStatus.set(provider.name, 'initialized');
+          } catch (error) {
+            console.error(`❌ OddsService: Failed to initialize ${provider.name}:`, error.message);
+            this.providerStatus.set(provider.name, 'initialization_failed');
+          }
         }
       }
-    }
+      
+      try {
+        await cacheService.healthCheck();
+        console.log('✅ OddsService: Cache service ready');
+      } catch (error) {
+        console.warn('⚠️ OddsService: Cache service not available, continuing without cache');
+      }
+      
+      this.initialized = true;
+      console.log(`✅ OddsService: Initialized with ${this.providers.length} providers`);
+      this.initializationPromise = null;
+    })();
     
-    try {
-      await cacheService.healthCheck();
-      console.log('✅ OddsService: Cache service ready');
-    } catch (error) {
-      console.warn('⚠️ OddsService: Cache service not available, continuing without cache');
-    }
-    
-    this.initialized = true;
-    console.log(`✅ OddsService: Initialized with ${this.providers.length} providers`);
+    return this.initializationPromise;
   }
 
   _initializeProviders() {
@@ -313,23 +325,23 @@ class OddsService {
 
   _validateSportKey(sportKey) {
     if (!sportKey || sportKey === 'undefined' || sportKey === 'null') {
-      console.warn('⚠️ OddsService: sportKey is undefined or invalid');
+      console.warn('❌ OddsService: sportKey is undefined or invalid');
       return false;
     }
     
     if (typeof sportKey !== 'string') {
-      console.warn('⚠️ OddsService: sportKey is not a string:', typeof sportKey);
+      console.warn('❌ OddsService: sportKey is not a string:', typeof sportKey);
       return false;
     }
     
     const validSportPattern = /^[a-z0-9_]+$/;
     if (!validSportPattern.test(sportKey)) {
-      console.warn(`⚠️ OddsService: Suspicious sport key format: ${sportKey}`);
+      console.warn(`❌ OddsService: Suspicious sport key format: ${sportKey}`);
       return false;
     }
     
     if (sportKey.length > 50) {
-      console.warn(`⚠️ OddsService: Sport key too long: ${sportKey}`);
+      console.warn(`❌ OddsService: Sport key too long: ${sportKey}`);
       return false;
     }
     
@@ -409,7 +421,7 @@ class OddsService {
     await this._ensureInitialized();
     
     if (!this._validateSportKey(sportKey)) {
-      console.warn(`⚠️ OddsService: Invalid sport key "${sportKey}", returning empty array`);
+      console.warn(`❌ OddsService: Invalid sport key "${sportKey}", returning empty array`);
       return [];
     }
     
@@ -481,7 +493,7 @@ class OddsService {
     await this._ensureInitialized();
     
     if (!this._validateSportKey(sportKey)) {
-      console.warn(`⚠️ OddsService: Invalid sport key for player props: ${sportKey}`);
+      console.warn(`❌ OddsService: Invalid sport key for player props: ${sportKey}`);
       return [];
     }
 
@@ -516,7 +528,7 @@ class OddsService {
         }
       }
 
-      console.log(`⚠️ OddsService: No player props available for ${sportKey} game ${gameId}`);
+      console.log(`❌ OddsService: No player props available for ${sportKey} game ${gameId}`);
       return [];
 
     } catch (error) {
@@ -680,7 +692,7 @@ class OddsService {
 
         for (const provider of this.providers) {
             try {
-                console.log(`🔧 OddsService: Trying ${provider.name} for ${sportKey}...`);
+                console.log(`🔄 OddsService: Trying ${provider.name} for ${sportKey}...`);
                 const games = await withTimeout(provider.fetchSportOdds(sportKey, options), 12000, `FetchOdds_${provider.name}_${sportKey}`);
 
                 if (games && games.length > 0) {
@@ -688,7 +700,7 @@ class OddsService {
                     console.log(`✅ OddsService: ${provider.name} returned ${normalizedGames.length} valid games for ${sportKey}.`);
                     return GameEnhancementService.enhanceGameData(normalizedGames, sportKey, provider.name);
                 }
-                console.log(`⚠️ OddsService: ${provider.name} returned no valid data for ${sportKey}.`);
+                console.log(`❌ OddsService: ${provider.name} returned no valid data for ${sportKey}.`);
             } catch (error) {
                 console.error(`❌ OddsService: ${provider.name} failed for ${sportKey}:`, error.message);
                 if (error?.response?.status === 401 || error?.response?.status === 403) {
@@ -732,7 +744,7 @@ class OddsService {
             }
           }
           
-          console.warn('⚠️ OddsService: No provider available to fetch usage stats.');
+          console.warn('❌ OddsService: No provider available to fetch usage stats.');
           return { 
             requests_remaining: 'N/A',
             message: 'No usage provider available',
