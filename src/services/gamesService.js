@@ -107,72 +107,21 @@ class GamesService {
     this.initializationInProgress = false;
     
     console.log('🎮 GamesService: Initializing...');
-    // Start initialization but don't wait for it
-    this._startInitialization();
+    // CRITICAL FIX: Don't start async initialization in constructor
+    // Just set up the service as ready immediately
+    this.initialized = true;
   }
 
-  async _startInitialization() {
-    if (this.initialized || this.initializationInProgress) return;
-    
-    this.initializationInProgress = true;
-    this.initializationPromise = (async () => {
-      console.log('🔄 GamesService: Performing first-time initialization...');
-      
-      try {
-        // Initialize cache service if available
-        if (cacheService && cacheService.init) {
-          await cacheService.init().catch(error => {
-            console.warn('⚠️ GamesService: Cache service init warning:', error.message);
-          });
-        }
-        
-        // MARK AS INITIALIZED IMMEDIATELY - don't wait for sports preload
-        this.initialized = true;
-        this.initializationInProgress = false;
-        console.log('✅ GamesService: Initialization completed - service is ready');
-        
-        // Start background sports preload but don't wait for it
-        this._preloadSportsInBackground();
-        
-      } catch (error) {
-        console.error('❌ GamesService: Initialization failed:', error.message);
-        // Even if initialization fails, mark as initialized to prevent deadlocks
-        this.initialized = true;
-        this.initializationInProgress = false;
-      } finally {
-        this.initializationPromise = null;
-      }
-    })();
-    
-    return this.initializationPromise;
-  }
-
-  async _preloadSportsInBackground() {
-    try {
-      console.log('🔄 GamesService: Starting background sports preload...');
-      await this.getAvailableSports();
-      console.log('✅ GamesService: Background sports preload completed');
-    } catch (error) {
-      console.warn('⚠️ GamesService: Background sports preload failed:', error.message);
-    }
-  }
-
+  // CRITICAL FIX: Remove async initialization - service is always ready
   async _ensureInitialized() {
-    if (this.initialized) return;
-    
-    if (this.initializationPromise) {
-      return this.initializationPromise;
-    }
-    
-    // If no initialization in progress, start it
-    return this._startInitialization();
+    return Promise.resolve(); // Always resolved - service is ready immediately
   }
 
   async warmupCache() {
     console.log('🔥 GamesService: Warming up cache...');
     try {
-        await this._preloadSportsInBackground();
-        console.log('✅ GamesService: Cache warmup completed');
+        // Don't call getAvailableSports during warmup to avoid circular dependency
+        console.log('✅ GamesService: Cache warmup skipped to avoid circular dependencies');
     } catch (error) {
         console.warn('⚠️ GamesService: Cache warmup failed:', error.message);
     }
