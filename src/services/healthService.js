@@ -8,7 +8,7 @@ import { rateLimitService } from './rateLimitService.js';
 import { sentryService } from './sentryService.js';
 import { withTimeout } from '../utils/asyncUtils.js';
 
-const HEALTH_CHECK_TIMEOUT = 10000;
+const HEALTH_CHECK_TIMEOUT = 90000;
 
 class ServiceHealthChecker {
   static async checkRedis() {
@@ -18,7 +18,7 @@ class ServiceHealthChecker {
       if (!redis) return { healthy: false, error: 'Redis not configured' };
       
       // Use a simpler ping test that doesn't rely on complex Redis operations
-      const pingResult = await withTimeout(redis.ping(), 60000, 'Redis_Ping');
+      const pingResult = await withTimeout(redis.ping(), 90000, 'Redis_Ping');
       return { 
         healthy: pingResult === 'PONG', 
         latency: Date.now() - checkStart,
