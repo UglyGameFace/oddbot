@@ -1,4 +1,4 @@
-// src/services/aiService.js - FINAL, COMPLETE, AND CORRECTED (Value-First Quant Engine)
+// src/services/aiService.js - FINAL WITH FACT-CHECKING AND VALIDATION
 import axios from 'axios';
 import env from '../config/env.js';
 import gamesService from './gamesService.js';
@@ -14,6 +14,81 @@ const AI_MODELS = {
   perplexity: "sonar-pro"
 };
 
+// Enhanced validation services
+class PlayerValidationService {
+  constructor() {
+    this.teamRosters = new Map();
+    this.commonTypos = new Map([
+      ['jat-mart chase', 'ja\'marr chase'],
+      ['damell washington', 'darnell washington'],
+      ['aaron rodgers', 'aaron rodgers'],
+      ['dk metcalf', 'd.k. metcalf']
+    ]);
+    this.playerTeams = new Map([
+      ['aaron rodgers', 'New York Jets'],
+      ['ja\'marr chase', 'Cincinnati Bengals'], 
+      ['darnell washington', 'Pittsburgh Steelers'],
+      ['d.k. metcalf', 'Seattle Seahawks']
+    ]);
+  }
+
+  correctTypos(name) {
+    const lowerName = name.toLowerCase();
+    return this.commonTypos.get(lowerName) || name;
+  }
+
+  validatePlayerForGame(playerName, game) {
+    const correctedName = this.correctTypos(playerName);
+    const expectedTeam = this.playerTeams.get(correctedName.toLowerCase());
+    
+    if (expectedTeam) {
+      const isValid = game.away_team === expectedTeam || game.home_team === expectedTeam;
+      if (!isValid) {
+        throw new Error(`Player ${correctedName} plays for ${expectedTeam}, not in ${game.away_team} vs ${game.home_team}`);
+      }
+    }
+    return correctedName;
+  }
+}
+
+class BettingLineValidationService {
+  getRealisticRanges(sport) {
+    const ranges = {
+      'americanfootball_nfl': {
+        totals: { min: 30, max: 60 },
+        spreads: { min: -20, max: 20 },
+        h2h: { min: -1000, max: 1000 }
+      },
+      'basketball_nba': {
+        totals: { min: 180, max: 250 },
+        spreads: { min: -25, max: 25 },
+        h2h: { min: -1000, max: 1000 }
+      },
+      'baseball_mlb': {
+        totals: { min: 5, max: 15 },
+        spreads: { min: -3, max: 3 },
+        h2h: { min: -500, max: 500 }
+      }
+    };
+    return ranges[sport] || ranges['americanfootball_nfl'];
+  }
+
+  validateBettingLine(market, point, sport) {
+    const ranges = this.getRealisticRanges(sport);
+    const marketRange = ranges[market];
+    
+    if (!marketRange) return true; // Unknown market, don't validate
+    
+    if (point !== undefined && point !== null) {
+      if (point < marketRange.min || point > marketRange.max) {
+        throw new Error(`Implausible ${market} line: ${point} for ${sport}. Realistic range: ${marketRange.min} to ${marketRange.max}`);
+      }
+    }
+    return true;
+  }
+}
+
+// Core utility functions
 function americanToDecimal(a) {
     const x = Number(a);
     if (!Number.isFinite(x)) return 1.0;
@@ -45,11 +120,77 @@ function extractJSON(text = '') {
     return null;
 }
 
+// Enhanced validation function
+function validateParlayResponse(parlayData, gameContext, sportKey) {
+  const playerValidator = new PlayerValidationService();
+  const lineValidator = new BettingLineValidationService();
+  const errors = [];
+  const validLegs = [];
+
+  if (!parlayData.legs || !Array.isArray(parlayData.legs)) {
+    throw new Error('AI response missing legs array');
+  }
+
+  for (const leg of parlayData.legs) {
+    try {
+      // Validate game reference matches context
+      if (gameContext) {
+        const legGame = leg.event || '';
+        const actualGame = `${gameContext.away_team} @ ${gameContext.home_team}`;
+        if (legGame.toLowerCase() !== actualGame.toLowerCase()) {
+          errors.push(`Game mismatch: "${legGame}" vs "${actualGame}"`);
+          continue;
+        }
+      }
+
+      // Validate player names
+      if (leg.selection && leg.selection.includes('Rodgers') && sportKey === 'americanfootball_nfl') {
+        playerValidator.validatePlayerForGame('aaron rodgers', gameContext);
+      }
+
+      // Validate betting lines
+      if (leg.point !== undefined && leg.point !== null) {
+        lineValidator.validateBettingLine(leg.market, leg.point, sportKey);
+      }
+
+      // Check for obvious contradictions
+      if (leg.market === 'totals') {
+        if (leg.point < 10 || leg.point > 70) {
+          errors.push(`Implausible total points: ${leg.point}`);
+          continue;
+        }
+      }
+
+      validLegs.push(leg);
+    } catch (error) {
+      errors.push(`Leg validation failed: ${error.message}`);
+    }
+  }
+
+  if (errors.length > 0) {
+    console.warn('Parlay validation warnings:', errors);
+  }
+
+  if (validLegs.length === 0 && parlayData.legs.length > 0) {
+    throw new Error('All parlay legs failed validation due to factual errors');
+  }
+
+  return {
+    ...parlayData,
+    legs: validLegs,
+    validation: {
+      originalCount: parlayData.legs.length,
+      validCount: validLegs.length,
+      errors
+    }
+  };
+}
+
 async function buildEliteScheduleContext(sportKey, hours) {
     try {
         const realGames = await gamesService.getVerifiedRealGames(sportKey, hours);
         if (realGames.length === 0) {
-            return `\n\n🎯 ELITE ANALYST MODE: No real-time ${sportKey} data available for the next ${hours} hours. Using fundamental analysis of typical matchups and team quality.`;
+            return `\n\n🎯 ELITE ANALYST MODE: No real-time ${sportKey} data available. Using fundamental analysis of typical matchups.`;
         }
         const gameList = realGames.slice(0, 20).map((game, index) => {
             const timeStr = new Date(game.commence_time).toLocaleString('en-US', { timeZone: TZ, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -58,7 +199,7 @@ async function buildEliteScheduleContext(sportKey, hours) {
         return `\n\n📅 VERIFIED SCHEDULE (Next ${hours} hours):\n${gameList}\n\nCRITICAL: You MUST base your analysis exclusively on these real matchups. Do not invent games.`;
     } catch (error) {
         console.warn(`⚠️ Schedule context failed for ${sportKey}, using elite mode:`, error.message);
-        return `\n\n🎯 ELITE ANALYST MODE: System data temporarily limited. Generating parlay using fundamental sports analysis and matchup expertise.`;
+        return `\n\n🎯 ELITE ANALYST MODE: System data temporarily limited. Generating parlay using fundamental sports analysis.`;
     }
 }
 
@@ -66,7 +207,7 @@ async function eliteGameValidation(sportKey, proposedLegs, hours) {
     try {
         const realGames = await gamesService.getVerifiedRealGames(sportKey, hours);
         if (realGames.length === 0) {
-            console.warn(`⚠️ Elite validation skipped for ${sportKey}: No real games found to validate against.`);
+            console.warn(`⚠️ Elite validation skipped for ${sportKey}: No real games found.`);
             return proposedLegs || [];
         }
         const realGameMap = new Map(realGames.map(game => [`${(game.away_team || '').toLowerCase().trim()} @ ${(game.home_team || '').toLowerCase().trim()}`, game]));
@@ -88,6 +229,10 @@ async function eliteGameValidation(sportKey, proposedLegs, hours) {
 }
 
 class AIService {
+  constructor() {
+    this.playerValidator = new PlayerValidationService();
+    this.lineValidator = new BettingLineValidationService();
+  }
 
   _ensureLegsHaveOdds(legs) {
     if (!Array.isArray(legs)) return [];
@@ -131,7 +276,7 @@ class AIService {
                 }
                 throw new Error(`Perplexity API error after ${MAX_RETRIES + 1} attempts: ${error.message}`);
             }
-            await sleep(1000 * (i + 1)); // Exponential backoff
+            await sleep(1000 * (i + 1));
         }
     }
   }
@@ -158,33 +303,47 @@ class AIService {
       });
       const parlayData = await this._callAIProvider(prompt);
       
-      if (!parlayData.legs || !Array.isArray(parlayData.legs)) throw new Error('AI response lacked valid parlay structure');
+      if (!parlayData.legs || !Array.isArray(parlayData.legs)) {
+        throw new Error('AI response lacked valid parlay structure');
+      }
       
-      parlayData.legs = this._ensureLegsHaveOdds(parlayData.legs);
-      const validatedLegs = await eliteGameValidation(sportKey, parlayData.legs, options.horizonHours || 72);
+      // ENHANCED VALIDATION - FACT CHECKING
+      const validatedParlay = validateParlayResponse(parlayData, options.gameContext, sportKey);
       
-      if (validatedLegs.length < numLegs) {
-        console.warn(`[Web Mode] Validation failed to find all requested legs. Found ${validatedLegs.length}/${numLegs}. Returning what was found.`);
+      if (validatedParlay.validation.errors.length > validatedParlay.legs.length) {
+        throw new Error(`AI generated too many factual errors: ${validatedParlay.validation.errors.join(', ')}`);
       }
 
-      parlayData.legs = validatedLegs;
+      validatedParlay.legs = this._ensureLegsHaveOdds(validatedParlay.legs);
+      const gameValidatedLegs = await eliteGameValidation(sportKey, validatedParlay.legs, options.horizonHours || 72);
       
-      if (parlayData.legs.length === 0 && numLegs > 0) {
-        return parlayData; 
+      if (gameValidatedLegs.length < numLegs) {
+        console.warn(`[Web Mode] Validation failed to find all requested legs. Found ${gameValidatedLegs.length}/${numLegs}.`);
       }
 
-      parlayData.parlay_price_decimal = parlayDecimal(parlayData.legs);
-      parlayData.parlay_price_american = decimalToAmerican(parlayData.parlay_price_decimal);
+      validatedParlay.legs = gameValidatedLegs;
+      
+      if (validatedParlay.legs.length === 0 && numLegs > 0) {
+        return validatedParlay; 
+      }
+
+      validatedParlay.parlay_price_decimal = parlayDecimal(validatedParlay.legs);
+      validatedParlay.parlay_price_american = decimalToAmerican(validatedParlay.parlay_price_decimal);
       
       try {
-        parlayData.quantitative_analysis = await quantitativeService.evaluateParlay(parlayData.legs, parlayData.parlay_price_decimal);
+        validatedParlay.quantitative_analysis = await quantitativeService.evaluateParlay(validatedParlay.legs, validatedParlay.parlay_price_decimal);
       } catch (qError) {
         console.warn('Quantum quantitative analysis failed:', qError.message);
-        parlayData.quantitative_analysis = { note: 'Advanced analysis temporarily limited', riskAssessment: { overallRisk: 'CALCULATED' } };
+        validatedParlay.quantitative_analysis = { note: 'Advanced analysis temporarily limited', riskAssessment: { overallRisk: 'CALCULATED' } };
       }
       
-      parlayData.research_metadata = { quantum_mode: true, real_games_validated: validatedLegs.length, prompt_strategy: 'quantum_web' };
-      return parlayData;
+      validatedParlay.research_metadata = { 
+        quantum_mode: true, 
+        real_games_validated: gameValidatedLegs.length, 
+        prompt_strategy: 'quantum_web',
+        validation_errors: validatedParlay.validation.errors
+      };
+      return validatedParlay;
   }
   
   async _findBestValuePlays(games) {
@@ -308,31 +467,36 @@ class AIService {
 
   async _generateFallbackParlay(sportKey, numLegs, betType, options) {
       console.log(`🎯 Generating QUANTUM fallback for ${sportKey}`);
-      const scheduleContext = await buildEliteScheduleContext(sportKey, 168); // Wider window for fallback
+      const scheduleContext = await buildEliteScheduleContext(sportKey, 168);
       const prompt = ElitePromptService.getFallbackPrompt(sportKey, numLegs, betType, { 
           scheduleInfo: scheduleContext,
           gameContext: options.gameContext
         });
       const parlayData = await this._callAIProvider(prompt);
       
-      if (!parlayData.legs || !Array.isArray(parlayData.legs)) throw new Error('AI response lacked valid parlay structure in fallback');
+      if (!parlayData.legs || !Array.isArray(parlayData.legs)) {
+        throw new Error('AI response lacked valid parlay structure in fallback');
+      }
 
-      parlayData.legs = this._ensureLegsHaveOdds(parlayData.legs);
+      // ENHANCED VALIDATION FOR FALLBACK TOO
+      const validatedParlay = validateParlayResponse(parlayData, options.gameContext, sportKey);
+      validatedParlay.legs = this._ensureLegsHaveOdds(validatedParlay.legs);
       
-      const validatedLegs = await eliteGameValidation(sportKey, parlayData.legs, 168);
-      parlayData.legs = validatedLegs.length > 0 ? validatedLegs.slice(0, numLegs) : parlayData.legs.slice(0, numLegs);
+      const gameValidatedLegs = await eliteGameValidation(sportKey, validatedParlay.legs, 168);
+      validatedParlay.legs = gameValidatedLegs.length > 0 ? gameValidatedLegs.slice(0, numLegs) : validatedParlay.legs.slice(0, numLegs);
 
-      parlayData.parlay_price_decimal = parlayDecimal(parlayData.legs);
-      parlayData.parlay_price_american = decimalToAmerican(parlayData.parlay_price_decimal);
+      validatedParlay.parlay_price_decimal = parlayDecimal(validatedParlay.legs);
+      validatedParlay.parlay_price_american = decimalToAmerican(validatedParlay.parlay_price_decimal);
       
-      parlayData.research_metadata = {
+      validatedParlay.research_metadata = {
           quantum_mode: true,
           fallback_used: true,
           prompt_strategy: 'quantum_fallback',
-          note: 'Generated using fundamental analysis without real-time data'
+          note: 'Generated using fundamental analysis without real-time data',
+          validation_errors: validatedParlay.validation?.errors || []
       };
       
-      return parlayData;
+      return validatedParlay;
   }
 }
 
