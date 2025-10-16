@@ -222,7 +222,7 @@ class EnhancedHealthService {
     }
   }
 
-  async waitForReady(timeoutMs = 60000) {
+  async waitForReady(timeoutMs = 90000) {
     const startTime = Date.now();
     const checkInterval = 2000;
     
@@ -233,10 +233,10 @@ class EnhancedHealthService {
         const report = await this.getHealth();
         
         const criticalServicesHealthy = report.services.database.ok && report.services.cache.ok;
-        const oddsAndGamesInitialized = report.services.odds.initialized && report.services.games.initialized;
+        const servicesInitialized = report.services.odds.initialized && report.services.games.initialized;
         
-        if (criticalServicesHealthy && oddsAndGamesInitialized) {
-          console.log(`✅ HealthService: Critical services ready! (Odds/Games may be degraded)`);
+        if (criticalServicesHealthy && servicesInitialized) {
+          console.log(`✅ HealthService: Services ready! (Some services may be degraded but operational)`);
           return true;
         }
         
