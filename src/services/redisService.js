@@ -54,8 +54,8 @@ class RedisService {
             return false;
           },
           lazyConnect: true,
-          showFriendlyErrorStack: true, // Better error messages
-          enableAutoPipelining: false, // Disable to avoid syntax issues
+          showFriendlyErrorStack: true,
+          enableAutoPipelining: false,
         });
 
         // Apply command safety wrappers
@@ -75,7 +75,6 @@ class RedisService {
             return;
           }
           
-          // Don't log connection errors during initial connection attempts
           if (!errorMessage.includes('connect') || this.connectionEstablished) {
             console.error('❌ RedisService: Client Error:', error.message);
           }
@@ -170,7 +169,6 @@ class RedisService {
     // Wrap KEYS command
     client.keys = async function(pattern) {
       try {
-        // Validate pattern
         if (typeof pattern !== 'string') {
           throw new Error('Pattern must be a string');
         }
@@ -196,7 +194,6 @@ class RedisService {
     // Wrap SCAN command
     client.scan = async function(cursor, ...args) {
       try {
-        // Validate cursor
         if (typeof cursor !== 'string' && typeof cursor !== 'number') {
           throw new Error('Cursor must be string or number');
         }
@@ -220,7 +217,6 @@ class RedisService {
     // Wrap DEL command
     client.del = async function(...keys) {
       try {
-        // Validate keys
         if (keys.length === 0) {
           throw new Error('No keys provided for deletion');
         }
@@ -248,19 +244,28 @@ class RedisService {
   }
 
   async getClient() {
+    // If we have a valid client, return it
     if (this.client && this.client.status === 'ready') {
       return this.client;
     }
 
+    // If no Redis URL, return null
     if (!env.REDIS_URL) {
       return null;
     }
 
+    // If already connecting, return the promise
     if (this.isConnecting) {
       return this.connectionPromise;
     }
 
-    return this.connect();
+    // Otherwise, start a new connection
+    try {
+      return await this.connect();
+    } catch (error) {
+      console.error('❌ RedisService: Failed to get client:', error.message);
+      return null;
+    }
   }
 
   async testConnection() {
@@ -331,7 +336,6 @@ class RedisService {
     this.lastSyntaxError = null;
   }
 
-  // Method to get detailed connection status
   getConnectionStatus() {
     return {
       connected: this.isConnected(),
@@ -343,7 +347,6 @@ class RedisService {
     };
   }
 
-  // Safe command execution with error handling
   async executeCommand(command, ...args) {
     try {
       const client = await this.getClient();
@@ -351,7 +354,6 @@ class RedisService {
         throw new Error('Redis client not available');
       }
       
-      // Validate command exists
       if (typeof client[command] !== 'function') {
         throw new Error(`Invalid Redis command: ${command}`);
       }
@@ -360,12 +362,11 @@ class RedisService {
     } catch (error) {
       console.error(`❌ RedisService: Command ${command} failed:`, error.message);
       
-      // Capture to Sentry if it's not a syntax error
       if (!error.message.includes('syntax error')) {
         sentryService.captureError(error, {
           component: 'redis_service',
           operation: command,
-          args: args.slice(0, 3) // Limit args for privacy
+          args: args.slice(0, 3)
         });
       }
       
