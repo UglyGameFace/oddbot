@@ -1,4 +1,4 @@
-// src/bot.js - FINAL ABSOLUTE FIXED VERSION WITH CACHE WARMUP
+// src/bot.js - FINAL ABSOLUTE FIXED VERSION WITH CACHE WARMUP + DEBUG HANDLERS
 import env from './config/env.js';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
@@ -18,6 +18,8 @@ import { registerSettings } from './bot/handlers/settings.js';
 import { registerSystem } from './bot/handlers/system.js';
 import { registerTools } from './bot/handlers/tools.js';
 import { registerChat } from './bot/handlers/chat.js';
+// --- ADD DEBUG HANDLERS IMPORT ---
+import { registerDebugSettings } from './bot/handlers/debugSettings.js';
 
 // --- Service imports for cache warmup ---
 import oddsService from './services/oddsService.js';
@@ -197,6 +199,8 @@ async function registerAllCommands(bot) {
     registerSystem(bot);
     registerTools(bot);
     registerChat(bot);
+    // --- ADD DEBUG HANDLERS REGISTRATION ---
+    registerDebugSettings(bot);
     
     const commands = [
       { command: 'ai', description: 'Launch the AI Parlay Builder' },
