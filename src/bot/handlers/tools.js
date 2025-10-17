@@ -1,4 +1,4 @@
-// src/bot/handlers/tools.js - COMPLETELY FIXED VERSION
+// src/bot/handlers/tools.js - FIXED REDIS INFO (PLAIN TEXT VERSION)
 import { getRedisClient } from '../../services/redisService.js';
 import databaseService from '../../services/databaseService.js';
 import rateLimitService from '../../services/rateLimitService.js';
@@ -98,36 +98,36 @@ async function handleHealthCheck(bot, chatId, messageId) {
   try {
     const healthReport = await healthService.getHealth();
     
-    // FIXED: Handle undefined health report structure
-    let healthText = '*❤️ SYSTEM HEALTH REPORT*\n\n';
+    // FIXED: Use plain text for health report to avoid Markdown issues
+    let healthText = '❤️ SYSTEM HEALTH REPORT\n\n';
 
-    // Overall status - FIXED: Check if overall exists
+    // Overall status
     if (healthReport && healthReport.overall) {
-      healthText += `*Overall:* ${healthReport.overall.healthy ? '✅ Healthy' : '❌ Unhealthy'}\n`;
-      healthText += `*Timestamp:* ${new Date(healthReport.overall.timestamp).toLocaleString()}\n\n`;
+      healthText += `Overall: ${healthReport.overall.healthy ? '✅ Healthy' : '❌ Unhealthy'}\n`;
+      healthText += `Timestamp: ${new Date(healthReport.overall.timestamp).toLocaleString()}\n\n`;
     } else {
-      healthText += `*Overall:* ⚠️ Health data unavailable\n\n`;
+      healthText += `Overall: ⚠️ Health data unavailable\n\n`;
     }
 
-    // Service status - FIXED: Check if services exist
-    healthText += '*Services:*\n';
+    // Service status
+    healthText += 'Services:\n';
     if (healthReport && healthReport.services) {
       Object.entries(healthReport.services).forEach(([service, status]) => {
         const statusIcon = status && status.ok ? '✅' : '❌';
-        healthText += `• ${statusIcon} ${service}: ${status && status.ok ? 'OK' : 'ERROR'}`;
+        healthText += `${statusIcon} ${service}: ${status && status.ok ? 'OK' : 'ERROR'}`;
         if (status && status.details) {
           healthText += ` (${status.details})`;
         }
         healthText += '\n';
       });
     } else {
-      healthText += '• ⚠️ No service data available\n';
+      healthText += '⚠️ No service data available\n';
     }
 
+    // FIXED: Use plain text (no parse_mode) to avoid Telegram errors
     await bot.editMessageText(healthText, {
       chat_id: chatId,
       message_id: messageId,
-      parse_mode: 'Markdown',
       reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] }
     });
   } catch (error) {
@@ -157,14 +157,14 @@ async function handleRedisInfo(bot, chatId, messageId) {
       redis.info('memory').catch(() => 'used_memory_human:0\r\nmaxmemory_human:0')
     ]);
 
-    // FIXED: Use simpler text formatting to avoid Telegram parse errors
-    let redisText = '💾 *REDIS INFORMATION*\n\n';
+    // FIXED: Use COMPLETELY PLAIN TEXT - no Markdown at all
+    let redisText = '💾 REDIS INFORMATION\n\n';
 
-    // Basic info
-    redisText += `*Connected:* ${redis.status === 'ready' ? '✅ Yes' : '❌ No'}\n`;
-    redisText += `*Keys:* ${dbsize}\n`;
+    // Basic info - plain text only
+    redisText += `Connected: ${redis.status === 'ready' ? '✅ Yes' : '❌ No'}\n`;
+    redisText += `Keys: ${dbsize}\n`;
 
-    // Memory usage - FIXED: Better error handling
+    // Memory usage
     let usedMemory = 'Unknown';
     let maxMemory = 'Unknown';
     try {
@@ -173,30 +173,29 @@ async function handleRedisInfo(bot, chatId, messageId) {
     } catch (e) {
       console.log('Memory info parse error:', e.message);
     }
-    redisText += `*Memory:* ${usedMemory} / ${maxMemory}\n`;
+    redisText += `Memory: ${usedMemory} / ${maxMemory}\n`;
 
-    // Key patterns - FIXED: Use much simpler scanning to avoid timeouts
+    // Key patterns - simplified check
     const keyPatterns = ['odds:', 'player_props:', 'games:', 'user:', 'parlay:', 'meta:'];
     let keyResults = [];
     
     for (const pattern of keyPatterns) {
       try {
-        // Just get a small sample to check if pattern exists
-        const result = await redis.scan('0', 'MATCH', `${pattern}*`, 'COUNT', '5');
+        // Quick check without complex scanning
+        const result = await redis.scan('0', 'MATCH', `${pattern}*`, 'COUNT', '3');
         const hasKeys = result[1].length > 0;
-        keyResults.push(`• ${pattern}: ${hasKeys ? 'Has keys' : 'No keys'}`);
+        keyResults.push(`- ${pattern}: ${hasKeys ? 'Has keys' : 'No keys'}`);
       } catch (error) {
-        keyResults.push(`• ${pattern}: Scan error`);
+        keyResults.push(`- ${pattern}: Check failed`);
       }
     }
 
-    redisText += '\n*Key Patterns:*\n' + keyResults.join('\n');
+    redisText += '\nKey Patterns:\n' + keyResults.join('\n');
 
-    // FIXED: Use HTML parse mode instead of Markdown to avoid formatting issues
+    // FIXED: NO parse_mode - completely plain text
     await bot.editMessageText(redisText, {
       chat_id: chatId,
       message_id: messageId,
-      parse_mode: 'Markdown', // Keep as Markdown but with simpler formatting
       reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] }
     });
   } catch (error) {
@@ -222,7 +221,8 @@ async function handleOddsFreshness(bot, chatId, messageId) {
       databaseService.getOddsDateRange().catch(() => null)
     ]);
 
-    let freshnessText = '*📊 ODDS DATA FRESHNESS REPORT*\n\n';
+    // FIXED: Plain text for freshness report
+    let freshnessText = '📊 ODDS DATA FRESHNESS REPORT\n\n';
 
     // Last ingestion time
     if (lastIngestISO) {
@@ -230,10 +230,10 @@ async function handleOddsFreshness(bot, chatId, messageId) {
       const now = new Date();
       const hoursAgo = Math.round((now - lastIngestDate) / (1000 * 60 * 60));
       
-      freshnessText += `*Last Refresh:* ${lastIngestDate.toLocaleString()}\n`;
-      freshnessText += `*Age:* ${hoursAgo} hours ago\n\n`;
+      freshnessText += `Last Refresh: ${lastIngestDate.toLocaleString()}\n`;
+      freshnessText += `Age: ${hoursAgo} hours ago\n\n`;
     } else {
-      freshnessText += `*Last Refresh:* ❌ No successful run recorded\n\n`;
+      freshnessText += `Last Refresh: ❌ No successful run recorded\n\n`;
     }
 
     // Date range
@@ -241,17 +241,17 @@ async function handleOddsFreshness(bot, chatId, messageId) {
       const minDate = new Date(dateRange.min_date);
       const maxDate = new Date(dateRange.max_date);
       
-      freshnessText += `*Game Date Range:*\n`;
+      freshnessText += `Game Date Range:\n`;
       freshnessText += `From: ${minDate.toLocaleDateString()}\n`;
       freshnessText += `To:   ${maxDate.toLocaleDateString()}\n`;
     } else {
-      freshnessText += `*Game Date Range:* ❌ No games in database\n`;
+      freshnessText += `Game Date Range: ❌ No games in database\n`;
     }
 
+    // FIXED: Plain text
     await bot.editMessageText(freshnessText, {
       chat_id: chatId,
       message_id: messageId,
-      parse_mode: 'Markdown',
       reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] }
     });
 
@@ -278,10 +278,10 @@ async function handleManualIngest(bot, chatId, messageId) {
       `The worker will process on its next cycle (usually within 1-2 minutes).\n\n` +
       `Check the worker logs on Railway to monitor progress.`;
 
+    // FIXED: Plain text
     await bot.editMessageText(responseText, {
       chat_id: chatId,
       message_id: messageId,
-      parse_mode: 'Markdown',
       reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] }
     });
   } catch (error) {
@@ -329,16 +329,16 @@ async function handleCacheClear(bot, chatId, messageId) {
     }
 
     let clearText = `✅ Cache cleared successfully!\n\n`;
-    clearText += `*Total keys cleared:* ${totalCleared}\n\n`;
+    clearText += `Total keys cleared: ${totalCleared}\n\n`;
 
     if (totalCleared === 0) {
       clearText += `No keys matched the patterns (cache might already be empty)`;
     }
 
+    // FIXED: Plain text
     await bot.editMessageText(clearText, {
       chat_id: chatId,
       message_id: messageId,
-      parse_mode: 'Markdown',
       reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] }
     });
   } catch (error) {
@@ -360,7 +360,7 @@ async function handleApiStatus(bot, chatId, messageId) {
   const statuses = {};
   const checkPromises = [];
 
-  // Perplexity AI Check - THE ONLY AI SERVICE YOU USE
+  // Perplexity AI Check
   if (env.PERPLEXITY_API_KEY) {
     checkPromises.push(
       axios.post('https://api.perplexity.ai/chat/completions', 
@@ -438,23 +438,23 @@ async function handleApiStatus(bot, chatId, messageId) {
     statuses['Redis'] = '❌ Check Failed';
   }
 
-  // Format the status report
-  let statusText = '*📡 API STATUS REPORT*\n\n';
+  // Format the status report - FIXED: Plain text
+  let statusText = '📡 API STATUS REPORT\n\n';
   
-  statusText += '*🤖 AI Services:*\n';
-  statusText += `• Perplexity AI: ${statuses['Perplexity AI']}\n`;
+  statusText += '🤖 AI Services:\n';
+  statusText += `Perplexity AI: ${statuses['Perplexity AI']}\n`;
   
-  statusText += '\n*📊 Data Providers:*\n';
-  statusText += `• The Odds API: ${statuses['The Odds API']}\n`;
+  statusText += '\n📊 Data Providers:\n';
+  statusText += `The Odds API: ${statuses['The Odds API']}\n`;
   
-  statusText += '\n*💾 Infrastructure:*\n';
-  statusText += `• Database: ${statuses['Database']}\n`;
-  statusText += `• Redis: ${statuses['Redis']}\n`;
+  statusText += '\n💾 Infrastructure:\n';
+  statusText += `Database: ${statuses['Database']}\n`;
+  statusText += `Redis: ${statuses['Redis']}\n`;
 
+  // FIXED: Plain text
   await bot.editMessageText(statusText, {
     chat_id: chatId,
     message_id: messageId,
-    parse_mode: 'Markdown',
     reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] }
   });
 }
@@ -466,34 +466,34 @@ async function handleDbStats(bot, chatId, messageId) {
   });
 
   try {
-    let statsText = '*📊 DATABASE STATISTICS*\n\n';
+    let statsText = '📊 DATABASE STATISTICS\n\n';
 
     // Database counts
     try {
       const gameCounts = await databaseService.getSportGameCounts();
       if (gameCounts && gameCounts.length > 0) {
         let totalGames = 0;
-        statsText += '*Games by Sport:*\n';
+        statsText += 'Games by Sport:\n';
         
         gameCounts.forEach(stat => {
           const title = stat.sport_title || stat.sport_key || 'Unknown';
           const count = stat.total_games || 0;
           totalGames += count;
           if (count > 0) {
-            statsText += `• ${title}: ${count} games\n`;
+            statsText += `- ${title}: ${count} games\n`;
           }
         });
         
-        statsText += `\n*Total Games:* ${totalGames}\n\n`;
+        statsText += `\nTotal Games: ${totalGames}\n\n`;
       } else {
-        statsText += '*Games:* No data found\n\n';
+        statsText += 'Games: No data found\n\n';
       }
     } catch (dbError) {
-      statsText += '*Games:* ❌ Error fetching\n\n';
+      statsText += 'Games: ❌ Error fetching\n\n';
     }
 
-    // API Quotas - only show The Odds API since that's what you use
-    statsText += '*📈 API QUOTA STATUS*\n';
+    // API Quotas
+    statsText += '📈 API QUOTA STATUS\n';
     
     try {
       const quota = await rateLimitService.getProviderQuota('theodds');
@@ -504,18 +504,18 @@ async function handleDbStats(bot, chatId, messageId) {
         const limit = quota.limit ?? 'N/A';
         const critical = quota.critical ? ' ⚠️' : '';
         
-        statsText += `• *The Odds API:* ${remaining}/${limit} remaining${critical}\n`;
+        statsText += `The Odds API: ${remaining}/${limit} remaining${critical}\n`;
       } else {
-        statsText += `• *The Odds API:* No data (trigger ingestion)\n`;
+        statsText += `The Odds API: No data (trigger ingestion)\n`;
       }
     } catch (quotaError) {
-      statsText += `• *The Odds API:* ❌ Error\n`;
+      statsText += `The Odds API: ❌ Error\n`;
     }
 
+    // FIXED: Plain text
     await bot.editMessageText(statsText, {
       chat_id: chatId,
       message_id: messageId,
-      parse_mode: 'Markdown',
       reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] }
     });
   } catch (error) {
