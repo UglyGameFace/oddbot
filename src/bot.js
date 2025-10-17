@@ -71,23 +71,53 @@ function validateEnvironment() {
 }
 
 export async function safeEditMessage(chatId, messageId, text, options = {}) {
+  console.log(`🔧 safeEditMessage called: chatId=${chatId}, messageId=${messageId}, textLength=${text?.length}`);
+  
   if (!bot) {
-    console.warn('⚠️ Bot not initialized, cannot edit message');
+    console.error('❌ CRITICAL: Bot instance is undefined in safeEditMessage');
     return;
   }
+  
   try {
     const editOptions = { parse_mode: 'HTML', ...options };
     if (!editOptions.reply_markup) {
       editOptions.reply_markup = { inline_keyboard: [] };
     }
-    return await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...editOptions });
+    
+    console.log(`🔄 Attempting to edit message...`);
+    const result = await bot.editMessageText(text, { 
+      chat_id: chatId, 
+      message_id: messageId, 
+      ...editOptions 
+    });
+    
+    console.log(`✅ Message edited successfully`);
+    return result;
+    
   } catch (error) {
-    if (error.response?.body?.description?.includes('message is not modified')) { return; }
-    if (error.response?.body?.error_code === 400 && error.response.body.description?.includes('inline keyboard expected')) {
-      return await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: options.parse_mode || 'HTML', reply_markup: { inline_keyboard: [] } });
+    console.error(`❌ Message edit error:`, {
+      code: error.response?.body?.error_code,
+      description: error.response?.body?.description,
+      message: error.message
+    });
+    
+    if (error.response?.body?.description?.includes('message is not modified')) { 
+      console.log('ℹ️ Message not modified (no change)');
+      return; 
     }
-    if (error.response?.body?.error_code === 400 && error.response.body.description?.includes('message to edit not found')) { return; }
-    console.error('❌ Message edit failed:', error.message);
+    if (error.response?.body?.error_code === 400 && error.response.body.description?.includes('inline keyboard expected')) {
+      console.log('🔄 Retrying without keyboard...');
+      return await bot.editMessageText(text, { 
+        chat_id: chatId, 
+        message_id: messageId, 
+        parse_mode: options.parse_mode || 'HTML', 
+        reply_markup: { inline_keyboard: [] } 
+      });
+    }
+    if (error.response?.body?.error_code === 400 && error.response.body.description?.includes('message to edit not found')) { 
+      console.log('ℹ️ Message to edit not found');
+      return; 
+    }
     throw error;
   }
 }
