@@ -417,7 +417,7 @@ async function handleApiStatus(bot, chatId, messageId) {
     checkPromises.push(
       axios.post('https://api.perplexity.ai/chat/completions', 
         { 
-          model: 'sonar-small-chat', 
+          model: 'sonar-pro', 
           messages: [{ role: 'user', content: 'Say only the word "TEST" and nothing else.' }],
           max_tokens: 10,
           temperature: 0.1
