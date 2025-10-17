@@ -1,4 +1,4 @@
-// src/services/aiService.js - FINAL WITH FACT-CHECKING AND VALIDATION
+// src/services/aiService.js - FIXED WITH GAME CONTEXT VALIDATION
 import axios from 'axios';
 import env from '../config/env.js';
 import gamesService from './gamesService.js';
@@ -68,6 +68,11 @@ class BettingLineValidationService {
         totals: { min: 5, max: 15 },
         spreads: { min: -3, max: 3 },
         h2h: { min: -500, max: 500 }
+      },
+      'americanfootball_ncaaf': {
+        totals: { min: 30, max: 80 },
+        spreads: { min: -35, max: 35 },
+        h2h: { min: -1000, max: 1000 }
       }
     };
     return ranges[sport] || ranges['americanfootball_nfl'];
@@ -77,7 +82,7 @@ class BettingLineValidationService {
     const ranges = this.getRealisticRanges(sport);
     const marketRange = ranges[market];
     
-    if (!marketRange) return true; // Unknown market, don't validate
+    if (!marketRange) return true;
     
     if (point !== undefined && point !== null) {
       if (point < marketRange.min || point > marketRange.max) {
@@ -120,7 +125,38 @@ function extractJSON(text = '') {
     return null;
 }
 
-// Enhanced validation function
+// ENHANCED: Game context validation function
+function validateGameContext(legs, gameContext) {
+  if (!gameContext) return legs; // No context to validate against
+  
+  const expectedGame = `${gameContext.away_team} @ ${gameContext.home_team}`;
+  const errors = [];
+  const validLegs = [];
+
+  for (const leg of legs) {
+    const legGame = leg.event || '';
+    
+    // Normalize game names for comparison
+    const normalizeGameName = (name) => name.toLowerCase().replace(/[^a-z0-9@ ]/g, '').trim();
+    const normalizedLegGame = normalizeGameName(legGame);
+    const normalizedExpectedGame = normalizeGameName(expectedGame);
+    
+    if (normalizedLegGame !== normalizedExpectedGame) {
+      errors.push(`Game mismatch: "${legGame}" vs "${expectedGame}"`);
+      continue;
+    }
+    
+    validLegs.push(leg);
+  }
+
+  if (errors.length > 0) {
+    console.warn('Game context validation errors:', errors);
+  }
+
+  return validLegs;
+}
+
+// ENHANCED: Main validation function with game context
 function validateParlayResponse(parlayData, gameContext, sportKey) {
   const playerValidator = new PlayerValidationService();
   const lineValidator = new BettingLineValidationService();
@@ -131,18 +167,16 @@ function validateParlayResponse(parlayData, gameContext, sportKey) {
     throw new Error('AI response missing legs array');
   }
 
-  for (const leg of parlayData.legs) {
-    try {
-      // Validate game reference matches context
-      if (gameContext) {
-        const legGame = leg.event || '';
-        const actualGame = `${gameContext.away_team} @ ${gameContext.home_team}`;
-        if (legGame.toLowerCase() !== actualGame.toLowerCase()) {
-          errors.push(`Game mismatch: "${legGame}" vs "${actualGame}"`);
-          continue;
-        }
-      }
+  // FIRST: Validate game context matches
+  const gameContextValidatedLegs = validateGameContext(parlayData.legs, gameContext);
+  
+  if (gameContextValidatedLegs.length === 0 && parlayData.legs.length > 0) {
+    throw new Error(`All parlay legs failed game context validation. Expected game: ${gameContext.away_team} @ ${gameContext.home_team}`);
+  }
 
+  // SECOND: Validate individual legs
+  for (const leg of gameContextValidatedLegs) {
+    try {
       // Validate player names
       if (leg.selection && leg.selection.includes('Rodgers') && sportKey === 'americanfootball_nfl') {
         playerValidator.validatePlayerForGame('aaron rodgers', gameContext);
@@ -155,8 +189,9 @@ function validateParlayResponse(parlayData, gameContext, sportKey) {
 
       // Check for obvious contradictions
       if (leg.market === 'totals') {
-        if (leg.point < 10 || leg.point > 70) {
-          errors.push(`Implausible total points: ${leg.point}`);
+        const realisticRange = lineValidator.getRealisticRanges(sportKey).totals;
+        if (leg.point < realisticRange.min || leg.point > realisticRange.max) {
+          errors.push(`Implausible total points: ${leg.point} for ${sportKey}`);
           continue;
         }
       }
@@ -186,12 +221,27 @@ function validateParlayResponse(parlayData, gameContext, sportKey) {
   };
 }
 
-async function buildEliteScheduleContext(sportKey, hours) {
+async function buildEliteScheduleContext(sportKey, hours, gameContext = null) {
     try {
         const realGames = await gamesService.getVerifiedRealGames(sportKey, hours);
         if (realGames.length === 0) {
             return `\n\n🎯 ELITE ANALYST MODE: No real-time ${sportKey} data available. Using fundamental analysis of typical matchups.`;
         }
+        
+        // ENHANCED: If we have a specific game context, focus on that
+        if (gameContext) {
+            const focusedGame = realGames.find(game => 
+                game.id === gameContext.id || 
+                game.event_id === gameContext.event_id ||
+                `${game.away_team} @ ${game.home_team}` === `${gameContext.away_team} @ ${gameContext.home_team}`
+            );
+            
+            if (focusedGame) {
+                const timeStr = new Date(focusedGame.commence_time).toLocaleString('en-US', { timeZone: TZ, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                return `\n\n🎯 FOCUS GAME ANALYSIS:\n${focusedGame.away_team} @ ${focusedGame.home_team} - ${timeStr}\n\nCRITICAL: You MUST base your analysis exclusively on this specific game. Do not analyze other games.`;
+            }
+        }
+        
         const gameList = realGames.slice(0, 20).map((game, index) => {
             const timeStr = new Date(game.commence_time).toLocaleString('en-US', { timeZone: TZ, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
             return `${index + 1}. ${game.away_team} @ ${game.home_team} - ${timeStr}`;
@@ -203,13 +253,38 @@ async function buildEliteScheduleContext(sportKey, hours) {
     }
 }
 
-async function eliteGameValidation(sportKey, proposedLegs, hours) {
+async function eliteGameValidation(sportKey, proposedLegs, hours, gameContext = null) {
     try {
         const realGames = await gamesService.getVerifiedRealGames(sportKey, hours);
         if (realGames.length === 0) {
             console.warn(`⚠️ Elite validation skipped for ${sportKey}: No real games found.`);
             return proposedLegs || [];
         }
+        
+        // ENHANCED: If we have a game context, only validate against that specific game
+        if (gameContext) {
+            const focusedGame = realGames.find(game => 
+                game.id === gameContext.id || 
+                game.event_id === gameContext.event_id ||
+                `${game.away_team} @ ${game.home_team}` === `${gameContext.away_team} @ ${gameContext.home_team}`
+            );
+            
+            if (focusedGame) {
+                const validated = (proposedLegs || []).map(leg => {
+                    const legEvent = (leg.event || '').toLowerCase().trim();
+                    const expectedEvent = `${focusedGame.away_team} @ ${focusedGame.home_team}`.toLowerCase().trim();
+                    
+                    if (legEvent === expectedEvent) {
+                        return { ...leg, commence_time: focusedGame.commence_time };
+                    }
+                    console.warn(`[Validation] Discarding invalid game: ${leg.event} - expected ${expectedEvent}`);
+                    return null;
+                }).filter(Boolean);
+                return validated;
+            }
+        }
+        
+        // Original validation for when no specific game context
         const realGameMap = new Map(realGames.map(game => [`${(game.away_team || '').toLowerCase().trim()} @ ${(game.home_team || '').toLowerCase().trim()}`, game]));
 
         const validated = (proposedLegs || []).map(leg => {
@@ -296,7 +371,8 @@ class AIService {
   }
 
   async _generateWebParlay(sportKey, numLegs, betType, options) {
-      const scheduleContext = await buildEliteScheduleContext(sportKey, options.horizonHours || 72);
+      // ENHANCED: Pass gameContext to schedule context builder
+      const scheduleContext = await buildEliteScheduleContext(sportKey, options.horizonHours || 72, options.gameContext);
       const prompt = ElitePromptService.getWebResearchPrompt(sportKey, numLegs, betType, { 
           scheduleInfo: scheduleContext,
           gameContext: options.gameContext 
@@ -307,7 +383,7 @@ class AIService {
         throw new Error('AI response lacked valid parlay structure');
       }
       
-      // ENHANCED VALIDATION - FACT CHECKING
+      // ENHANCED VALIDATION - FACT CHECKING WITH GAME CONTEXT
       const validatedParlay = validateParlayResponse(parlayData, options.gameContext, sportKey);
       
       if (validatedParlay.validation.errors.length > validatedParlay.legs.length) {
@@ -315,7 +391,9 @@ class AIService {
       }
 
       validatedParlay.legs = this._ensureLegsHaveOdds(validatedParlay.legs);
-      const gameValidatedLegs = await eliteGameValidation(sportKey, validatedParlay.legs, options.horizonHours || 72);
+      
+      // ENHANCED: Pass gameContext to elite validation
+      const gameValidatedLegs = await eliteGameValidation(sportKey, validatedParlay.legs, options.horizonHours || 72, options.gameContext);
       
       if (gameValidatedLegs.length < numLegs) {
         console.warn(`[Web Mode] Validation failed to find all requested legs. Found ${gameValidatedLegs.length}/${numLegs}.`);
@@ -399,6 +477,7 @@ class AIService {
   async _generateContextParlay(sportKey, numLegs, mode, betType, options) {
     console.log(`🤖 Generating parlay using local data from '${mode}' mode.`);
     try {
+        // ENHANCED: If we have a game context, only use that specific game
         const allGames = options.gameContext ? [options.gameContext] : await gamesService.getGamesForSport(sportKey, {
             hoursAhead: options.horizonHours || 72,
             includeOdds: true,
@@ -467,7 +546,8 @@ class AIService {
 
   async _generateFallbackParlay(sportKey, numLegs, betType, options) {
       console.log(`🎯 Generating QUANTUM fallback for ${sportKey}`);
-      const scheduleContext = await buildEliteScheduleContext(sportKey, 168);
+      // ENHANCED: Pass gameContext to schedule context builder
+      const scheduleContext = await buildEliteScheduleContext(sportKey, 168, options.gameContext);
       const prompt = ElitePromptService.getFallbackPrompt(sportKey, numLegs, betType, { 
           scheduleInfo: scheduleContext,
           gameContext: options.gameContext
@@ -482,7 +562,8 @@ class AIService {
       const validatedParlay = validateParlayResponse(parlayData, options.gameContext, sportKey);
       validatedParlay.legs = this._ensureLegsHaveOdds(validatedParlay.legs);
       
-      const gameValidatedLegs = await eliteGameValidation(sportKey, validatedParlay.legs, 168);
+      // ENHANCED: Pass gameContext to elite validation
+      const gameValidatedLegs = await eliteGameValidation(sportKey, validatedParlay.legs, 168, options.gameContext);
       validatedParlay.legs = gameValidatedLegs.length > 0 ? gameValidatedLegs.slice(0, numLegs) : validatedParlay.legs.slice(0, numLegs);
 
       validatedParlay.parlay_price_decimal = parlayDecimal(validatedParlay.legs);
