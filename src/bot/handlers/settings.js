@@ -1,34 +1,10 @@
-// src/bot/handlers/settings.js - UPGRADED WITH BOOKMAKER SELECTION
+// src/bot/handlers/settings.js - CLEANED & UPDATED
 import { getAIConfig, setAIConfig, getBuilderConfig, setBuilderConfig } from '../state.js';
 import { safeEditMessage } from '../../bot.js';
 
 export function registerSettings(bot) {
   bot.onText(/^\/settings$/, async (msg) => {
     await sendMainMenu(bot, msg.chat.id);
-  });
-
-  bot.onText(/^\/debugsettings$/, async (msg) => {
-    const chatId = msg.chat.id;
-    const aiConfig = await getAIConfig(chatId);
-    const builderConfig = await getBuilderConfig(chatId);
-    
-    const text = `
-🔧 <b>Current Settings Debug</b>
-
-<b>AI Settings:</b>
-• Mode: ${aiConfig.mode}
-• Bet Type: ${aiConfig.betType}  
-• Horizon: ${aiConfig.horizonHours}h
-• Pro Quant: ${aiConfig.proQuantMode ? 'ON' : 'OFF'}
-• Bookmakers: ${(aiConfig.bookmakers || []).join(', ')}
-
-<b>Builder Settings:</b>
-• Avoid Same Game: ${builderConfig.avoidSameGame ? 'YES' : 'NO'}
-
-<i>Use /settings to change these</i>
-    `;
-    
-    await bot.sendMessage(chatId, text, { parse_mode: 'HTML' });
   });
 }
 
