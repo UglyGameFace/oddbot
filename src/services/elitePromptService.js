@@ -1,4 +1,4 @@
-// src/services/elitePromptService.js - QUANTUM PROMPT ENGINE (Restored & Enhanced)
+// src/services/elitePromptService.js - QUANTUM PROMPT ENGINE (Enhanced with Fact-Checking)
 export class ElitePromptService {
   static #SPORT_CONFIG = new Map([
     ['basketball_nba', {
@@ -140,6 +140,40 @@ export class ElitePromptService {
     }
   };
 
+  // NEW: Player validation database to prevent hallucinations
+  static #PLAYER_TEAM_ALIGNMENTS = new Map([
+    ['aaron rodgers', 'New York Jets'],
+    ['ja\'marr chase', 'Cincinnati Bengals'],
+    ['d.k. metcalf', 'Seattle Seahawks'],
+    ['darnell washington', 'Pittsburgh Steelers'],
+    ['patrick mahomes', 'Kansas City Chiefs'],
+    ['travis kelce', 'Kansas City Chiefs'],
+    ['josh allen', 'Buffalo Bills'],
+    ['stephen curry', 'Golden State Warriors'],
+    ['lebron james', 'Los Angeles Lakers'],
+    ['kevin durant', 'Phoenix Suns']
+  ]);
+
+  // NEW: Realistic betting line ranges by sport
+  static #REALISTIC_RANGES = {
+    'americanfootball_nfl': {
+      totals: { min: 30, max: 60 },
+      spreads: { min: -20, max: 20 }
+    },
+    'basketball_nba': {
+      totals: { min: 180, max: 250 },
+      spreads: { min: -25, max: 25 }
+    },
+    'baseball_mlb': {
+      totals: { min: 5, max: 15 },
+      spreads: { min: -3, max: 3 }
+    },
+    'icehockey_nhl': {
+      totals: { min: 3, max: 9 },
+      spreads: { min: -3, max: 3 }
+    }
+  };
+
   static getEliteParlayPrompt(sportKey, numLegs, betType, context = {}) {
     const config = this.#getSportConfig(sportKey);
     const analyst = this.#selectAnalystTier(context);
@@ -150,6 +184,16 @@ You are the world's premier ${config.title} analyst with ${analyst.experience} a
 
 ## QUANTUM MANDATE
 Generate a ${numLegs}-leg ${config.title} ${betType} parlay with STRICT ${analyst.focus.toUpperCase()}
+
+## CRITICAL FACT-CHECKING RULES - ZERO TOLERANCE FOR HALLUCINATIONS
+1. **NEVER** mention players who don't play for the teams in the specified game
+2. **NEVER** suggest implausible betting lines (e.g., NFL totals under 30 or over 60)
+3. **NEVER** contradict yourself within the same analysis
+4. **ALWAYS** verify player-team alignment before mentioning any player
+5. **ALWAYS** use realistic odds ranges (-180 to +180)
+
+## PLAYER VALIDATION CHECKLIST - VERIFY BEFORE USE:
+${Array.from(this.#PLAYER_TEAM_ALIGNMENTS.entries()).slice(0, 8).map(([player, team]) => `• ${player.toUpperCase()} = ${team} ONLY`).join('\n')}
 
 ## ANALYTICAL FRAMEWORK - ${analyst.minHitRate * 100}% MINIMUM HIT RATE REQUIRED
 ${this.#buildAnalyticalFramework(analyst, context)}
@@ -219,7 +263,8 @@ ${this.#buildUserContext(context.userConfig)}
       'LINE ARBITRAGE: Identify mispriced markets 5-10 cents off true probability',
       'CORRELATION MATRIX: Ensure leg independence and avoid negative correlation',
       'BANKROLL OPTIMIZATION: Apply Kelly Criterion or fractional bankroll allocation',
-      'MARKET TIMING: Consider line movement patterns and sharp money indicators'
+      'MARKET TIMING: Consider line movement patterns and sharp money indicators',
+      'FACT CHECKING: Verify all player-team alignments and realistic betting lines'
     ];
 
     if (analyst.title === 'QUANTITATIVE ANALYST') {
@@ -248,7 +293,8 @@ ${this.#buildUserContext(context.userConfig)}
 • Minimum Leg Probability: 58% implied (increased for elite standards)
 • Maximum Same Team Exposure: 1 leg per parlay
 • Odds Range: -180 to +180 (avoid heavy favorites and extreme longshots)
-• Edge Requirement: Minimum 5% expected value per selection`;
+• Edge Requirement: Minimum 5% expected value per selection
+• Fact-Checking: All player mentions and betting lines must be realistic`;
   }
 
   static #buildUserContext(userConfig) {
@@ -343,14 +389,29 @@ ${this.#buildUserContext(context.userConfig)}
 3.  **ZERO HALLUCINATION POLICY**: Do not invent, create, or assume any games, players, or stats. If the provided schedule is empty or you cannot find sufficient data for the requested game, you MUST state that a valid parlay cannot be formed and return an empty "legs" array.
 4.  **DATA INTEGRITY**: The \`event\` and \`commence_time\` fields in your response MUST EXACTLY MATCH the data from the verified schedule.
 5.  **REAL ODDS**: The \`american\` odds field MUST be a real, verifiable number that you have found through your simulated web search.
+6.  **PLAYER VALIDATION**: Before mentioning any player, verify they actually play for the teams in the specified game using the player-team alignment database.
+
+## CRITICAL FACT-CHECKING - PREVENT THESE COMMON ERRORS:
+• Aaron Rodgers ONLY plays for New York Jets - never in Steelers vs Bengals games
+• D.K. Metcalf ONLY plays for Seattle Seahawks
+• Ja'Marr Chase ONLY plays for Cincinnati Bengals (not "Jat-Mart Chase")
+• Darnell Washington ONLY plays for Pittsburgh Steelers (not "Damell Washington")
+• NFL totals must be between 30-60 points (never "Under 4.5 Total Points")
+
+## REALISTIC BETTING LINE RANGES - ENFORCE THESE LIMITS:
+${Object.entries(this.#REALISTIC_RANGES).map(([sport, ranges]) => 
+  `• ${sport}: Totals ${ranges.totals.min}-${ranges.totals.max}, Spreads ${ranges.spreads.min}-${ranges.spreads.max}`
+).join('\n')}
 
 ## FAILURE CONDITIONS (If any of these occur, you have failed the task)
 -   Generating a leg for a game NOT listed in the provided context.
 -   Inventing a game or stats when the schedule is empty or data is unavailable.
--   Failing to return exactly ${numLegs} legs if enough markets exist for the selected game.
+-   Mentioning players who don't play for the teams in the specified game.
+-   Suggesting implausible betting lines outside realistic ranges.
 -   Returning a JSON structure that does not match the schema.
+-   Contradicting yourself within the same analysis (e.g., "Under 43.5" then "Under 4.5").
 
-**FINAL COMMAND**: Your primary function is to build the most statistically sound, +EV parlay possible using real, aggregated data for the SPECIFIED GAME(S). Failure to comply will result in task termination.`;
+**FINAL COMMAND**: Your primary function is to build the most statistically sound, +EV parlay possible using real, aggregated data for the SPECIFIED GAME(S). Failure to comply will result in task termination and rejection of your response.`;
   }
 
   static getFallbackPrompt(sportKey, numLegs, betType, fallbackContext = {}) {
@@ -367,6 +428,13 @@ Operating without real-time data. Using fundamental analysis, historical pattern
 • **RISK MANAGEMENT**: Conservative bankroll allocation (0.5-1.5%) due to information limitations.
 • **VALUE IDENTIFICATION**: Focus on clear mismatches and established performance trends.
 
+## ANTI-HALLUCINATION PROTOCOL - FALLBACK MODE
+• DO NOT invent players, stats, or expert sources
+• ONLY use well-known players with established team affiliations
+• ENFORCE realistic betting line ranges for ${config.title}
+• VERIFY player-team alignment before any player mention
+• AVOID contradictory analysis within the same response
+
 ## ${config.title.toUpperCase()} FUNDAMENTALS
 ${config.edges.map(edge => `• ${edge}`).join('\n')}
 
@@ -377,6 +445,14 @@ ${config.edges.map(edge => `• ${edge}`).join('\n')}
 - Maximum 2 legs from same conference/division to maintain diversification.
 - Prioritize starters over backups, established players over rookies.
 - Consider typical home field/court advantages for the sport.
+
+## REALISTIC LINE ENFORCEMENT - ${config.title}
+${this.#REALISTIC_RANGES[sportKey] ? 
+  `• Totals: ${this.#REALISTIC_RANGES[sportKey].totals.min}-${this.#REALISTIC_RANGES[sportKey].totals.max} points` : 
+  '• Use standard realistic ranges for this sport'}
+${this.#REALISTIC_RANGES[sportKey] ? 
+  `• Spreads: ${this.#REALISTIC_RANGES[sportKey].spreads.min}-${this.#REALISTIC_RANGES[sportKey].spreads.max} points` : 
+  '• Use standard realistic ranges for this sport'}
 
 ## OUTPUT REQUIREMENTS - MAINTAIN QUANTUM STANDARDS
 CRITICAL: The \`american\` odds and \`commence_time\` fields are REQUIRED for every leg.
