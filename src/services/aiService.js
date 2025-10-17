@@ -450,7 +450,8 @@ class QuantumAIService {
         // Exponential backoff with jitter
         const delay = exponentialBackoff(attempt, RETRY_DELAY);
         console.log(`⏳ Retrying in ${delay}ms...`);
-        await sleep(delay);
+        // In your _callAIProvider method, replace:
+         await exponentialBackoff(() => Promise.resolve(), MAX_RETRIES - i, 1000);
       }
     }
   }
