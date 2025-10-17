@@ -5,7 +5,8 @@ import env from '../config/env.js';
 import gamesService from './gamesService.js';
 import quantitativeService from './quantitativeService.js';
 import { ElitePromptService } from './elitePromptService.js';
-import { sleep, exponentialBackoff } from '../utils/asyncUtils.js';
+import { sleep } from '../utils/asyncUtils.js'; // REMOVED exponentialBackoff import
+import { getAIConfig } from '../bot/state.js'; // ADDED SETTINGS IMPORT
 
 const TZ = env.TIMEZONE || 'America/New_York';
 const WEB_TIMEOUT_MS = 75000; // Increased for complex analysis
@@ -447,11 +448,10 @@ class QuantumAIService {
           throw new Error(`AI provider failed after ${MAX_RETRIES} attempts: ${error.message}`);
         }
 
-        // Exponential backoff with jitter
-        const delay = exponentialBackoff(attempt, RETRY_DELAY);
+        // FIXED: Replace exponentialBackoff with simple sleep
+        const delay = RETRY_DELAY * Math.pow(2, attempt - 1);
         console.log(`⏳ Retrying in ${delay}ms...`);
-        // In your _callAIProvider method, replace:
-         await exponentialBackoff(() => Promise.resolve(), MAX_RETRIES - i, 1000);
+        await sleep(delay);
       }
     }
   }
@@ -501,6 +501,16 @@ class QuantumAIService {
   }
 
   async generateParlay(sportKey, numLegs, mode, aiModel, betType, options = {}) {
+    // FIXED: GET USER SETTINGS AND APPLY THEM
+    const userAIConfig = await getAIConfig(options.chatId || 'default');
+    
+    // OVERRIDE WITH USER SETTINGS IF NOT EXPLICITLY PROVIDED
+    const effectiveMode = mode || userAIConfig.mode || 'web';
+    const effectiveBetType = betType || userAIConfig.betType || 'mixed';
+    const effectiveHorizonHours = options.horizonHours || userAIConfig.horizonHours || 72;
+    
+    console.log(`🎯 Using settings - Mode: ${effectiveMode}, BetType: ${effectiveBetType}, Horizon: ${effectiveHorizonHours}h`);
+    
     const requestId = `quantum_${sportKey}_${Date.now()}`;
     const startTime = Date.now();
     
@@ -508,18 +518,24 @@ class QuantumAIService {
       requestId,
       sport: sportKey,
       legs: numLegs,
-      mode,
-      betType,
+      mode: effectiveMode,
+      betType: effectiveBetType,
       gameContext: options.gameContext ? `${options.gameContext.away_team} @ ${options.gameContext.home_team}` : 'None'
     });
 
     try {
       // Route to appropriate generation strategy
       let parlayData;
-      if (mode === 'web' || mode === 'live') {
-        parlayData = await this._generateWebParlay(sportKey, numLegs, betType, options);
+      if (effectiveMode === 'web' || effectiveMode === 'live') {
+        parlayData = await this._generateWebParlay(sportKey, numLegs, effectiveBetType, {
+          ...options,
+          horizonHours: effectiveHorizonHours
+        });
       } else {
-        parlayData = await this._generateContextParlay(sportKey, numLegs, mode, betType, options);
+        parlayData = await this._generateContextParlay(sportKey, numLegs, effectiveMode, effectiveBetType, {
+          ...options,
+          horizonHours: effectiveHorizonHours
+        });
       }
 
       const generationTime = Date.now() - startTime;
@@ -543,7 +559,10 @@ class QuantumAIService {
       });
 
       // Fallback strategy
-      return await this._generateIntelligentFallback(sportKey, numLegs, betType, options, error);
+      return await this._generateIntelligentFallback(sportKey, numLegs, effectiveBetType, {
+        ...options,
+        horizonHours: effectiveHorizonHours
+      }, error);
     }
   }
 
@@ -713,7 +732,8 @@ class QuantumAIService {
     console.log('🔄 ACTIVATING INTELLIGENT FALLBACK STRATEGY');
     
     try {
-      const scheduleContext = await this._buildScheduleContext(sportKey, 168, options.gameContext);
+      const horizonHours = options.horizonHours || 168; // Use the setting or default to 168
+      const scheduleContext = await this._buildScheduleContext(sportKey, horizonHours, options.gameContext);
       const prompt = ElitePromptService.getFallbackPrompt(sportKey, numLegs, betType, {
         scheduleInfo: scheduleContext,
         gameContext: options.gameContext,
