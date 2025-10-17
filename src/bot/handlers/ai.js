@@ -1,4 +1,4 @@
-// src/bot/handlers/ai.js - FINAL WITH VALIDATION ERROR HANDLING
+// src/bot/handlers/ai.js - FINAL WITH VALIDATION ERROR HANDLING AND SETTINGS INTEGRATION
 import aiService from '../../services/aiService.js';
 import gamesService from '../../services/gamesService.js';
 import { getAIConfig, setUserState, getUserState } from '../state.js';
@@ -156,8 +156,12 @@ async function sendSportSelection(bot, chatId, messageId = null, page = 0) {
 
 async function sendGameSelection(bot, chatId, messageId, page = 0) {
     const state = await getUserState(chatId);
-    const config = await getAIConfig(chatId);
-    const games = await gamesService.getGamesForSport(state.sportKey, { hoursAhead: config.horizonHours || 72 });
+    const config = await getAIConfig(chatId); // GET USER SETTINGS
+    const games = await gamesService.getGamesForSport(state.sportKey, { 
+        hoursAhead: config.horizonHours || 72, // USE USER SETTINGS
+        includeOdds: true,
+        useCache: true
+    });
 
     const realGames = games.filter(g => g.source !== 'fallback');
 
@@ -273,9 +277,12 @@ async function executeAiRequest(bot, chatId, messageId = null) {
     await safeEditMessage(chatId, sentMessage.message_id, text, { parse_mode: 'HTML' });
 
     try {
+        // GET USER SETTINGS FOR HORIZON HOURS
+        const userConfig = await getAIConfig(chatId);
+        
         const parlay = await aiService.generateParlay(sportKey, numLegs, mode, aiModel, betType, { 
             quantitativeMode, 
-            horizonHours: (await getAIConfig(chatId)).horizonHours || 72,
+            horizonHours: userConfig.horizonHours || 72, // USE USER SETTINGS
             chatId: chatId,
             gameContext: game 
         });
