@@ -187,54 +187,6 @@ export function registerChat(bot) {
   });
 }
 
-// FIX: This function MUST be exported to be used by the central callback manager.
-export function registerChatCallbacks(bot) {
-    bot.on('callback_query', async (cbq) => {
-        const { data, message } = cbq || {};
-        if (!data || !message || !data.startsWith('chat_')) return;
-        
-        const chatId = message.chat.id;
-        await bot.answerCallbackQuery(cbq.id);
-
-        const state = await getUserState(chatId) || {};
-        if (!state.chat) return;
-
-        if (data === 'chat_toggle_compact') {
-            state.chat.compact = !state.chat.compact;
-            await setUserState(chatId, state, 1800);
-            return bot.sendMessage(chatId, `Compact mode: ${state.chat.compact ? 'ON' : 'OFF'}`);
-        }
-        if (data === 'chat_end') {
-            state.chat = null;
-            await setUserState(chatId, state, 60);
-            return bot.sendMessage(chatId, 'Chat ended.');
-        }
-        if (data.startsWith('chat_more_')) {
-            const idx = Number(data.split('_').pop());
-            const pending = state.chat?.pendingChunks?.[idx];
-            if (!pending) return;
-            const chunks = chunk(pending);
-            for (const c of chunks) {
-                await bot.sendMessage(chatId, c, { parse_mode: 'Markdown' });
-            }
-            return;
-        }
-        
-        // New callback for fact-checking disclaimer
-        if (data === 'chat_fact_check_info') {
-            return bot.sendMessage(chatId, 
-                `🔍 *Fact-Checking Information*\n\n` +
-                `This chat includes automatic fact-checking for:\n\n` +
-                `• Player-team alignment verification\n` +
-                `• Realistic betting line validation\n` +
-                `• Contradiction detection\n` +
-                `• Common error prevention\n\n` +
-                `If you notice any inaccuracies, please verify with official sources.`,
-                { parse_mode: 'Markdown' }
-            );
-        }
-    });
-}
 
 async function handleUserChat(bot, chatId, userText) {
   const rl = await rateLimitService.checkRateLimit(chatId, 'user', 'chat_msg');
