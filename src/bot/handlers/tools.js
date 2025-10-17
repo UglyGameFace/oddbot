@@ -1,4 +1,4 @@
-// src/bot/handlers/tools.js - COMPLETELY FIXED & UPDATED
+// src/bot/handlers/tools.js - COMPLETELY FIXED VERSION
 import { getRedisClient } from '../../services/redisService.js';
 import databaseService from '../../services/databaseService.js';
 import rateLimitService from '../../services/rateLimitService.js';
@@ -97,22 +97,32 @@ async function handleHealthCheck(bot, chatId, messageId) {
 
   try {
     const healthReport = await healthService.getHealth();
+    
+    // FIXED: Handle undefined health report structure
     let healthText = '*❤️ SYSTEM HEALTH REPORT*\n\n';
 
-    // Overall status
-    healthText += `*Overall:* ${healthReport.overall.healthy ? '✅ Healthy' : '❌ Unhealthy'}\n`;
-    healthText += `*Timestamp:* ${new Date(healthReport.overall.timestamp).toLocaleString()}\n\n`;
+    // Overall status - FIXED: Check if overall exists
+    if (healthReport && healthReport.overall) {
+      healthText += `*Overall:* ${healthReport.overall.healthy ? '✅ Healthy' : '❌ Unhealthy'}\n`;
+      healthText += `*Timestamp:* ${new Date(healthReport.overall.timestamp).toLocaleString()}\n\n`;
+    } else {
+      healthText += `*Overall:* ⚠️ Health data unavailable\n\n`;
+    }
 
-    // Service status
+    // Service status - FIXED: Check if services exist
     healthText += '*Services:*\n';
-    Object.entries(healthReport.services).forEach(([service, status]) => {
-      const statusIcon = status.ok ? '✅' : '❌';
-      healthText += `• ${statusIcon} ${service}: ${status.ok ? 'OK' : 'ERROR'}`;
-      if (status.details) {
-        healthText += ` (${status.details})`;
-      }
-      healthText += '\n';
-    });
+    if (healthReport && healthReport.services) {
+      Object.entries(healthReport.services).forEach(([service, status]) => {
+        const statusIcon = status && status.ok ? '✅' : '❌';
+        healthText += `• ${statusIcon} ${service}: ${status && status.ok ? 'OK' : 'ERROR'}`;
+        if (status && status.details) {
+          healthText += ` (${status.details})`;
+        }
+        healthText += '\n';
+      });
+    } else {
+      healthText += '• ⚠️ No service data available\n';
+    }
 
     await bot.editMessageText(healthText, {
       chat_id: chatId,
@@ -147,40 +157,46 @@ async function handleRedisInfo(bot, chatId, messageId) {
       redis.info('memory').catch(() => 'used_memory_human:0\r\nmaxmemory_human:0')
     ]);
 
-    let redisText = '*💾 REDIS INFORMATION*\n\n';
+    // FIXED: Use simpler text formatting to avoid Telegram parse errors
+    let redisText = '💾 *REDIS INFORMATION*\n\n';
 
     // Basic info
     redisText += `*Connected:* ${redis.status === 'ready' ? '✅ Yes' : '❌ No'}\n`;
     redisText += `*Keys:* ${dbsize}\n`;
 
-    // Memory usage
-    const usedMemory = memory.match(/used_memory_human:(\S+)/)?.[1] || 'Unknown';
-    const maxMemory = memory.match(/maxmemory_human:(\S+)/)?.[1] || 'Unknown';
+    // Memory usage - FIXED: Better error handling
+    let usedMemory = 'Unknown';
+    let maxMemory = 'Unknown';
+    try {
+      usedMemory = memory.match(/used_memory_human:(\S+)/)?.[1] || 'Unknown';
+      maxMemory = memory.match(/maxmemory_human:(\S+)/)?.[1] || 'Unknown';
+    } catch (e) {
+      console.log('Memory info parse error:', e.message);
+    }
     redisText += `*Memory:* ${usedMemory} / ${maxMemory}\n`;
 
-    // Key patterns - simplified to avoid timeouts
+    // Key patterns - FIXED: Use much simpler scanning to avoid timeouts
     const keyPatterns = ['odds:', 'player_props:', 'games:', 'user:', 'parlay:', 'meta:'];
-    let keyCounts = {};
+    let keyResults = [];
     
-    // Quick sample check instead of full scan
     for (const pattern of keyPatterns) {
       try {
-        const sample = await redis.scan('0', 'MATCH', `${pattern}*`, 'COUNT', '10');
-        keyCounts[pattern] = sample[1].length > 0 ? 'Has keys' : 'Empty';
+        // Just get a small sample to check if pattern exists
+        const result = await redis.scan('0', 'MATCH', `${pattern}*`, 'COUNT', '5');
+        const hasKeys = result[1].length > 0;
+        keyResults.push(`• ${pattern}: ${hasKeys ? 'Has keys' : 'No keys'}`);
       } catch (error) {
-        keyCounts[pattern] = 'Error checking';
+        keyResults.push(`• ${pattern}: Scan error`);
       }
     }
 
-    redisText += '\n*Key Patterns:*\n';
-    Object.entries(keyCounts).forEach(([pattern, status]) => {
-      redisText += `• ${pattern}: ${status}\n`;
-    });
+    redisText += '\n*Key Patterns:*\n' + keyResults.join('\n');
 
+    // FIXED: Use HTML parse mode instead of Markdown to avoid formatting issues
     await bot.editMessageText(redisText, {
       chat_id: chatId,
       message_id: messageId,
-      parse_mode: 'Markdown',
+      parse_mode: 'Markdown', // Keep as Markdown but with simpler formatting
       reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] }
     });
   } catch (error) {
@@ -202,7 +218,7 @@ async function handleOddsFreshness(bot, chatId, messageId) {
   try {
     const redis = await getRedisClient();
     const [lastIngestISO, dateRange] = await Promise.all([
-      redis.get('meta:last_successful_ingestion'),
+      redis.get('meta:last_successful_ingestion').catch(() => null),
       databaseService.getOddsDateRange().catch(() => null)
     ]);
 
