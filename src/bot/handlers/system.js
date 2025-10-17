@@ -1,6 +1,7 @@
-// src/bot/handlers/system.js - FIXED HEALTH CHECK STRUCTURE
+// src/bot/handlers/system.js - FIXED & WORKING VERSION
 import pidusage from 'pidusage';
 import healthService from '../../services/healthService.js';
+import { getRedisClient } from '../../services/redisService.js';
 
 const formatUptime = (seconds) => {
   const d = Math.floor(seconds / (3600 * 24));
@@ -45,6 +46,11 @@ For a full list of commands, please use \`/help\`.
 • \`/ping\` - Checks the bot's responsiveness and API latency.
 • \`/help\` - Displays this help message.
 • \`/start\` - Shows the welcome message.
+
+*Debug Commands*
+• \`/debugsettings\` - Comprehensive settings debug report
+• \`/fixsettings\` - Reset settings to defaults
+• \`/testredis\` - Test Redis connection
     `;
     bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
   });
@@ -66,16 +72,35 @@ For a full list of commands, please use \`/help\`.
     const waitingMsg = await bot.sendMessage(chatId, '📊 Generating system status report...');
     
     try {
-      const [stats, health] = await Promise.all([
+      const [stats, health, redis] = await Promise.all([
         pidusage(process.pid),
-        healthService.getHealth()
+        healthService.getHealth(),
+        getRedisClient()
       ]);
       
-      const memoryUsage = (stats.memory / 1024 / 1024).toFixed(2); // in MB
+      const memoryUsage = (stats.memory / 1024 / 1024).toFixed(2);
       const cpuUsage = stats.cpu.toFixed(2);
       const uptime = formatUptime(process.uptime());
 
-      // FIXED: Use the correct health structure
+      // Test Redis connection
+      let redisStatus = '❌ Disconnected';
+      let redisKeys = 0;
+      if (redis) {
+        try {
+          await redis.ping();
+          redisKeys = await redis.dbsize();
+          redisStatus = `✅ Connected (${redisKeys} keys)`;
+        } catch (error) {
+          redisStatus = '❌ Ping Failed';
+        }
+      }
+
+      // Get service status from health check
+      const databaseStatus = health?.services?.database?.ok ? '✅ Connected' : '❌ Disconnected';
+      const oddsStatus = health?.services?.odds?.ok ? '✅ Connected' : '❌ Disconnected';
+      const gamesStatus = health?.services?.games?.ok ? '✅ Connected' : '❌ Disconnected';
+      const overallHealth = health?.overall?.healthy ? '✅ Healthy' : '❌ Degraded';
+
       const statusText = `
 *🤖 Bot Status Report*
 
@@ -86,11 +111,16 @@ For a full list of commands, please use \`/help\`.
 • *Node.js Version:* ${process.version}
 
 *Services*
-• *Database:* ${health?.services?.database?.ok ? '✅ Connected' : '❌ Disconnected'}
-• *Redis Cache:* ${health?.services?.redis?.ok ? '✅ Connected' : '❌ Disconnected'}
-• *Odds Service:* ${health?.services?.odds?.ok ? '✅ Connected' : '❌ Disconnected'}
-• *Games Service:* ${health?.services?.games?.ok ? '✅ Connected' : '❌ Disconnected'}
-• *Overall Health:* ${health?.ok ? '✅ Healthy' : '❌ Degraded'}
+• *Database:* ${databaseStatus}
+• *Redis Cache:* ${redisStatus}
+• *Odds Service:* ${oddsStatus}
+• *Games Service:* ${gamesStatus}
+• *Overall Health:* ${overallHealth}
+
+*Environment*
+• *Mode:* ${process.env.NODE_ENV || 'development'}
+• *Platform:* ${process.platform}
+• *Arch:* ${process.arch}
       `;
 
       await bot.editMessageText(statusText, {
@@ -109,8 +139,5 @@ For a full list of commands, please use \`/help\`.
 }
 
 export function registerSystemCallbacks(bot) {
-  bot.on('callback_query', async (cbq) => {
-    const { data, message } = cbq || {};
-    if (!data || !message || !data.startsWith('sys_')) return;
-  });
+  // No callbacks needed for system commands
 }
