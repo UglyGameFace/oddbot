@@ -16,7 +16,22 @@ export const withTimeout = (promise, ms, label) =>
     )
   ]);
 
-export const sleep = (ms) => new Promise(r => setTimeout(r, ms)); 
+export const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Add the missing exponentialBackoff function
+export const exponentialBackoff = async (fn, maxRetries = 5, baseDelay = 1000) => {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (attempt === maxRetries - 1) throw error;
+      
+      const delay = baseDelay * Math.pow(2, attempt);
+      console.log(`Attempt ${attempt + 1} failed, retrying in ${delay}ms...`);
+      await sleep(delay);
+    }
+  }
+};
 
 // NOTE: We are intentionally NOT using an export list like "export { ... }" 
 // to prevent the duplicate export error shown in your log.
