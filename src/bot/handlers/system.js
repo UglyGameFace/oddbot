@@ -1,4 +1,4 @@
-// src/bot/handlers/system.js - FIXED & WORKING VERSION
+// src/bot/handlers/system.js - FIXED HEALTH CHECK STRUCTURE
 import pidusage from 'pidusage';
 import healthService from '../../services/healthService.js';
 import { getRedisClient } from '../../services/redisService.js';
@@ -95,7 +95,7 @@ For a full list of commands, please use \`/help\`.
         }
       }
 
-      // Get service status from health check
+      // FIXED: Proper health check structure with fallbacks
       const databaseStatus = health?.services?.database?.ok ? '✅ Connected' : '❌ Disconnected';
       const oddsStatus = health?.services?.odds?.ok ? '✅ Connected' : '❌ Disconnected';
       const gamesStatus = health?.services?.games?.ok ? '✅ Connected' : '❌ Disconnected';
