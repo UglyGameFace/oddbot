@@ -1,4 +1,4 @@
-// src/bot/state.js - SUPER ROBUST FIXED VERSION
+// src/bot/state.js - FIXED VERSION
 import env from '../config/env.js';
 import { getRedisClient } from '../services/redisService.js';
 
@@ -15,7 +15,7 @@ async function getConfig(telegramId, type) {
   // Try Redis first
   try {
     const redis = await getRedisClient();
-    if (redis && redis.status === 'ready') {
+    if (redis) {
       const configKey = `user:config:${telegramId}:${type}`;
       const cachedConfig = await redis.get(configKey);
       
@@ -34,7 +34,7 @@ async function getConfig(telegramId, type) {
         console.log(`🔍 Redis MISS for ${configKey}`);
       }
     } else {
-      console.warn('⚠️ Redis not available or not ready, using memory cache');
+      console.warn('⚠️ Redis not available, using memory cache');
     }
   } catch (error) {
     console.warn('❌ Redis config fetch failed, trying memory:', error.message);
@@ -91,7 +91,7 @@ async function setConfig(telegramId, type, newConfigData) {
     
     // Try to save to Redis
     const redis = await getRedisClient();
-    if (redis && redis.status === 'ready') {
+    if (redis) {
       const configKey = `user:config:${telegramId}:${type}`;
       await redis.set(configKey, JSON.stringify(newConfigData), 'EX', 86400); // 24 hours
       console.log(`✅ Redis SET for ${configKey}`);
