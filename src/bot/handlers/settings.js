@@ -6,6 +6,30 @@ export function registerSettings(bot) {
   bot.onText(/^\/settings$/, async (msg) => {
     await sendMainMenu(bot, msg.chat.id);
   });
+
+  bot.onText(/^\/debugsettings$/, async (msg) => {
+    const chatId = msg.chat.id;
+    const aiConfig = await getAIConfig(chatId);
+    const builderConfig = await getBuilderConfig(chatId);
+    
+    const text = `
+🔧 <b>Current Settings Debug</b>
+
+<b>AI Settings:</b>
+• Mode: ${aiConfig.mode}
+• Bet Type: ${aiConfig.betType}  
+• Horizon: ${aiConfig.horizonHours}h
+• Pro Quant: ${aiConfig.proQuantMode ? 'ON' : 'OFF'}
+• Bookmakers: ${(aiConfig.bookmakers || []).join(', ')}
+
+<b>Builder Settings:</b>
+• Avoid Same Game: ${builderConfig.avoidSameGame ? 'YES' : 'NO'}
+
+<i>Use /settings to change these</i>
+    `;
+    
+    await bot.sendMessage(chatId, text, { parse_mode: 'HTML' });
+  });
 }
 
 export function registerSettingsCallbacks(bot) {
@@ -31,6 +55,12 @@ export function registerSettingsCallbacks(bot) {
 
     if (action === 'set') {
       const [,,, category, key, value] = parts;
+      
+      if (!category || !key) {
+        console.error('Invalid callback data structure:', data);
+        return;
+      }
+
       const config = category === 'ai' ? await getAIConfig(chatId) : await getBuilderConfig(chatId);
       const setConfigFunc = category === 'ai' ? setAIConfig : setBuilderConfig;
 
@@ -43,17 +73,23 @@ export function registerSettingsCallbacks(bot) {
         }
         config.bookmakers = Array.from(currentBooks);
         await setConfigFunc(chatId, config);
+        console.log(`✅ Updated bookmakers: ${config.bookmakers.join(', ')}`);
         return sendBookmakerMenu(bot, chatId, messageId);
       }
 
-      const numericValue = isNaN(value) ? value : Number(value);
       if (value === 'toggle') {
         config[key] = !config[key];
       } else {
-        if (config[key] === numericValue) return;
+        const numericValue = isNaN(value) ? value : Number(value);
+        if (config[key] === numericValue) {
+          await bot.answerCallbackQuery(cbq.id, { text: 'No change needed' });
+          return;
+        }
         config[key] = numericValue;
       }
+      
       await setConfigFunc(chatId, config);
+      console.log(`✅ Updated ${category} setting: ${key} = ${config[key]}`);
 
       if (category === 'ai') return sendAiSettingsMenu(bot, chatId, messageId);
       if (category === 'builder') return sendBuilderSettingsMenu(bot, chatId, messageId);
