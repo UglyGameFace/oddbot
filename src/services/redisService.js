@@ -58,7 +58,6 @@ class RedisService {
           enableAutoPipelining: false,
         });
 
-        // Apply command safety wrappers
         this.applyCommandSafetyWrappers(newClient);
 
         newClient.on('error', (error) => {
@@ -134,106 +133,66 @@ class RedisService {
   applyCommandSafetyWrappers(client) {
     if (!client) return;
 
-    // Store original methods
     const originalEval = client.eval;
     const originalKeys = client.keys;
     const originalScan = client.scan;
     const originalDel = client.del;
 
-    // Wrap EVAL command
+    // FIX: Ensure original methods are called with the correct `client` context
     client.eval = async function(script, numKeys, ...args) {
       try {
-        if (typeof script !== 'string' || script.trim().length === 0) {
-          throw new Error('Invalid Lua script');
-        }
+        if (typeof script !== 'string' || script.trim().length === 0) throw new Error('Invalid Lua script');
         const keysCount = parseInt(numKeys, 10);
-        if (isNaN(keysCount) || keysCount < 0) {
-          throw new Error(`Invalid keys count: ${numKeys}`);
-        }
-        return await originalEval.apply(this, [script, keysCount, ...args]);
+        if (isNaN(keysCount) || keysCount < 0) throw new Error(`Invalid keys count: ${numKeys}`);
+        return await originalEval.apply(client, [script, keysCount, ...args]);
       } catch (error) {
         if (error?.message?.includes('ERR syntax error')) {
           this.syntaxErrorCount++;
-          this.lastSyntaxError = {
-            message: error.message,
-            timestamp: new Date().toISOString(),
-            operation: 'eval',
-            script: script.substring(0, 100) + '...'
-          };
+          this.lastSyntaxError = { message: error.message, timestamp: new Date().toISOString(), operation: 'eval' };
           console.error('❌ RedisService: EVAL syntax error:', error.message);
         }
         throw error;
       }
     }.bind(this);
 
-    // Wrap KEYS command
     client.keys = async function(pattern) {
       try {
-        if (typeof pattern !== 'string') {
-          throw new Error('Pattern must be a string');
-        }
-        if (pattern.length > 500) {
-          throw new Error('Pattern too long');
-        }
-        return await originalKeys.call(this, pattern);
+        if (typeof pattern !== 'string') throw new Error('Pattern must be a string');
+        if (pattern.length > 500) throw new Error('Pattern too long');
+        return await originalKeys.call(client, pattern);
       } catch (error) {
         if (error?.message?.includes('ERR syntax error')) {
           this.syntaxErrorCount++;
-          this.lastSyntaxError = {
-            message: error.message,
-            timestamp: new Date().toISOString(),
-            operation: 'keys',
-            pattern: pattern
-          };
+          this.lastSyntaxError = { message: error.message, timestamp: new Date().toISOString(), operation: 'keys' };
           console.error('❌ RedisService: KEYS syntax error:', error.message);
         }
         throw error;
       }
     }.bind(this);
 
-    // Wrap SCAN command
     client.scan = async function(cursor, ...args) {
       try {
-        if (typeof cursor !== 'string' && typeof cursor !== 'number') {
-          throw new Error('Cursor must be string or number');
-        }
-        return await originalScan.call(this, cursor, ...args);
+        if (typeof cursor !== 'string' && typeof cursor !== 'number') throw new Error('Cursor must be string or number');
+        return await originalScan.call(client, cursor, ...args);
       } catch (error) {
         if (error?.message?.includes('ERR syntax error')) {
           this.syntaxErrorCount++;
-          this.lastSyntaxError = {
-            message: error.message,
-            timestamp: new Date().toISOString(),
-            operation: 'scan',
-            cursor: cursor,
-            args: args
-          };
+          this.lastSyntaxError = { message: error.message, timestamp: new Date().toISOString(), operation: 'scan' };
           console.error('❌ RedisService: SCAN syntax error:', error.message);
         }
         throw error;
       }
     }.bind(this);
 
-    // Wrap DEL command
     client.del = async function(...keys) {
       try {
-        if (keys.length === 0) {
-          throw new Error('No keys provided for deletion');
-        }
-        if (keys.length > 1000) {
-          console.warn('⚠️ RedisService: Large DEL operation, consider batching');
-        }
-        return await originalDel.call(this, ...keys);
+        if (keys.length === 0) throw new Error('No keys provided for deletion');
+        if (keys.length > 1000) console.warn('⚠️ RedisService: Large DEL operation, consider batching');
+        return await originalDel.call(client, ...keys);
       } catch (error) {
         if (error?.message?.includes('ERR syntax error')) {
           this.syntaxErrorCount++;
-          this.lastSyntaxError = {
-            message: error.message,
-            timestamp: new Date().toISOString(),
-            operation: 'del',
-            keyCount: keys.length,
-            firstKey: keys[0]
-          };
+          this.lastSyntaxError = { message: error.message, timestamp: new Date().toISOString(), operation: 'del' };
           console.error('❌ RedisService: DEL syntax error:', error.message);
         }
         throw error;
@@ -244,22 +203,15 @@ class RedisService {
   }
 
   async getClient() {
-    // If we have a valid client, return it
     if (this.client && this.client.status === 'ready') {
       return this.client;
     }
-
-    // If no Redis URL, return null
     if (!env.REDIS_URL) {
       return null;
     }
-
-    // If already connecting, return the promise
     if (this.isConnecting) {
       return this.connectionPromise;
     }
-
-    // Otherwise, start a new connection
     try {
       return await this.connect();
     } catch (error) {
@@ -278,14 +230,11 @@ class RedisService {
           error: 'Redis client not available' 
         };
       }
-
       const startTime = Date.now();
       const reply = await client.ping();
       const endTime = Date.now();
-      
       const isConnected = reply === 'PONG';
       const latency = endTime - startTime;
-
       return { 
         connected: isConnected, 
         latency: latency,
