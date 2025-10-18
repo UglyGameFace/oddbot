@@ -9,7 +9,7 @@ import axios from 'axios';
 
 export function registerTools(bot) {
   // FIX: escape slash in regex so it’s a valid pattern
-  bot.onText(/^/tools$/, async (msg) => {
+  bot.onText(/^\/tools$/, async (msg) => {
     await sendToolsMenu(bot, msg.chat.id);
   });
 }
