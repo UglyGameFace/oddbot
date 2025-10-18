@@ -8,7 +8,8 @@ import env from '../../config/env.js';
 import axios from 'axios';
 
 export function registerTools(bot) {
-  bot.onText(/^\/tools$/, async (msg) => {
+  // FIX: escape slash in regex so it’s a valid pattern
+  bot.onText(/^/tools$/, async (msg) => {
     await sendToolsMenu(bot, msg.chat.id);
   });
 }
@@ -63,9 +64,9 @@ export function registerToolsCallbacks(bot) {
 }
 
 async function sendToolsMenu(bot, chatId, messageId = null) {
-  const text = `🛠️ *Admin Tools*
+  const text = '🛠️ Admin Tools
 
-Select a tool to use:`;
+Select a tool to use:';
   const keyboard = [
     [{ text: '🔄 Trigger Odds Ingestion', callback_data: 'tools_ingest' }],
     [{ text: '📊 Odds Freshness', callback_data: 'tools_freshness' }],
@@ -100,48 +101,54 @@ async function handleHealthCheck(bot, chatId, messageId) {
 
   try {
     const healthReport = await healthService.getHealth();
-    let healthText = `❤️ *SYSTEM HEALTH REPORT*\n\n`;
 
-    // FIX: Add fallback logic for overall health status.
-    if (healthReport?.ok !== undefined) {
-      healthText += `*Overall:* ${healthReport.ok ? '✅ Healthy' : '❌ Unhealthy'}\n`;
-      healthText += `_Timestamp: ${new Date(healthReport.timestamp).toLocaleString()}_\n\n`;
-    } else if (healthReport?.services) {
-      const allOk = Object.values(healthReport.services).every(s => s?.ok);
-      healthText += `*Overall:* ${allOk ? '✅ Healthy' : '❌ Unhealthy'} _(inferred)_\n`;
-      healthText += `_Timestamp: ${new Date().toLocaleString()}_\n\n`;
+    let healthText = '❤️ SYSTEM HEALTH REPORT
+
+';
+
+    // Overall status
+    if (healthReport && healthReport.overall) {
+      healthText += `Overall: ${healthReport.overall.healthy ? '✅ Healthy' : '❌ Unhealthy'}
+`;
+      healthText += `Timestamp: ${new Date(healthReport.overall.timestamp).toLocaleString()}
+
+`;
     } else {
-      healthText += `*Overall:* ⚠️ Health data unavailable\n\n`;
+      healthText += `Overall: ⚠️ Health data unavailable
+
+`;
     }
 
-    healthText += '*Services:*\n';
-    if (healthReport?.services) {
+    // Service status
+    healthText += 'Services:
+';
+    if (healthReport && healthReport.services) {
       Object.entries(healthReport.services).forEach(([service, status]) => {
-        const statusIcon = status?.ok ? '✅' : '❌';
-        const statusText = status?.ok ? 'OK' : 'ERROR';
-        healthText += `${statusIcon} ${service}: ${statusText}`;
-        if (status?.error) {
-          healthText += ` (details available in logs)`;
+        const statusIcon = status && status.ok ? '✅' : '❌';
+        healthText += `${statusIcon} ${service}: ${status && status.ok ? 'OK' : 'ERROR'}`;
+        if (status && status.details) {
+          healthText += ` (${status.details})`;
         }
-        healthText += '\n';
+        healthText += '
+';
       });
     } else {
-      healthText += '⚠️ No service data available\n';
+      healthText += '⚠️ No service data available
+';
     }
 
     await bot.editMessageText(healthText, {
       chat_id: chatId,
       message_id: messageId,
-      parse_mode: 'Markdown',
-      reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] }
-    });
+      reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] } }
+    );
   } catch (error) {
     console.error('Health check error:', error);
     await bot.editMessageText('❌ Failed to get health report', {
       chat_id: chatId,
       message_id: messageId,
-      reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] }
-    });
+      reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] } }
+    );
   }
 }
 
@@ -151,28 +158,22 @@ async function handleRedisInfo(bot, chatId, messageId) {
     message_id: messageId
   });
 
-  // FIX: Use correct ioredis SCAN syntax
+  // Safe SCAN counting helper
   async function sampleAndCount(redis, pattern, limitMs = 2000) {
     let cursor = '0';
     let count = 0;
     const samples = [];
     const deadline = Date.now() + limitMs;
-  
-    do {
-      const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', `${pattern}*`, 'COUNT', 500);
-      cursor = nextCursor;
 
-      if (keys.length > 0) {
-        count += keys.length;
-        if (samples.length < 3) {
-            samples.push(...keys.slice(0, 3 - samples.length).map(k => k.replace(pattern, '')));
-        }
-      }
-      
+    do {
+      const [next, keys] = await redis.scan(cursor, 'MATCH', `${pattern}*`, 'COUNT', '500');
+      count += keys.length;
+      if (samples.length < 3) samples.push(...keys.slice(0, 3).map(k => k.replace(pattern, '')));
+      cursor = next;
       if (Date.now() > deadline) break;
     } while (cursor !== '0');
-  
-    return { count, samples };
+
+    return { count, samples: samples.slice(0, 3) };
   }
 
   try {
@@ -181,62 +182,79 @@ async function handleRedisInfo(bot, chatId, messageId) {
       throw new Error('Redis client not available');
     }
 
-    // FIX: Use dbsize() for ioredis
     const [dbsize, fullInfo, memoryInfo] = await Promise.all([
       redis.dbsize(),
       redis.info(),
       redis.info('memory')
     ]);
 
-    let redisText = `💾 *REDIS INFORMATION*\n\n`;
+    let redisText = '💾 REDIS INFORMATION
 
-    redisText += `*Connected:* ${redis.status === 'ready' ? '✅ Yes' : '❌ No'}\n`;
-    redisText += `*Total Keys:* \`${dbsize}\`\n`;
+';
 
-    const usedMemory = memoryInfo.match(/used_memory_human:(\S+)/)?.[1] || 'Unknown';
-    const maxMemory = memoryInfo.match(/maxmemory_human:(\S+)/)?.[1] || '0B';
-    const memoryStatus = maxMemory === '0B' ? 'No limit' : maxMemory;
-    redisText += `*Memory Usage:* ${usedMemory} / ${memoryStatus}\n`;
+    // Basic connection info
+    redisText += `Connected: ${redis.status === 'ready' ? '✅ Yes' : '❌ No'}
+`;
+    redisText += `Total Keys: ${dbsize}
+`;
 
-    const version = fullInfo.match(/redis_version:(\S+)/)?.[1] || 'Unknown';
-    const uptimeSeconds = fullInfo.match(/uptime_in_seconds:(\d+)/)?.[1] || '0';
+    // Memory
+    const usedMemory = memoryInfo.match(/used_memory_human:(S+)/)?.[1] || 'Unknown';
+    const maxMemory = memoryInfo.match(/maxmemory_human:(S+)/)?.[1] || '0';
+    const memoryStatus = maxMemory === '0' ? 'No limit' : maxMemory;
+    redisText += `Memory Usage: ${usedMemory} / ${memoryStatus}
+`;
+
+    // Version + uptime
+    const version = fullInfo.match(/redis_version:(S+)/)?.[1] || 'Unknown';
+    const uptimeSeconds = fullInfo.match(/uptime_in_seconds:(d+)/)?.[1] || '0';
     const uptimeDays = Math.floor(parseInt(uptimeSeconds, 10) / 86400);
-    redisText += `*Version:* ${version}\n`;
-    redisText += `*Uptime:* ${uptimeDays} days\n`;
+    redisText += `Version: ${version}
+`;
+    redisText += `Uptime: ${uptimeDays} days
+`;
 
-    redisText += '\n*Key Patterns:*\n';
-    const keyPatterns = ['v1:production:odds:', 'v1:production:player_props:', 'v1:production:games:', 'v1:production:user:state:', 'v1:production:parlay:slip:', 'v1:production:meta:'];
+    // Key patterns via SCAN
+    redisText += '
+Key Patterns:
+';
+    const keyPatterns = ['odds:', 'player_props:', 'games:', 'user:', 'parlay:', 'meta:'];
     for (const pattern of keyPatterns) {
       try {
-        // Use the base pattern for display, but scan with the full prefix from state.js
-        const displayPattern = pattern.replace('v1:production:', '');
         const { count, samples } = await sampleAndCount(redis, pattern);
-        const sampleText = samples.length ? ` (sample: _${samples.join(', ')}_)` : '';
-        redisText += `- \`${displayPattern}\`: ${count} keys${sampleText}\n`;
+        const sampleText = samples.length ? ` (sample: ${samples.join(', ')})` : '';
+        redisText += `- ${pattern}: ${count} keys${sampleText}
+`;
       } catch (e) {
         console.error(`Redis scan error for ${pattern}:`, e.message);
-        const displayPattern = pattern.replace('v1:production:', '');
-        redisText += `- \`${displayPattern}\`: Error checking\n`;
+        redisText += `- ${pattern}: Error checking
+`;
       }
     }
 
+    // Health: ping primary; write test optional
     let healthLabel = '❌ Error';
     try {
       const pong = await redis.ping();
       if (pong === 'PONG') healthLabel = '✅ Working';
-      const k = `healthcheck:${Date.now()}`;
-      await redis.set(k, '1', 'EX', 5);
-      await redis.get(k);
-      await redis.del(k);
+      try {
+        const k = `healthcheck:${Date.now()}`;
+        await redis.set(k, '1', 'EX', 5);
+        await redis.get(k);
+        await redis.del(k);
+      } catch (_) {
+        // ignore write-test failures
+      }
     } catch (_) {
-      // ignore failures
+      // keep error
     }
-    redisText += `\n*Health Check:* ${healthLabel}\n`;
+    redisText += `
+Health Check: ${healthLabel}
+`;
 
     await bot.editMessageText(redisText, {
       chat_id: chatId,
       message_id: messageId,
-      parse_mode: 'Markdown',
       reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] } }
     );
   } catch (error) {
@@ -263,48 +281,68 @@ async function handleOddsFreshness(bot, chatId, messageId) {
       databaseService.getSportGameCounts().catch(() => [])
     ]);
 
-    let freshnessText = `📊 *ODDS DATA FRESHNESS REPORT*\n\n`;
+    let freshnessText = '📊 ODDS DATA FRESHNESS REPORT
 
+';
+
+    // Last ingestion time
     if (lastIngestISO) {
       const lastIngestDate = new Date(lastIngestISO);
       const now = new Date();
       const hoursAgo = Math.round((now - lastIngestDate) / (1000 * 60 * 60));
-      freshnessText += `*Last Refresh:* ${lastIngestDate.toLocaleString()}\n`;
-      freshnessText += `*Age:* ~${hoursAgo} hours ago\n\n`;
+      freshnessText += `Last Refresh: ${lastIngestDate.toLocaleString()}
+`;
+      freshnessText += `Age: ${hoursAgo} hours ago
+
+`;
     } else {
-      freshnessText += `*Last Refresh:* ❌ No successful run recorded\n\n`;
+      freshnessText += `Last Refresh: ❌ No successful run recorded
+
+`;
     }
 
+    // Date range
     if (dateRange && dateRange.min_date && dateRange.max_date) {
       const minDate = new Date(dateRange.min_date);
       const maxDate = new Date(dateRange.max_date);
-      freshnessText += `*Game Date Range:*\n`;
-      freshnessText += `From: ${minDate.toLocaleDateString()}\n`;
-      freshnessText += `To:   ${maxDate.toLocaleDateString()}\n\n`;
+      freshnessText += `Game Date Range:
+`;
+      freshnessText += `From: ${minDate.toLocaleDateString()}
+`;
+      freshnessText += `To:   ${maxDate.toLocaleDateString()}
+
+`;
     } else {
-      freshnessText += `*Game Date Range:* ❌ No games in database\n\n`;
+      freshnessText += `Game Date Range: ❌ No games in database
+
+`;
     }
 
+    // Game counts by sport
     if (gameCounts && gameCounts.length > 0) {
       let totalGames = 0;
-      freshnessText += '*Games by Sport:*\n';
+      freshnessText += 'Games by Sport:
+';
       gameCounts.forEach(stat => {
         const title = stat.sport_title || stat.sport_key || 'Unknown';
         const count = stat.total_games || 0;
         totalGames += count;
         if (count > 0) {
-          freshnessText += `- ${title}: ${count} games\n`;
+          freshnessText += `- ${title}: ${count} games
+`;
         }
       });
-      freshnessText += `\n*Total Games:* \`${totalGames}\`\n`;
+      freshnessText += `
+Total Games: ${totalGames}
+`;
     } else {
-      freshnessText += `*Games:* ❌ No game data found\n`;
+      freshnessText += `Games: ❌ No game data found
+`;
     }
 
     await bot.editMessageText(freshnessText, {
       chat_id: chatId,
       message_id: messageId,
-      parse_mode: 'Markdown',
       reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] } }
     );
   } catch (error) {
@@ -327,14 +365,17 @@ async function handleManualIngest(bot, chatId, messageId) {
     await redis.publish('odds_ingestion_trigger', 'run');
 
     const responseText =
-      `✅ *Trigger sent to odds ingestion worker.*\n\n` +
-      `The worker will process on its next cycle (usually within 1-2 minutes).\n\n` +
-      `You can monitor its progress in the worker logs on your hosting platform.`;
+      `✅ Trigger sent to odds ingestion worker.
+
+` +
+      `The worker will process on its next cycle (usually within 1-2 minutes).
+
+` +
+      `Check the worker logs on Railway to monitor progress.`;
 
     await bot.editMessageText(responseText, {
       chat_id: chatId,
       message_id: messageId,
-      parse_mode: 'Markdown',
       reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] } }
     );
   } catch (error) {
@@ -360,39 +401,56 @@ async function handleCacheClear(bot, chatId, messageId) {
     }
 
     const prefixes = [
-      'v1:production:odds:', 'v1:production:player_props:', 'v1:production:games:',
-      'v1:production:user:state:', 'v1:production:parlay:slip:', 'v1:production:user:config:',
-      'v1:production:token:', 'v1:production:quota:', 'v1:production:meta:'
+      'odds:', 'player_props:', 'games:',
+      'user:state:', 'parlay:slip:', 'user:config:',
+      'token:', 'quota:', 'meta:'
     ];
 
     let totalCleared = 0;
-    
-    const pipeline = redis.pipeline();
+    const clearedDetails = [];
+
     for (const prefix of prefixes) {
+      let prefixCount = 0;
       let cursor = '0';
+
       do {
-        const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', `${prefix}*`, 'COUNT', 250);
-        cursor = nextCursor;
+        const scanResult = await redis.scan(cursor, 'MATCH', `${prefix}*`, 'COUNT', '100');
+        cursor = scanResult[0];
+        const keys = scanResult[1];
+
         if (keys.length > 0) {
-          pipeline.del(...keys);
-          totalCleared += keys.length;
+          const deleted = await redis.del(...keys);
+          prefixCount += deleted;
+          totalCleared += deleted;
         }
       } while (cursor !== '0');
+
+      if (prefixCount > 0) {
+        clearedDetails.push(`${prefix}: ${prefixCount} keys`);
+      }
     }
-    await pipeline.exec();
 
+    let clearText = `✅ Cache cleared successfully!
 
-    let clearText = `✅ *Cache cleared successfully!*\n\n`;
-    clearText += `*Total keys cleared:* \`${totalCleared}\`\n`;
+`;
+    clearText += `Total keys cleared: ${totalCleared}
+`;
+
+    if (clearedDetails.length > 0) {
+      clearText += `
+Cleared:
+${clearedDetails.join('
+')}`;
+    }
 
     if (totalCleared === 0) {
-      clearText += `\n_No keys matched the patterns (cache might have already been empty)._`;
+      clearText += `
+No keys matched the patterns (cache might already be empty)`;
     }
 
     await bot.editMessageText(clearText, {
       chat_id: chatId,
       message_id: messageId,
-      parse_mode: 'Markdown',
       reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] } }
     );
   } catch (error) {
@@ -414,12 +472,13 @@ async function handleApiStatus(bot, chatId, messageId) {
   const statuses = {};
   const checkPromises = [];
 
+  // Perplexity AI Check — sonar-pro to mirror production
   if (env.PERPLEXITY_API_KEY) {
     checkPromises.push(
       axios.post(
         'https://api.perplexity.ai/chat/completions',
         {
-          model: 'sonar-small-online',
+          model: 'sonar-pro',
           messages: [{ role: 'user', content: 'TEST' }],
           max_tokens: 10,
           temperature: 0.1
@@ -433,7 +492,7 @@ async function handleApiStatus(bot, chatId, messageId) {
         }
       )
       .then((response) => {
-        const ok = response?.data?.choices?.length > 0;
+        const ok = response?.data && Array.isArray(response.data.choices) && response.data.choices.length > 0;
         statuses['Perplexity AI'] = ok ? '✅ Online & Working' : '⚠️ Online (No Response Data)';
       })
       .catch(error => {
@@ -460,6 +519,7 @@ async function handleApiStatus(bot, chatId, messageId) {
     statuses['Perplexity AI'] = '🔴 Not Configured';
   }
 
+  // The Odds API Check — functional
   if (env.THE_ODDS_API_KEY) {
     checkPromises.push(
       axios.get(`https://api.the-odds-api.com/v4/sports?apiKey=${env.THE_ODDS_API_KEY}`, {
@@ -490,41 +550,60 @@ async function handleApiStatus(bot, chatId, messageId) {
 
   await Promise.allSettled(checkPromises);
 
+  // Database status — simple query
   try {
-    const testResult = await databaseService.getSportGameCounts().catch(() => null);
-    statuses['Database'] = Array.isArray(testResult) ? '✅ Connected & Working' : '⚠️ Connected (Query Failed)';
+    const testResult = await databaseService.getSportGameCounts().catch(() => []);
+    if (Array.isArray(testResult)) {
+      statuses['Database'] = '✅ Connected & Working';
+    } else {
+      statuses['Database'] = '⚠️ Connected (No Data)';
+    }
   } catch (error) {
     console.error('Database check error:', error.message);
     statuses['Database'] = '❌ Connection Failed';
   }
 
+  // Redis status — readiness + ping
   try {
     const redis = await getRedisClient();
-    if (redis?.status === 'ready') {
+    if (redis && redis.status === 'ready') {
       const pong = await redis.ping();
       const size = await redis.dbsize();
       statuses['Redis'] = pong === 'PONG' ? `✅ Connected & Working (${size} keys)` : '❌ Ping Failed';
+    } else if (redis) {
+      statuses['Redis'] = '⚠️ Connecting';
     } else {
-      statuses['Redis'] = `❌ Not Connected (status: ${redis?.status || 'unknown'})`;
+      statuses['Redis'] = '❌ Not Connected';
     }
   } catch (error) {
     console.error('Redis check error:', error.message);
     statuses['Redis'] = '❌ Connection Failed';
   }
 
-  let statusText = `📡 *API STATUS REPORT (REAL TESTS)*\n\n`;
-  statusText += `*🤖 AI Services:*\n`;
-  statusText += `Perplexity AI: ${statuses['Perplexity AI']}\n\n`;
-  statusText += `*📊 Data Providers:*\n`;
-  statusText += `The Odds API: ${statuses['The Odds API']}\n\n`;
-  statusText += `*💾 Infrastructure:*\n`;
-  statusText += `Database: ${statuses['Database']}\n`;
-  statusText += `Redis: ${statuses['Redis']}\n`;
+  // Format the status report
+  let statusText = '📡 API STATUS REPORT (REAL TESTS)
+
+';
+  statusText += '🤖 AI Services:
+';
+  statusText += `Perplexity AI: ${statuses['Perplexity AI']}
+`;
+  statusText += '
+📊 Data Providers:
+';
+  statusText += `The Odds API: ${statuses['The Odds API']}
+`;
+  statusText += '
+💾 Infrastructure:
+';
+  statusText += `Database: ${statuses['Database']}
+`;
+  statusText += `Redis: ${statuses['Redis']}
+`;
 
   await bot.editMessageText(statusText, {
     chat_id: chatId,
     message_id: messageId,
-    parse_mode: 'Markdown',
     reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] } }
   );
 }
@@ -536,61 +615,96 @@ async function handleDbStats(bot, chatId, messageId) {
   });
 
   try {
-    let statsText = `📊 *DATABASE STATISTICS*\n\n`;
+    let statsText = '📊 DATABASE STATISTICS
 
+';
+
+    // REAL database counts
     try {
       const gameCounts = await databaseService.getSportGameCounts();
-      if (gameCounts?.length > 0) {
+      if (gameCounts && gameCounts.length > 0) {
         let totalGames = 0;
         let activeSports = 0;
-        statsText += '*Games by Sport:*\n';
+
+        statsText += 'Games by Sport:
+';
+
         gameCounts.forEach(stat => {
           const title = stat.sport_title || stat.sport_key || 'Unknown';
           const count = stat.total_games || 0;
           totalGames += count;
+
           if (count > 0) {
             activeSports++;
-            statsText += `- ${title}: ${count} games\n`;
+            statsText += `- ${title}: ${count} games
+`;
           }
         });
-        statsText += `\n*Total Games:* \`${totalGames}\`\n`;
-        statsText += `*Active Sports:* ${activeSports}\n\n`;
+
+        statsText += `
+Total Games: ${totalGames}
+`;
+        statsText += `Active Sports: ${activeSports}
+
+`;
       } else {
-        statsText += '*Games:* ❌ No data found in database\n\n';
+        statsText += 'Games: ❌ No data found in database
+
+';
       }
     } catch (dbError) {
       console.error('Database stats error:', dbError);
-      statsText += '*Games:* ❌ Error fetching data\n\n';
+      statsText += 'Games: ❌ Error fetching data
+
+';
     }
 
-    statsText += `📈 *API QUOTA STATUS*\n\n`;
+    // REAL API Quota Status
+    statsText += '📈 API QUOTA STATUS
+
+';
 
     try {
       const quota = await rateLimitService.getProviderQuota('theodds');
+
       if (quota) {
-        const { remaining = 'N/A', used = 'N/A', limit = 'N/A', at, critical } = quota;
-        const lastUpdated = at ? new Date(at).toLocaleString() : 'Never';
-        const criticalText = critical ? ' *⚠️ CRITICAL*' : '';
-        statsText += `*The Odds API:*\n`;
-        statsText += `- Remaining: \`${remaining}\`${criticalText}\n`;
-        statsText += `- Used: \`${used}\`\n`;
-        statsText += `- Limit: \`${limit}\`\n`;
-        statsText += `- _Last Updated: ${lastUpdated}_\n`;
-        if (critical) {
-          statsText += `\n*WARNING:* API quota is critically low!\n`;
+        const remaining = quota.remaining ?? 'Unknown';
+        const used = quota.used ?? 'Unknown';
+        const limit = quota.limit ?? 'Unknown';
+        const lastUpdated = quota.at ? new Date(quota.at).toLocaleString() : 'Never';
+        const critical = quota.critical ? ' ⚠️ CRITICAL' : '';
+
+        statsText += `The Odds API:
+`;
+        statsText += `- Remaining: ${remaining}${critical}
+`;
+        statsText += `- Used: ${used}
+`;
+        statsText += `- Limit: ${limit}
+`;
+        statsText += `- Last Updated: ${lastUpdated}
+`;
+
+        if (quota.critical) {
+          statsText += `
+⚠️ WARNING: API quota critically low!
+`;
         }
       } else {
-        statsText += `*The Odds API:* No quota data available.\n_(Trigger odds ingestion to populate data)_\n`;
+        statsText += `The Odds API: No quota data available
+`;
+        statsText += `Trigger odds ingestion to populate data
+`;
       }
     } catch (quotaError) {
       console.error('Quota check error:', quotaError);
-      statsText += `*The Odds API:* ❌ Error fetching quota\n`;
+      statsText += `The Odds API: ❌ Error fetching quota
+`;
     }
 
     await bot.editMessageText(statsText, {
       chat_id: chatId,
       message_id: messageId,
-      parse_mode: 'Markdown',
       reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] } }
     );
   } catch (error) {
