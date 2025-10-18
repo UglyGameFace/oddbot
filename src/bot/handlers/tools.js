@@ -103,11 +103,10 @@ async function handleHealthCheck(bot, chatId, messageId) {
     let healthText = `❤️ *SYSTEM HEALTH REPORT*\n\n`;
 
     // FIX: Add fallback logic for overall health status.
-    if (healthReport?.overall) {
-      healthText += `*Overall:* ${healthReport.overall.healthy ? '✅ Healthy' : '❌ Unhealthy'}\n`;
-      healthText += `_Timestamp: ${new Date(healthReport.overall.timestamp).toLocaleString()}_\n\n`;
+    if (healthReport?.ok !== undefined) {
+      healthText += `*Overall:* ${healthReport.ok ? '✅ Healthy' : '❌ Unhealthy'}\n`;
+      healthText += `_Timestamp: ${new Date(healthReport.timestamp).toLocaleString()}_\n\n`;
     } else if (healthReport?.services) {
-      // Calculate overall status from services if the main one is missing.
       const allOk = Object.values(healthReport.services).every(s => s?.ok);
       healthText += `*Overall:* ${allOk ? '✅ Healthy' : '❌ Unhealthy'} _(inferred)_\n`;
       healthText += `_Timestamp: ${new Date().toLocaleString()}_\n\n`;
@@ -115,15 +114,14 @@ async function handleHealthCheck(bot, chatId, messageId) {
       healthText += `*Overall:* ⚠️ Health data unavailable\n\n`;
     }
 
-    // Service status
     healthText += '*Services:*\n';
     if (healthReport?.services) {
       Object.entries(healthReport.services).forEach(([service, status]) => {
         const statusIcon = status?.ok ? '✅' : '❌';
         const statusText = status?.ok ? 'OK' : 'ERROR';
         healthText += `${statusIcon} ${service}: ${statusText}`;
-        if (status?.details) {
-          healthText += ` (${status.details})`;
+        if (status?.error) {
+          healthText += ` (details available in logs)`;
         }
         healthText += '\n';
       });
@@ -153,21 +151,16 @@ async function handleRedisInfo(bot, chatId, messageId) {
     message_id: messageId
   });
 
-  // FIX: Switched to modern node-redis v4 syntax for SCAN.
+  // FIX: Use correct ioredis SCAN syntax
   async function sampleAndCount(redis, pattern, limitMs = 2000) {
-    let cursor = 0; // Use a number for the cursor
+    let cursor = '0';
     let count = 0;
     const samples = [];
     const deadline = Date.now() + limitMs;
   
     do {
-      const result = await redis.scan(cursor, {
-        MATCH: `${pattern}*`,
-        COUNT: 500
-      });
-      
-      cursor = result.cursor;
-      const keys = result.keys;
+      const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', `${pattern}*`, 'COUNT', 500);
+      cursor = nextCursor;
 
       if (keys.length > 0) {
         count += keys.length;
@@ -177,7 +170,7 @@ async function handleRedisInfo(bot, chatId, messageId) {
       }
       
       if (Date.now() > deadline) break;
-    } while (cursor !== 0);
+    } while (cursor !== '0');
   
     return { count, samples };
   }
@@ -188,15 +181,16 @@ async function handleRedisInfo(bot, chatId, messageId) {
       throw new Error('Redis client not available');
     }
 
+    // FIX: Use dbsize() for ioredis
     const [dbsize, fullInfo, memoryInfo] = await Promise.all([
-      redis.dbSize(),
+      redis.dbsize(),
       redis.info(),
       redis.info('memory')
     ]);
 
     let redisText = `💾 *REDIS INFORMATION*\n\n`;
 
-    redisText += `*Connected:* ${redis.isReady ? '✅ Yes' : '❌ No'}\n`;
+    redisText += `*Connected:* ${redis.status === 'ready' ? '✅ Yes' : '❌ No'}\n`;
     redisText += `*Total Keys:* \`${dbsize}\`\n`;
 
     const usedMemory = memoryInfo.match(/used_memory_human:(\S+)/)?.[1] || 'Unknown';
@@ -211,15 +205,18 @@ async function handleRedisInfo(bot, chatId, messageId) {
     redisText += `*Uptime:* ${uptimeDays} days\n`;
 
     redisText += '\n*Key Patterns:*\n';
-    const keyPatterns = ['odds:', 'player_props:', 'games:', 'user:', 'parlay:', 'meta:'];
+    const keyPatterns = ['v1:production:odds:', 'v1:production:player_props:', 'v1:production:games:', 'v1:production:user:state:', 'v1:production:parlay:slip:', 'v1:production:meta:'];
     for (const pattern of keyPatterns) {
       try {
+        // Use the base pattern for display, but scan with the full prefix from state.js
+        const displayPattern = pattern.replace('v1:production:', '');
         const { count, samples } = await sampleAndCount(redis, pattern);
         const sampleText = samples.length ? ` (sample: _${samples.join(', ')}_)` : '';
-        redisText += `- \`${pattern}\`: ${count} keys${sampleText}\n`;
+        redisText += `- \`${displayPattern}\`: ${count} keys${sampleText}\n`;
       } catch (e) {
         console.error(`Redis scan error for ${pattern}:`, e.message);
-        redisText += `- \`${pattern}\`: Error checking\n`;
+        const displayPattern = pattern.replace('v1:production:', '');
+        redisText += `- \`${displayPattern}\`: Error checking\n`;
       }
     }
 
@@ -228,7 +225,7 @@ async function handleRedisInfo(bot, chatId, messageId) {
       const pong = await redis.ping();
       if (pong === 'PONG') healthLabel = '✅ Working';
       const k = `healthcheck:${Date.now()}`;
-      await redis.set(k, '1', { EX: 5 });
+      await redis.set(k, '1', 'EX', 5);
       await redis.get(k);
       await redis.del(k);
     } catch (_) {
@@ -363,26 +360,24 @@ async function handleCacheClear(bot, chatId, messageId) {
     }
 
     const prefixes = [
-      'odds:', 'player_props:', 'games:',
-      'user:state:', 'parlay:slip:', 'user:config:',
-      'token:', 'quota:', 'meta:'
+      'v1:production:odds:', 'v1:production:player_props:', 'v1:production:games:',
+      'v1:production:user:state:', 'v1:production:parlay:slip:', 'v1:production:user:config:',
+      'v1:production:token:', 'v1:production:quota:', 'v1:production:meta:'
     ];
 
     let totalCleared = 0;
-    const clearedDetails = [];
-
-    // Use a pipeline for efficiency
+    
     const pipeline = redis.pipeline();
     for (const prefix of prefixes) {
-      let cursor = 0;
+      let cursor = '0';
       do {
-        const result = await redis.scan(cursor, { MATCH: `${prefix}*`, COUNT: 250 });
-        cursor = result.cursor;
-        if (result.keys.length > 0) {
-          pipeline.del(result.keys);
-          totalCleared += result.keys.length;
+        const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', `${prefix}*`, 'COUNT', 250);
+        cursor = nextCursor;
+        if (keys.length > 0) {
+          pipeline.del(...keys);
+          totalCleared += keys.length;
         }
-      } while (cursor !== 0);
+      } while (cursor !== '0');
     }
     await pipeline.exec();
 
@@ -505,12 +500,12 @@ async function handleApiStatus(bot, chatId, messageId) {
 
   try {
     const redis = await getRedisClient();
-    if (redis?.isReady) {
+    if (redis?.status === 'ready') {
       const pong = await redis.ping();
-      const size = await redis.dbSize();
+      const size = await redis.dbsize();
       statuses['Redis'] = pong === 'PONG' ? `✅ Connected & Working (${size} keys)` : '❌ Ping Failed';
     } else {
-      statuses['Redis'] = `❌ Not Connected (status: ${redis?.isOpen ? 'connecting' : 'closed'})`;
+      statuses['Redis'] = `❌ Not Connected (status: ${redis?.status || 'unknown'})`;
     }
   } catch (error) {
     console.error('Redis check error:', error.message);
