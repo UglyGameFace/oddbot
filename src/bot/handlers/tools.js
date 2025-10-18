@@ -8,7 +8,6 @@ import env from '../../config/env.js';
 import axios from 'axios';
 
 export function registerTools(bot) {
-  // FIX: Escaped the forward slash in the regex to make it a valid pattern.
   bot.onText(/^\/tools$/, async (msg) => {
     await sendToolsMenu(bot, msg.chat.id);
   });
@@ -64,7 +63,6 @@ export function registerToolsCallbacks(bot) {
 }
 
 async function sendToolsMenu(bot, chatId, messageId = null) {
-  // FIX: Use backticks (`) for multi-line strings.
   const text = `🛠️ *Admin Tools*
 
 Select a tool to use:`;
@@ -102,25 +100,29 @@ async function handleHealthCheck(bot, chatId, messageId) {
 
   try {
     const healthReport = await healthService.getHealth();
-
-    // IMPROVEMENT: Use Markdown for better readability.
     let healthText = `❤️ *SYSTEM HEALTH REPORT*\n\n`;
 
-    // Overall status
-    if (healthReport && healthReport.overall) {
+    // FIX: Add fallback logic for overall health status.
+    if (healthReport?.overall) {
       healthText += `*Overall:* ${healthReport.overall.healthy ? '✅ Healthy' : '❌ Unhealthy'}\n`;
       healthText += `_Timestamp: ${new Date(healthReport.overall.timestamp).toLocaleString()}_\n\n`;
+    } else if (healthReport?.services) {
+      // Calculate overall status from services if the main one is missing.
+      const allOk = Object.values(healthReport.services).every(s => s?.ok);
+      healthText += `*Overall:* ${allOk ? '✅ Healthy' : '❌ Unhealthy'} _(inferred)_\n`;
+      healthText += `_Timestamp: ${new Date().toLocaleString()}_\n\n`;
     } else {
       healthText += `*Overall:* ⚠️ Health data unavailable\n\n`;
     }
 
     // Service status
     healthText += '*Services:*\n';
-    if (healthReport && healthReport.services) {
+    if (healthReport?.services) {
       Object.entries(healthReport.services).forEach(([service, status]) => {
-        const statusIcon = status && status.ok ? '✅' : '❌';
-        healthText += `${statusIcon} ${service}: ${status && status.ok ? 'OK' : 'ERROR'}`;
-        if (status && status.details) {
+        const statusIcon = status?.ok ? '✅' : '❌';
+        const statusText = status?.ok ? 'OK' : 'ERROR';
+        healthText += `${statusIcon} ${service}: ${statusText}`;
+        if (status?.details) {
           healthText += ` (${status.details})`;
         }
         healthText += '\n';
@@ -133,15 +135,15 @@ async function handleHealthCheck(bot, chatId, messageId) {
       chat_id: chatId,
       message_id: messageId,
       parse_mode: 'Markdown',
-      reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] } }
-    );
+      reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] }
+    });
   } catch (error) {
     console.error('Health check error:', error);
     await bot.editMessageText('❌ Failed to get health report', {
       chat_id: chatId,
       message_id: messageId,
-      reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] } }
-    );
+      reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] }
+    });
   }
 }
 
@@ -151,22 +153,33 @@ async function handleRedisInfo(bot, chatId, messageId) {
     message_id: messageId
   });
 
-  // Safe SCAN counting helper
+  // FIX: Switched to modern node-redis v4 syntax for SCAN.
   async function sampleAndCount(redis, pattern, limitMs = 2000) {
-    let cursor = '0';
+    let cursor = 0; // Use a number for the cursor
     let count = 0;
     const samples = [];
     const deadline = Date.now() + limitMs;
-
+  
     do {
-      const [next, keys] = await redis.scan(cursor, 'MATCH', `${pattern}*`, 'COUNT', '500');
-      count += keys.length;
-      if (samples.length < 3) samples.push(...keys.slice(0, 3).map(k => k.replace(pattern, '')));
-      cursor = next;
-      if (Date.now() > deadline) break;
-    } while (cursor !== '0');
+      const result = await redis.scan(cursor, {
+        MATCH: `${pattern}*`,
+        COUNT: 500
+      });
+      
+      cursor = result.cursor;
+      const keys = result.keys;
 
-    return { count, samples: samples.slice(0, 3) };
+      if (keys.length > 0) {
+        count += keys.length;
+        if (samples.length < 3) {
+            samples.push(...keys.slice(0, 3 - samples.length).map(k => k.replace(pattern, '')));
+        }
+      }
+      
+      if (Date.now() > deadline) break;
+    } while (cursor !== 0);
+  
+    return { count, samples };
   }
 
   try {
@@ -176,32 +189,27 @@ async function handleRedisInfo(bot, chatId, messageId) {
     }
 
     const [dbsize, fullInfo, memoryInfo] = await Promise.all([
-      redis.dbsize(),
+      redis.dbSize(),
       redis.info(),
       redis.info('memory')
     ]);
 
     let redisText = `💾 *REDIS INFORMATION*\n\n`;
 
-    // Basic connection info
-    redisText += `*Connected:* ${redis.status === 'ready' ? '✅ Yes' : '❌ No'}\n`;
+    redisText += `*Connected:* ${redis.isReady ? '✅ Yes' : '❌ No'}\n`;
     redisText += `*Total Keys:* \`${dbsize}\`\n`;
 
-    // Memory
-    // FIX: Corrected regex patterns (\S+ and \d+)
     const usedMemory = memoryInfo.match(/used_memory_human:(\S+)/)?.[1] || 'Unknown';
     const maxMemory = memoryInfo.match(/maxmemory_human:(\S+)/)?.[1] || '0B';
     const memoryStatus = maxMemory === '0B' ? 'No limit' : maxMemory;
     redisText += `*Memory Usage:* ${usedMemory} / ${memoryStatus}\n`;
 
-    // Version + uptime
     const version = fullInfo.match(/redis_version:(\S+)/)?.[1] || 'Unknown';
     const uptimeSeconds = fullInfo.match(/uptime_in_seconds:(\d+)/)?.[1] || '0';
     const uptimeDays = Math.floor(parseInt(uptimeSeconds, 10) / 86400);
     redisText += `*Version:* ${version}\n`;
     redisText += `*Uptime:* ${uptimeDays} days\n`;
 
-    // Key patterns via SCAN
     redisText += '\n*Key Patterns:*\n';
     const keyPatterns = ['odds:', 'player_props:', 'games:', 'user:', 'parlay:', 'meta:'];
     for (const pattern of keyPatterns) {
@@ -215,7 +223,6 @@ async function handleRedisInfo(bot, chatId, messageId) {
       }
     }
 
-    // Health: ping primary; write test optional
     let healthLabel = '❌ Error';
     try {
       const pong = await redis.ping();
@@ -261,7 +268,6 @@ async function handleOddsFreshness(bot, chatId, messageId) {
 
     let freshnessText = `📊 *ODDS DATA FRESHNESS REPORT*\n\n`;
 
-    // Last ingestion time
     if (lastIngestISO) {
       const lastIngestDate = new Date(lastIngestISO);
       const now = new Date();
@@ -272,7 +278,6 @@ async function handleOddsFreshness(bot, chatId, messageId) {
       freshnessText += `*Last Refresh:* ❌ No successful run recorded\n\n`;
     }
 
-    // Date range
     if (dateRange && dateRange.min_date && dateRange.max_date) {
       const minDate = new Date(dateRange.min_date);
       const maxDate = new Date(dateRange.max_date);
@@ -283,7 +288,6 @@ async function handleOddsFreshness(bot, chatId, messageId) {
       freshnessText += `*Game Date Range:* ❌ No games in database\n\n`;
     }
 
-    // Game counts by sport
     if (gameCounts && gameCounts.length > 0) {
       let totalGames = 0;
       freshnessText += '*Games by Sport:*\n';
@@ -367,33 +371,24 @@ async function handleCacheClear(bot, chatId, messageId) {
     let totalCleared = 0;
     const clearedDetails = [];
 
+    // Use a pipeline for efficiency
+    const pipeline = redis.pipeline();
     for (const prefix of prefixes) {
-      let prefixCount = 0;
-      let cursor = '0';
-
+      let cursor = 0;
       do {
-        const scanResult = await redis.scan(cursor, 'MATCH', `${prefix}*`, 'COUNT', '100');
-        cursor = scanResult[0];
-        const keys = scanResult[1];
-
-        if (keys.length > 0) {
-          const deleted = await redis.del(...keys);
-          prefixCount += deleted;
-          totalCleared += deleted;
+        const result = await redis.scan(cursor, { MATCH: `${prefix}*`, COUNT: 250 });
+        cursor = result.cursor;
+        if (result.keys.length > 0) {
+          pipeline.del(result.keys);
+          totalCleared += result.keys.length;
         }
-      } while (cursor !== '0');
-
-      if (prefixCount > 0) {
-        clearedDetails.push(`- \`${prefix}\`: ${prefixCount} keys`);
-      }
+      } while (cursor !== 0);
     }
+    await pipeline.exec();
+
 
     let clearText = `✅ *Cache cleared successfully!*\n\n`;
     clearText += `*Total keys cleared:* \`${totalCleared}\`\n`;
-
-    if (clearedDetails.length > 0) {
-      clearText += `\n*Details:*\n${clearedDetails.join('\n')}`;
-    }
 
     if (totalCleared === 0) {
       clearText += `\n_No keys matched the patterns (cache might have already been empty)._`;
@@ -424,7 +419,6 @@ async function handleApiStatus(bot, chatId, messageId) {
   const statuses = {};
   const checkPromises = [];
 
-  // OPTIMIZATION: Use a faster, cheaper model for a simple health check.
   if (env.PERPLEXITY_API_KEY) {
     checkPromises.push(
       axios.post(
@@ -471,7 +465,6 @@ async function handleApiStatus(bot, chatId, messageId) {
     statuses['Perplexity AI'] = '🔴 Not Configured';
   }
 
-  // The Odds API Check — functional
   if (env.THE_ODDS_API_KEY) {
     checkPromises.push(
       axios.get(`https://api.the-odds-api.com/v4/sports?apiKey=${env.THE_ODDS_API_KEY}`, {
@@ -502,37 +495,34 @@ async function handleApiStatus(bot, chatId, messageId) {
 
   await Promise.allSettled(checkPromises);
 
-  // Database status — simple query
   try {
     const testResult = await databaseService.getSportGameCounts().catch(() => null);
-    statuses['Database'] = Array.isArray(testResult) ? '✅ Connected & Working' : '⚠️ Connected (No Data)';
+    statuses['Database'] = Array.isArray(testResult) ? '✅ Connected & Working' : '⚠️ Connected (Query Failed)';
   } catch (error) {
     console.error('Database check error:', error.message);
     statuses['Database'] = '❌ Connection Failed';
   }
 
-  // Redis status — readiness + ping
   try {
     const redis = await getRedisClient();
-    if (redis?.status === 'ready') {
+    if (redis?.isReady) {
       const pong = await redis.ping();
-      const size = await redis.dbsize();
+      const size = await redis.dbSize();
       statuses['Redis'] = pong === 'PONG' ? `✅ Connected & Working (${size} keys)` : '❌ Ping Failed';
     } else {
-      statuses['Redis'] = `❌ Not Connected (status: ${redis?.status || 'unknown'})`;
+      statuses['Redis'] = `❌ Not Connected (status: ${redis?.isOpen ? 'connecting' : 'closed'})`;
     }
   } catch (error) {
     console.error('Redis check error:', error.message);
     statuses['Redis'] = '❌ Connection Failed';
   }
 
-  // Format the status report
   let statusText = `📡 *API STATUS REPORT (REAL TESTS)*\n\n`;
-  statusText += '*🤖 AI Services:*\n';
+  statusText += `*🤖 AI Services:*\n`;
   statusText += `Perplexity AI: ${statuses['Perplexity AI']}\n\n`;
-  statusText += '*📊 Data Providers:*\n';
+  statusText += `*📊 Data Providers:*\n`;
   statusText += `The Odds API: ${statuses['The Odds API']}\n\n`;
-  statusText += '*💾 Infrastructure:*\n';
+  statusText += `*💾 Infrastructure:*\n`;
   statusText += `Database: ${statuses['Database']}\n`;
   statusText += `Redis: ${statuses['Redis']}\n`;
 
@@ -553,7 +543,6 @@ async function handleDbStats(bot, chatId, messageId) {
   try {
     let statsText = `📊 *DATABASE STATISTICS*\n\n`;
 
-    // REAL database counts
     try {
       const gameCounts = await databaseService.getSportGameCounts();
       if (gameCounts?.length > 0) {
@@ -579,7 +568,6 @@ async function handleDbStats(bot, chatId, messageId) {
       statsText += '*Games:* ❌ Error fetching data\n\n';
     }
 
-    // REAL API Quota Status
     statsText += `📈 *API QUOTA STATUS*\n\n`;
 
     try {
