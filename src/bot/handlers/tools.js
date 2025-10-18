@@ -1,4 +1,4 @@
-// src/bot/handlers/tools.js - COMPLETELY FIXED & ACCURATE VERSION (FINAL)
+// src/bot/handlers/tools.js - COMPLETELY FIXED & ACCURATE VERSION
 
 import { getRedisClient } from '../../services/redisService.js';
 import databaseService from '../../services/databaseService.js';
@@ -8,7 +8,7 @@ import env from '../../config/env.js';
 import axios from 'axios';
 
 export function registerTools(bot) {
-  // FIXED: escape slash in regex so the literal is valid
+  // FIX: escape slash in regex so it’s a valid pattern
   bot.onText(/^/tools$/, async (msg) => {
     await sendToolsMenu(bot, msg.chat.id);
   });
@@ -49,16 +49,16 @@ export function registerToolsCallbacks(bot) {
           await bot.editMessageText('❌ Unknown tool action', {
             chat_id: chatId,
             message_id: messageId,
-            reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] } }
-          );
+            reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] }
+          });
       }
     } catch (error) {
       console.error('Tools callback error:', error);
       await bot.editMessageText('❌ Tool action failed', {
         chat_id: chatId,
         message_id: messageId,
-        reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] } }
-      );
+        reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] }
+      });
     }
   });
 }
@@ -158,7 +158,7 @@ async function handleRedisInfo(bot, chatId, messageId) {
     message_id: messageId
   });
 
-  // helper: safe SCAN-based counting with timebox
+  // Safe SCAN counting helper
   async function sampleAndCount(redis, pattern, limitMs = 2000) {
     let cursor = '0';
     let count = 0;
@@ -182,7 +182,6 @@ async function handleRedisInfo(bot, chatId, messageId) {
       throw new Error('Redis client not available');
     }
 
-    // Get Redis information
     const [dbsize, fullInfo, memoryInfo] = await Promise.all([
       redis.dbsize(),
       redis.info(),
@@ -199,14 +198,14 @@ async function handleRedisInfo(bot, chatId, messageId) {
     redisText += `Total Keys: ${dbsize}
 `;
 
-    // Memory information
+    // Memory
     const usedMemory = memoryInfo.match(/used_memory_human:(S+)/)?.[1] || 'Unknown';
     const maxMemory = memoryInfo.match(/maxmemory_human:(S+)/)?.[1] || '0';
     const memoryStatus = maxMemory === '0' ? 'No limit' : maxMemory;
     redisText += `Memory Usage: ${usedMemory} / ${memoryStatus}
 `;
 
-    // Redis version and uptime
+    // Version + uptime
     const version = fullInfo.match(/redis_version:(S+)/)?.[1] || 'Unknown';
     const uptimeSeconds = fullInfo.match(/uptime_in_seconds:(d+)/)?.[1] || '0';
     const uptimeDays = Math.floor(parseInt(uptimeSeconds, 10) / 86400);
@@ -215,7 +214,7 @@ async function handleRedisInfo(bot, chatId, messageId) {
     redisText += `Uptime: ${uptimeDays} days
 `;
 
-    // Key pattern overview (SCAN-based)
+    // Key patterns via SCAN
     redisText += '
 Key Patterns:
 ';
@@ -233,7 +232,7 @@ Key Patterns:
       }
     }
 
-    // Health: prioritize ping; write test optional and non-fatal
+    // Health: ping primary; write test optional
     let healthLabel = '❌ Error';
     try {
       const pong = await redis.ping();
@@ -244,10 +243,10 @@ Key Patterns:
         await redis.get(k);
         await redis.del(k);
       } catch (_) {
-        // ignore write-test failures to avoid false negatives
+        // ignore write-test failures
       }
     } catch (_) {
-      // keep error label
+      // keep error
     }
     redisText += `
 Health Check: ${healthLabel}
@@ -473,7 +472,7 @@ async function handleApiStatus(bot, chatId, messageId) {
   const statuses = {};
   const checkPromises = [];
 
-  // Perplexity AI Check — mirror production (sonar-pro)
+  // Perplexity AI Check — sonar-pro to mirror production
   if (env.PERPLEXITY_API_KEY) {
     checkPromises.push(
       axios.post(
@@ -520,7 +519,7 @@ async function handleApiStatus(bot, chatId, messageId) {
     statuses['Perplexity AI'] = '🔴 Not Configured';
   }
 
-  // The Odds API Check — functional test
+  // The Odds API Check — functional
   if (env.THE_ODDS_API_KEY) {
     checkPromises.push(
       axios.get(`https://api.the-odds-api.com/v4/sports?apiKey=${env.THE_ODDS_API_KEY}`, {
@@ -549,7 +548,6 @@ async function handleApiStatus(bot, chatId, messageId) {
     statuses['The Odds API'] = '🔴 Not Configured';
   }
 
-  // Wait for all external checks
   await Promise.allSettled(checkPromises);
 
   // Database status — simple query
@@ -565,7 +563,7 @@ async function handleApiStatus(bot, chatId, messageId) {
     statuses['Database'] = '❌ Connection Failed';
   }
 
-  // Redis status — prefer readiness + ping; avoid fatal write test
+  // Redis status — readiness + ping
   try {
     const redis = await getRedisClient();
     if (redis && redis.status === 'ready') {
@@ -630,10 +628,12 @@ async function handleDbStats(bot, chatId, messageId) {
 
         statsText += 'Games by Sport:
 ';
+
         gameCounts.forEach(stat => {
           const title = stat.sport_title || stat.sport_key || 'Unknown';
           const count = stat.total_games || 0;
           totalGames += count;
+
           if (count > 0) {
             activeSports++;
             statsText += `- ${title}: ${count} games
@@ -663,6 +663,7 @@ Total Games: ${totalGames}
     statsText += '📈 API QUOTA STATUS
 
 ';
+
     try {
       const quota = await rateLimitService.getProviderQuota('theodds');
 
