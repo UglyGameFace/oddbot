@@ -1,4 +1,4 @@
-// src/bot/handlers/tools.js - COMPLETELY FIXED & ACCURATE VERSION (UPDATED)
+// src/bot/handlers/tools.js - COMPLETELY FIXED & ACCURATE VERSION (FINAL)
 
 import { getRedisClient } from '../../services/redisService.js';
 import databaseService from '../../services/databaseService.js';
@@ -8,6 +8,7 @@ import env from '../../config/env.js';
 import axios from 'axios';
 
 export function registerTools(bot) {
+  // FIXED: escape slash in regex so the literal is valid
   bot.onText(/^/tools$/, async (msg) => {
     await sendToolsMenu(bot, msg.chat.id);
   });
@@ -48,16 +49,16 @@ export function registerToolsCallbacks(bot) {
           await bot.editMessageText('❌ Unknown tool action', {
             chat_id: chatId,
             message_id: messageId,
-            reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] }
-          });
+            reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] } }
+          );
       }
     } catch (error) {
       console.error('Tools callback error:', error);
       await bot.editMessageText('❌ Tool action failed', {
         chat_id: chatId,
         message_id: messageId,
-        reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] }
-      });
+        reply_markup: { inline_keyboard: [[{ text: '« Back to Tools', callback_data: 'tools_main' }]] } }
+      );
     }
   });
 }
@@ -181,7 +182,7 @@ async function handleRedisInfo(bot, chatId, messageId) {
       throw new Error('Redis client not available');
     }
 
-    // COMPLETE Redis information
+    // Get Redis information
     const [dbsize, fullInfo, memoryInfo] = await Promise.all([
       redis.dbsize(),
       redis.info(),
@@ -198,7 +199,7 @@ async function handleRedisInfo(bot, chatId, messageId) {
     redisText += `Total Keys: ${dbsize}
 `;
 
-    // Accurate memory information
+    // Memory information
     const usedMemory = memoryInfo.match(/used_memory_human:(S+)/)?.[1] || 'Unknown';
     const maxMemory = memoryInfo.match(/maxmemory_human:(S+)/)?.[1] || '0';
     const memoryStatus = maxMemory === '0' ? 'No limit' : maxMemory;
