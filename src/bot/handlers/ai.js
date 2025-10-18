@@ -175,7 +175,7 @@ async function renderOrRetry(bot, chatId, messageId, sportKey, numLegs, parlay, 
   await safeEditMessage(bot, chatId, messageId, text, { parse_mode: 'HTML' });
 }
 
-// Exported registration function, preserving your bot registration pattern
+// Exported registration function
 export function registerAI(bot) {
   // Slash command entry point
   bot.onText(//ai(?:s+(.+))?/, async (msg, match) => {
