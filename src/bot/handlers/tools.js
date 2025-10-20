@@ -9,7 +9,7 @@ import axios from 'axios';
 
 export function registerTools(bot) {
   // FIX: escape slash in regex so it’s a valid pattern
-  bot.onText(/^/tools$/, async (msg) => {
+  bot.onText(/^\/tools$/, async (msg) => {
     await sendToolsMenu(bot, msg.chat.id);
   });
 }
@@ -64,9 +64,7 @@ export function registerToolsCallbacks(bot) {
 }
 
 async function sendToolsMenu(bot, chatId, messageId = null) {
-  const text = '🛠️ Admin Tools
-
-Select a tool to use:';
+  const text = '🛠️ Admin Tools\n\nSelect a tool to use:';
   const keyboard = [
     [{ text: '🔄 Trigger Odds Ingestion', callback_data: 'tools_ingest' }],
     [{ text: '📊 Odds Freshness', callback_data: 'tools_freshness' }],
@@ -102,26 +100,18 @@ async function handleHealthCheck(bot, chatId, messageId) {
   try {
     const healthReport = await healthService.getHealth();
 
-    let healthText = '❤️ SYSTEM HEALTH REPORT
-
-';
+    let healthText = '❤️ SYSTEM HEALTH REPORT\n\n';
 
     // Overall status
     if (healthReport && healthReport.overall) {
-      healthText += `Overall: ${healthReport.overall.healthy ? '✅ Healthy' : '❌ Unhealthy'}
-`;
-      healthText += `Timestamp: ${new Date(healthReport.overall.timestamp).toLocaleString()}
-
-`;
+      healthText += `Overall: ${healthReport.overall.healthy ? '✅ Healthy' : '❌ Unhealthy'}\n`;
+      healthText += `Timestamp: ${new Date(healthReport.overall.timestamp).toLocaleString()}\n\n`;
     } else {
-      healthText += `Overall: ⚠️ Health data unavailable
-
-`;
+      healthText += `Overall: ⚠️ Health data unavailable\n\n`;
     }
 
     // Service status
-    healthText += 'Services:
-';
+    healthText += 'Services:\n';
     if (healthReport && healthReport.services) {
       Object.entries(healthReport.services).forEach(([service, status]) => {
         const statusIcon = status && status.ok ? '✅' : '❌';
@@ -129,12 +119,10 @@ async function handleHealthCheck(bot, chatId, messageId) {
         if (status && status.details) {
           healthText += ` (${status.details})`;
         }
-        healthText += '
-';
+        healthText += '\n';
       });
     } else {
-      healthText += '⚠️ No service data available
-';
+      healthText += '⚠️ No service data available\n';
     }
 
     await bot.editMessageText(healthText, {
@@ -188,47 +176,36 @@ async function handleRedisInfo(bot, chatId, messageId) {
       redis.info('memory')
     ]);
 
-    let redisText = '💾 REDIS INFORMATION
-
-';
+    let redisText = '💾 REDIS INFORMATION\n\n';
 
     // Basic connection info
-    redisText += `Connected: ${redis.status === 'ready' ? '✅ Yes' : '❌ No'}
-`;
-    redisText += `Total Keys: ${dbsize}
-`;
+    redisText += `Connected: ${redis.status === 'ready' ? '✅ Yes' : '❌ No'}\n`;
+    redisText += `Total Keys: ${dbsize}\n`;
 
     // Memory
-    const usedMemory = memoryInfo.match(/used_memory_human:(S+)/)?.[1] || 'Unknown';
-    const maxMemory = memoryInfo.match(/maxmemory_human:(S+)/)?.[1] || '0';
+    const usedMemory = memoryInfo.match(/used_memory_human:(\S+)/)?.[1] || 'Unknown';
+    const maxMemory = memoryInfo.match(/maxmemory_human:(\S+)/)?.[1] || '0';
     const memoryStatus = maxMemory === '0' ? 'No limit' : maxMemory;
-    redisText += `Memory Usage: ${usedMemory} / ${memoryStatus}
-`;
+    redisText += `Memory Usage: ${usedMemory} / ${memoryStatus}\n`;
 
     // Version + uptime
-    const version = fullInfo.match(/redis_version:(S+)/)?.[1] || 'Unknown';
-    const uptimeSeconds = fullInfo.match(/uptime_in_seconds:(d+)/)?.[1] || '0';
+    const version = fullInfo.match(/redis_version:(\S+)/)?.[1] || 'Unknown';
+    const uptimeSeconds = fullInfo.match(/uptime_in_seconds:(\d+)/)?.[1] || '0';
     const uptimeDays = Math.floor(parseInt(uptimeSeconds, 10) / 86400);
-    redisText += `Version: ${version}
-`;
-    redisText += `Uptime: ${uptimeDays} days
-`;
+    redisText += `Version: ${version}\n`;
+    redisText += `Uptime: ${uptimeDays} days\n`;
 
     // Key patterns via SCAN
-    redisText += '
-Key Patterns:
-';
+    redisText += '\nKey Patterns:\n';
     const keyPatterns = ['odds:', 'player_props:', 'games:', 'user:', 'parlay:', 'meta:'];
     for (const pattern of keyPatterns) {
       try {
         const { count, samples } = await sampleAndCount(redis, pattern);
         const sampleText = samples.length ? ` (sample: ${samples.join(', ')})` : '';
-        redisText += `- ${pattern}: ${count} keys${sampleText}
-`;
+        redisText += `- ${pattern}: ${count} keys${sampleText}\n`;
       } catch (e) {
         console.error(`Redis scan error for ${pattern}:`, e.message);
-        redisText += `- ${pattern}: Error checking
-`;
+        redisText += `- ${pattern}: Error checking\n`;
       }
     }
 
@@ -248,9 +225,7 @@ Key Patterns:
     } catch (_) {
       // keep error
     }
-    redisText += `
-Health Check: ${healthLabel}
-`;
+    redisText += `\nHealth Check: ${healthLabel}\n`;
 
     await bot.editMessageText(redisText, {
       chat_id: chatId,
@@ -281,63 +256,45 @@ async function handleOddsFreshness(bot, chatId, messageId) {
       databaseService.getSportGameCounts().catch(() => [])
     ]);
 
-    let freshnessText = '📊 ODDS DATA FRESHNESS REPORT
-
-';
+    let freshnessText = '📊 ODDS DATA FRESHNESS REPORT\n\n';
 
     // Last ingestion time
     if (lastIngestISO) {
       const lastIngestDate = new Date(lastIngestISO);
       const now = new Date();
       const hoursAgo = Math.round((now - lastIngestDate) / (1000 * 60 * 60));
-      freshnessText += `Last Refresh: ${lastIngestDate.toLocaleString()}
-`;
-      freshnessText += `Age: ${hoursAgo} hours ago
-
-`;
+      freshnessText += `Last Refresh: ${lastIngestDate.toLocaleString()}\n`;
+      freshnessText += `Age: ${hoursAgo} hours ago\n\n`;
     } else {
-      freshnessText += `Last Refresh: ❌ No successful run recorded
-
-`;
+      freshnessText += `Last Refresh: ❌ No successful run recorded\n\n`;
     }
 
     // Date range
     if (dateRange && dateRange.min_date && dateRange.max_date) {
       const minDate = new Date(dateRange.min_date);
       const maxDate = new Date(dateRange.max_date);
-      freshnessText += `Game Date Range:
-`;
-      freshnessText += `From: ${minDate.toLocaleDateString()}
-`;
-      freshnessText += `To:   ${maxDate.toLocaleDateString()}
-
-`;
+      freshnessText += `Game Date Range:\n`;
+      freshnessText += `From: ${minDate.toLocaleDateString()}\n`;
+      freshnessText += `To:   ${maxDate.toLocaleDateString()}\n\n`;
     } else {
-      freshnessText += `Game Date Range: ❌ No games in database
-
-`;
+      freshnessText += `Game Date Range: ❌ No games in database\n\n`;
     }
 
     // Game counts by sport
     if (gameCounts && gameCounts.length > 0) {
       let totalGames = 0;
-      freshnessText += 'Games by Sport:
-';
+      freshnessText += 'Games by Sport:\n';
       gameCounts.forEach(stat => {
         const title = stat.sport_title || stat.sport_key || 'Unknown';
         const count = stat.total_games || 0;
         totalGames += count;
         if (count > 0) {
-          freshnessText += `- ${title}: ${count} games
-`;
+          freshnessText += `- ${title}: ${count} games\n`;
         }
       });
-      freshnessText += `
-Total Games: ${totalGames}
-`;
+      freshnessText += `\nTotal Games: ${totalGames}\n`;
     } else {
-      freshnessText += `Games: ❌ No game data found
-`;
+      freshnessText += `Games: ❌ No game data found\n`;
     }
 
     await bot.editMessageText(freshnessText, {
@@ -365,12 +322,8 @@ async function handleManualIngest(bot, chatId, messageId) {
     await redis.publish('odds_ingestion_trigger', 'run');
 
     const responseText =
-      `✅ Trigger sent to odds ingestion worker.
-
-` +
-      `The worker will process on its next cycle (usually within 1-2 minutes).
-
-` +
+      `✅ Trigger sent to odds ingestion worker.\n\n` +
+      `The worker will process on its next cycle (usually within 1-2 minutes).\n\n` +
       `Check the worker logs on Railway to monitor progress.`;
 
     await bot.editMessageText(responseText, {
@@ -430,22 +383,15 @@ async function handleCacheClear(bot, chatId, messageId) {
       }
     }
 
-    let clearText = `✅ Cache cleared successfully!
-
-`;
-    clearText += `Total keys cleared: ${totalCleared}
-`;
+    let clearText = `✅ Cache cleared successfully!\n\n`;
+    clearText += `Total keys cleared: ${totalCleared}\n`;
 
     if (clearedDetails.length > 0) {
-      clearText += `
-Cleared:
-${clearedDetails.join('
-')}`;
+      clearText += `\nCleared:\n${clearedDetails.join('\n')}`;
     }
 
     if (totalCleared === 0) {
-      clearText += `
-No keys matched the patterns (cache might already be empty)`;
+      clearText += `\nNo keys matched the patterns (cache might already be empty)`;
     }
 
     await bot.editMessageText(clearText, {
@@ -581,25 +527,14 @@ async function handleApiStatus(bot, chatId, messageId) {
   }
 
   // Format the status report
-  let statusText = '📡 API STATUS REPORT (REAL TESTS)
-
-';
-  statusText += '🤖 AI Services:
-';
-  statusText += `Perplexity AI: ${statuses['Perplexity AI']}
-`;
-  statusText += '
-📊 Data Providers:
-';
-  statusText += `The Odds API: ${statuses['The Odds API']}
-`;
-  statusText += '
-💾 Infrastructure:
-';
-  statusText += `Database: ${statuses['Database']}
-`;
-  statusText += `Redis: ${statuses['Redis']}
-`;
+  let statusText = '📡 API STATUS REPORT (REAL TESTS)\n\n';
+  statusText += '🤖 AI Services:\n';
+  statusText += `Perplexity AI: ${statuses['Perplexity AI']}\n`;
+  statusText += '\n📊 Data Providers:\n';
+  statusText += `The Odds API: ${statuses['The Odds API']}\n`;
+  statusText += '\n💾 Infrastructure:\n';
+  statusText += `Database: ${statuses['Database']}\n`;
+  statusText += `Redis: ${statuses['Redis']}\n`;
 
   await bot.editMessageText(statusText, {
     chat_id: chatId,
@@ -615,9 +550,7 @@ async function handleDbStats(bot, chatId, messageId) {
   });
 
   try {
-    let statsText = '📊 DATABASE STATISTICS
-
-';
+    let statsText = '📊 DATABASE STATISTICS\n\n';
 
     // REAL database counts
     try {
@@ -626,8 +559,7 @@ async function handleDbStats(bot, chatId, messageId) {
         let totalGames = 0;
         let activeSports = 0;
 
-        statsText += 'Games by Sport:
-';
+        statsText += 'Games by Sport:\n';
 
         gameCounts.forEach(stat => {
           const title = stat.sport_title || stat.sport_key || 'Unknown';
@@ -636,33 +568,22 @@ async function handleDbStats(bot, chatId, messageId) {
 
           if (count > 0) {
             activeSports++;
-            statsText += `- ${title}: ${count} games
-`;
+            statsText += `- ${title}: ${count} games\n`;
           }
         });
 
-        statsText += `
-Total Games: ${totalGames}
-`;
-        statsText += `Active Sports: ${activeSports}
-
-`;
+        statsText += `\nTotal Games: ${totalGames}\n`;
+        statsText += `Active Sports: ${activeSports}\n\n`;
       } else {
-        statsText += 'Games: ❌ No data found in database
-
-';
+        statsText += 'Games: ❌ No data found in database\n\n';
       }
     } catch (dbError) {
       console.error('Database stats error:', dbError);
-      statsText += 'Games: ❌ Error fetching data
-
-';
+      statsText += 'Games: ❌ Error fetching data\n\n';
     }
 
     // REAL API Quota Status
-    statsText += '📈 API QUOTA STATUS
-
-';
+    statsText += '📈 API QUOTA STATUS\n\n';
 
     try {
       const quota = await rateLimitService.getProviderQuota('theodds');
@@ -674,32 +595,22 @@ Total Games: ${totalGames}
         const lastUpdated = quota.at ? new Date(quota.at).toLocaleString() : 'Never';
         const critical = quota.critical ? ' ⚠️ CRITICAL' : '';
 
-        statsText += `The Odds API:
-`;
-        statsText += `- Remaining: ${remaining}${critical}
-`;
-        statsText += `- Used: ${used}
-`;
-        statsText += `- Limit: ${limit}
-`;
-        statsText += `- Last Updated: ${lastUpdated}
-`;
+        statsText += `The Odds API:\n`;
+        statsText += `- Remaining: ${remaining}${critical}\n`;
+        statsText += `- Used: ${used}\n`;
+        statsText += `- Limit: ${limit}\n`;
+        statsText += `- Last Updated: ${lastUpdated}\n`;
 
         if (quota.critical) {
-          statsText += `
-⚠️ WARNING: API quota critically low!
-`;
+          statsText += `\n⚠️ WARNING: API quota critically low!\n`;
         }
       } else {
-        statsText += `The Odds API: No quota data available
-`;
-        statsText += `Trigger odds ingestion to populate data
-`;
+        statsText += `The Odds API: No quota data available\n`;
+        statsText += `Trigger odds ingestion to populate data\n`;
       }
     } catch (quotaError) {
       console.error('Quota check error:', quotaError);
-      statsText += `The Odds API: ❌ Error fetching quota
-`;
+      statsText += `The Odds API: ❌ Error fetching quota\n`;
     }
 
     await bot.editMessageText(statsText, {
