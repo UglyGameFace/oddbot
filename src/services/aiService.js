@@ -74,22 +74,22 @@ class QuantumValidationEngine {
     ]);
     this.sportRealisticRanges = new Map([
       ['americanfootball_nfl', {
-        totals: { min: 30, max: 60, typical: [4][5] },
+        totals: { min: 30, max: 60, typical: [40, 55] },
         spreads: { min: -20, max: 20, typical: [-14, 14] },
         playerProps: { passingYards: { min: 150, max: 450 }, rushingYards: { min: 30, max: 180 }, receivingYards: { min: 20, max: 200 } },
       }],
       ['basketball_nba', {
-        totals: { min: 180, max: 250, typical:  },
+        totals: { min: 180, max: 250, typical: [210, 235] },
         spreads: { min: -25, max: 25, typical: [-12, 12] },
         playerProps: { points: { min: 5, max: 60 }, rebounds: { min: 2, max: 25 }, assists: { min: 1, max: 20 } },
       }],
       ['baseball_mlb', {
-        totals: { min: 5, max: 15, typical: [6][7] },
+        totals: { min: 5, max: 15, typical: [6, 11] },
         spreads: { min: -3, max: 3, typical: [-2.5, 2.5] },
         playerProps: { hits: { min: 0.5, max: 4.5 }, strikeouts: { min: 1.5, max: 12.5 } },
       }],
       ['americanfootball_ncaaf', {
-        totals: { min: 30, max: 80, typical: [8][9] },
+        totals: { min: 30, max: 80, typical: [45, 65] },
         spreads: { min: -35, max: 35, typical: [-28, 28] },
       }],
     ]);
@@ -158,7 +158,7 @@ class QuantumValidationEngine {
         (name || '')
           .toLowerCase()
           .replace(/[^a-z0-9@ ]/g, '')
-          .replace(/s+/g, ' ')
+          .replace(/\s+/g, ' ')
           .trim();
       const normalizedLegGame = normalizeGameName(legGame);
       const normalizedExpectedGame = normalizeGameName(expectedGame);
@@ -183,21 +183,23 @@ class QuantumValidationEngine {
   comprehensiveParlayValidation(parlayData, gameContext, sportKey) {
     const errors = [];
     const warnings = [];
-    const validLegs = [];
+    let validLegs = [];
     if (!parlayData.legs || !Array.isArray(parlayData.legs)) {
       throw new Error('AI response missing legs array - invalid parlay structure');
     }
     const gameValidation = this.validateGameContext(parlayData.legs, gameContext);
-    validLegs.push(...gameValidation.validLegs);
+    
     errors.push(...gameValidation.errors);
     warnings.push(...gameValidation.warnings);
 
     gameValidation.validLegs.forEach((leg, index) => {
       try {
+        let isLegValid = true;
         if (leg.selection) {
           const playerValidation = this.validatePlayerTeamAlignment(leg.selection, gameContext);
           if (!playerValidation.valid) {
             errors.push(`Leg ${index + 1}: ${playerValidation.error}`);
+            isLegValid = false;
           }
         }
         const lineValidation = this.validateBettingLine(
@@ -208,15 +210,19 @@ class QuantumValidationEngine {
         );
         if (!lineValidation.valid) {
           errors.push(...lineValidation.errors);
+          isLegValid = false;
         }
         if (lineValidation.warnings?.length) warnings.push(...lineValidation.warnings);
         if (!leg.selection || leg.selection.trim() === '') {
           errors.push(`Leg ${index + 1}: Missing selection description`);
+          isLegValid = false;
         }
         if (!leg.odds || !leg.odds.american) {
           warnings.push(`Leg ${index + 1}: Missing or incomplete odds data`);
         }
-        validLegs.push(leg);
+        if(isLegValid) {
+          validLegs.push(leg);
+        }
       } catch (legError) {
         errors.push(`Leg ${index + 1} validation error: ${legError.message}`);
       }
@@ -227,7 +233,7 @@ class QuantumValidationEngine {
       validCount: validLegs.length,
       errorCount: errors.length,
       warningCount: warnings.length,
-      qualityScore: validLegs.length > 0 ? (validLegs.length / parlayData.legs.length) * 100 : 0,
+      qualityScore: parlayData.legs.length > 0 ? (validLegs.length / parlayData.legs.length) * 100 : 0,
       recommendation:
         validLegs.length === 0 ? 'REJECT' : validLegs.length === parlayData.legs.length ? 'ACCEPT' : 'PARTIAL',
     };
@@ -315,7 +321,7 @@ class QuantumAIService {
         );
         const responseTime = Date.now() - startTime;
         console.log(`✅ AI Response received in ${responseTime}ms`);
-        const responseText = response?.data?.choices?.?.message?.content || '';
+        const responseText = response?.data?.choices?.[0]?.message?.content || '';
         if (!responseText) throw new Error('Empty response from AI provider');
 
         // Strict extraction + schema validation
@@ -646,7 +652,7 @@ class QuantumAIService {
     const valuePlays = [];
     if (!games || games.length === 0) return valuePlays;
     for (const game of games) {
-      const bookmaker = game.bookmakers?.;
+      const bookmaker = game.bookmakers?.[0];
       if (!bookmaker?.markets) continue;
 
       const h2hMarket = bookmaker.markets.find((m) => m.key === 'h2h');
@@ -704,9 +710,7 @@ class QuantumAIService {
     try {
       const realGames = await gamesService.getVerifiedRealGames(sportKey, hours);
       if (realGames.length === 0) {
-        return `
-
-🎯 ELITE ANALYST MODE: No real-time ${sportKey} data available. Using fundamental analysis principles.`;
+        return `\n\n🎯 ELITE ANALYST MODE: No real-time ${sportKey} data available. Using fundamental analysis principles.`;
       }
       if (gameContext) {
         const focusedGame = realGames.find(
@@ -725,12 +729,7 @@ class QuantumAIService {
             hour: '2-digit',
             minute: '2-digit',
           });
-          return `
-
-🎯 FOCUS GAME ANALYSIS REQUIRED:
-${focusedGame.away_team} @ ${focusedGame.home_team} - ${timeStr} ${TZ}
-
-CRITICAL: All analysis MUST be based exclusively on this specific matchup.`;
+          return `\n\n🎯 FOCUS GAME ANALYSIS REQUIRED:\n${focusedGame.away_team} @ ${focusedGame.home_team} - ${timeStr} ${TZ}\n\nCRITICAL: All analysis MUST be based exclusively on this specific matchup.`;
         }
       }
       const gameList = realGames
@@ -745,19 +744,11 @@ CRITICAL: All analysis MUST be based exclusively on this specific matchup.`;
           });
           return `${index + 1}. ${game.away_team} @ ${game.home_team} - ${timeStr}`;
         })
-        .join('
-');
-      return `
-
-📅 VERIFIED SCHEDULE (Next ${hours} hours):
-${gameList}
-
-ANALYTICAL MANDATE: Base all research exclusively on these verified matchups.`;
+        .join('\n');
+      return `\n\n📅 VERIFIED SCHEDULE (Next ${hours} hours):\n${gameList}\n\nANALYTICAL MANDATE: Base all research exclusively on these verified matchups.`;
     } catch (error) {
       console.warn('⚠️ Schedule context build failed:', error.message);
-      return `
-
-🎯 ELITE ANALYST MODE: Live data temporarily limited. Applying fundamental sports analysis methodologies.`;
+      return `\n\n🎯 ELITE ANALYST MODE: Live data temporarily limited. Applying fundamental sports analysis methodologies.`;
     }
   }
 
