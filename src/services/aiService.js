@@ -188,11 +188,17 @@ class QuantumValidationEngine {
       throw new Error('AI response missing legs array - invalid parlay structure');
     }
     const gameValidation = this.validateGameContext(parlayData.legs, gameContext);
+
+    // ** BUG FIX: Add the valid legs from game context validation to our main array **
+    validLegs.push(...gameValidation.validLegs);
     
     errors.push(...gameValidation.errors);
     warnings.push(...gameValidation.warnings);
 
-    gameValidation.validLegs.forEach((leg, index) => {
+    // Note: We create a new array to hold the final, fully validated legs
+    const fullyValidatedLegs = []; 
+
+    validLegs.forEach((leg, index) => {
       try {
         let isLegValid = true;
         if (leg.selection) {
@@ -221,7 +227,7 @@ class QuantumValidationEngine {
           warnings.push(`Leg ${index + 1}: Missing or incomplete odds data`);
         }
         if(isLegValid) {
-          validLegs.push(leg);
+          fullyValidatedLegs.push(leg);
         }
       } catch (legError) {
         errors.push(`Leg ${index + 1} validation error: ${legError.message}`);
@@ -230,17 +236,17 @@ class QuantumValidationEngine {
 
     const validationSummary = {
       originalCount: parlayData.legs.length,
-      validCount: validLegs.length,
+      validCount: fullyValidatedLegs.length,
       errorCount: errors.length,
       warningCount: warnings.length,
-      qualityScore: parlayData.legs.length > 0 ? (validLegs.length / parlayData.legs.length) * 100 : 0,
+      qualityScore: parlayData.legs.length > 0 ? (fullyValidatedLegs.length / parlayData.legs.length) * 100 : 0,
       recommendation:
-        validLegs.length === 0 ? 'REJECT' : validLegs.length === parlayData.legs.length ? 'ACCEPT' : 'PARTIAL',
+        fullyValidatedLegs.length === 0 ? 'REJECT' : fullyValidatedLegs.length === parlayData.legs.length ? 'ACCEPT' : 'PARTIAL',
     };
 
     return {
       ...parlayData,
-      legs: validLegs,
+      legs: fullyValidatedLegs,
       validation: {
         ...validationSummary,
         errors,
@@ -249,7 +255,6 @@ class QuantumValidationEngine {
       },
     };
   }
-}
 
 class QuantumAIService {
   constructor() {
