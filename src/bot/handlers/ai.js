@@ -223,8 +223,10 @@ export function registerAI(bot) {
       });
     }
   });
+}
 
-  // Optional: callback path for retry button
+// ** NEW FUNCTION TO HANDLE CALLBACKS **
+export function registerAICallbacks(bot) {
   bot.on('callback_query', async (cq) => {
     const chatId = cq.message?.chat?.id;
     const messageId = cq.message?.message_id;
@@ -274,9 +276,12 @@ export function registerAI(bot) {
         });
       }
     }
+    // You can add more 'if' conditions here for other AI-related callbacks like 'ai_back_game'
   });
 }
 
+// ** UPDATED DEFAULT EXPORT **
 export default {
   registerAI,
+  registerAICallbacks, // Add the new function here
 };
