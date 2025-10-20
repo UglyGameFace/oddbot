@@ -144,8 +144,7 @@ function formatParlayText(parlay, sportKey, numLegs) {
     lines.push(`🧭 Strategy: ${escapeHTML(research_metadata.generation_strategy)}`);
   }
 
-  return lines.join('
-');
+  return lines.join('\n');
 }
 
 // Render or fail closed with a retry CTA
