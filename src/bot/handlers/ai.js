@@ -177,7 +177,7 @@ async function renderOrRetry(bot, chatId, messageId, sportKey, numLegs, parlay, 
 // Exported registration function
 export function registerAI(bot) {
   // Slash command entry point
-  bot.onText(//ai(?:s+(.+))?/, async (msg, match) => {
+  bot.onText(/\/(?:ai|parlay)(?:\s+(.+))?/, async (msg, match) => {
     const chatId = msg.chat.id;
     const messageId = msg.message_id;
     const query = (match && match[1]) || '';
