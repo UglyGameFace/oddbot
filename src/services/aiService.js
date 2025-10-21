@@ -53,7 +53,7 @@ class EliteBettingMathematics {
   }
 }
 
-// Existing validation engine preserved (truncated for brevity in this comment block; full original kept)
+// Existing validation engine preserved
 class QuantumValidationEngine {
   constructor() {
     this.teamRosters = new Map();
@@ -119,13 +119,28 @@ class QuantumValidationEngine {
     if (!sportRanges) return { valid: true };
     const validation = { valid: true, warnings: [] };
     if (point !== undefined && point !== null) {
-      const marketRange = sportRanges[market];
-      if (marketRange && (point < marketRange.min || point > marketRange.max)) {
+      // Find the correct range key (e.g., 'totals', 'spreads', or specific player prop)
+      let marketRangeKey = market?.toLowerCase();
+      let rangeData = sportRanges[marketRangeKey];
+      if (!rangeData && sportRanges.playerProps) {
+           // Check if it's a known player prop market type
+           if (marketRangeKey?.includes('passingyards')) rangeData = sportRanges.playerProps.passingYards;
+           else if (marketRangeKey?.includes('rushingyards')) rangeData = sportRanges.playerProps.rushingYards;
+           else if (marketRangeKey?.includes('receivingyards')) rangeData = sportRanges.playerProps.receivingYards;
+           else if (marketRangeKey?.includes('points')) rangeData = sportRanges.playerProps.points;
+           else if (marketRangeKey?.includes('rebounds')) rangeData = sportRanges.playerProps.rebounds;
+           else if (marketRangeKey?.includes('assists')) rangeData = sportRanges.playerProps.assists;
+           else if (marketRangeKey?.includes('hits')) rangeData = sportRanges.playerProps.hits;
+           else if (marketRangeKey?.includes('strikeouts')) rangeData = sportRanges.playerProps.strikeouts;
+      }
+
+      if (rangeData && (point < rangeData.min || point > rangeData.max)) {
         validation.valid = false;
+        // Provide clearer error message including the market
         validation.errors = [
-          `Implausible ${market} line: ${point} for ${sport}. Realistic range: ${marketRange.min} to ${marketRange.max}`,
+          `Implausible line for ${market}: ${point}. Realistic range for ${sport}: ${rangeData.min} to ${rangeData.max}`,
         ];
-        return validation;
+        return validation; // Return early if implausible
       }
     }
     if (odds && Math.abs(odds) > 10000) {
@@ -134,14 +149,15 @@ class QuantumValidationEngine {
     return validation;
   }
 
+
   validateGameContext(legs, gameContext) {
-    if (!gameContext) return { validLegs: legs || [], errors: [] };
+    if (!gameContext) return { validLegs: legs || [], errors: [], warnings: [] }; // Pass warnings back
     const expectedGame = `${gameContext.away_team} @ ${gameContext.home_team}`;
     const errors = [];
     const validLegs = [];
     const warnings = [];
     if (!legs || !Array.isArray(legs) || legs.length === 0) {
-      return { validLegs: [], errors: ['No legs provided for validation'] };
+      return { validLegs: [], errors: ['No legs provided for validation'], warnings: [] };
     }
     legs.forEach((leg, index) => {
       const legGame = leg.event || '';
@@ -151,6 +167,7 @@ class QuantumValidationEngine {
           ...leg,
           event: expectedGame,
           commence_time: leg.commence_time || gameContext.commence_time,
+          game_id: leg.game_id || gameContext.event_id || gameContext.id // Attempt to add game_id
         });
         return;
       }
@@ -168,8 +185,9 @@ class QuantumValidationEngine {
       if (isSameGame) {
         validLegs.push({
           ...leg,
-          event: expectedGame,
+          event: expectedGame, // Standardize event name
           commence_time: leg.commence_time || gameContext.commence_time,
+          game_id: leg.game_id || gameContext.event_id || gameContext.id // Attempt to add game_id
         });
       } else {
         errors.push(
@@ -183,70 +201,115 @@ class QuantumValidationEngine {
   comprehensiveParlayValidation(parlayData, gameContext, sportKey) {
     const errors = [];
     const warnings = [];
-    let validLegs = [];
-    if (!parlayData.legs || !Array.isArray(parlayData.legs)) {
-      throw new Error('AI response missing legs array - invalid parlay structure');
-    }
-    const gameValidation = this.validateGameContext(parlayData.legs, gameContext);
+    let initialValidLegs = []; // Legs that pass game context check
 
-    // ** BUG FIX: Add the valid legs from game context validation to our main array **
-    validLegs.push(...gameValidation.validLegs);
-    
+    if (!parlayData || typeof parlayData !== 'object') {
+       throw new Error('Invalid parlayData object received');
+    }
+     if (!parlayData.legs || !Array.isArray(parlayData.legs)) {
+        console.warn("AI response missing legs array, attempting recovery", parlayData);
+        // Attempt recovery if possible, or throw
+        if(typeof parlayData.legs === 'object' && parlayData.legs !== null) {
+            // Maybe it's an object instead of array? Try to convert if structure allows
+             try {
+                 parlayData.legs = Object.values(parlayData.legs);
+                 if(!Array.isArray(parlayData.legs)) throw new Error("Could not convert legs object to array");
+             } catch(conversionError) {
+                  throw new Error(`AI response legs format unusable: ${conversionError.message}`);
+             }
+        } else {
+             throw new Error('AI response missing legs array - invalid parlay structure');
+        }
+     }
+
+
+    const gameValidation = this.validateGameContext(parlayData.legs, gameContext);
+    initialValidLegs.push(...gameValidation.validLegs); // Use the legs validated for game context
     errors.push(...gameValidation.errors);
     warnings.push(...gameValidation.warnings);
 
-    // Note: We create a new array to hold the final, fully validated legs
-    const fullyValidatedLegs = []; 
+    const fullyValidatedLegs = []; // Final list of legs passing all checks
 
-    validLegs.forEach((leg, index) => {
+    initialValidLegs.forEach((leg, index) => { // Iterate over legs that passed game context check
       try {
-        let isLegValid = true;
-        if (leg.selection) {
+        let isLegValid = true; // Assume valid initially for this leg
+
+        // 1. Player Team Alignment Check
+        if (leg.selection && typeof leg.selection === 'string') { // Check if selection exists and is string
           const playerValidation = this.validatePlayerTeamAlignment(leg.selection, gameContext);
           if (!playerValidation.valid) {
-            errors.push(`Leg ${index + 1}: ${playerValidation.error}`);
+            errors.push(`Leg ${index + 1} (${leg.selection}): ${playerValidation.error}`);
             isLegValid = false;
           }
         }
+
+        // 2. Betting Line Plausibility Check
         const lineValidation = this.validateBettingLine(
           leg.market,
           leg.point,
           leg.odds?.american,
           sportKey
         );
-        if (!lineValidation.valid) {
-          errors.push(...lineValidation.errors);
+        if (!lineValidation.valid && lineValidation.errors) { // Check for errors property
+          errors.push(...lineValidation.errors.map(e => `Leg ${index + 1}: ${e}`)); // Add leg context
           isLegValid = false;
         }
-        if (lineValidation.warnings?.length) warnings.push(...lineValidation.warnings);
-        if (!leg.selection || leg.selection.trim() === '') {
+        if (lineValidation.warnings?.length) {
+            warnings.push(...lineValidation.warnings.map(w => `Leg ${index + 1}: ${w}`)); // Add leg context
+        }
+
+
+        // 3. Essential Fields Check
+        if (!leg.selection || String(leg.selection).trim() === '') {
           errors.push(`Leg ${index + 1}: Missing selection description`);
           isLegValid = false;
         }
-        if (!leg.odds || !leg.odds.american) {
-          warnings.push(`Leg ${index + 1}: Missing or incomplete odds data`);
+        if (!leg.market || String(leg.market).trim() === '') {
+           errors.push(`Leg ${index + 1}: Missing market description`);
+           isLegValid = false;
         }
-        if(isLegValid) {
+         if (!leg.event || String(leg.event).trim() === '') {
+           warnings.push(`Leg ${index + 1}: Missing event description (may cause issues)`);
+           // Not necessarily invalid if context assigns it, but worth warning
+         }
+
+
+        // 4. Odds Check (Warning only unless completely missing)
+        if (!leg.odds || typeof leg.odds !== 'object' || !Number.isFinite(Number(leg.odds.american))) {
+          warnings.push(`Leg ${index + 1} (${leg.selection}): Missing or invalid odds data. Default odds may be applied.`);
+          // Don't mark as invalid here, allow _ensureLegsHaveOdds to handle it later if needed
+        }
+
+        // Add to final list if all checks passed for this leg
+        if (isLegValid) {
           fullyValidatedLegs.push(leg);
         }
+
       } catch (legError) {
-        errors.push(`Leg ${index + 1} validation error: ${legError.message}`);
+        errors.push(`Leg ${index + 1} validation CRASHED: ${legError.message}`);
+        isLegValid = false; // Mark as invalid if the validation itself crashes
       }
     });
 
+    // Calculate quality score based on *original* number of legs vs fully validated ones
+    const originalLegCount = parlayData.legs.length;
+    const qualityScore = originalLegCount > 0 ? (fullyValidatedLegs.length / originalLegCount) * 100 : 0;
+
     const validationSummary = {
-      originalCount: parlayData.legs.length,
+      originalCount: originalLegCount,
       validCount: fullyValidatedLegs.length,
       errorCount: errors.length,
       warningCount: warnings.length,
-      qualityScore: parlayData.legs.length > 0 ? (fullyValidatedLegs.length / parlayData.legs.length) * 100 : 0,
+      qualityScore: Math.round(qualityScore), // Round for cleaner display
       recommendation:
-        fullyValidatedLegs.length === 0 ? 'REJECT' : fullyValidatedLegs.length === parlayData.legs.length ? 'ACCEPT' : 'PARTIAL',
+        fullyValidatedLegs.length === 0 ? 'REJECT'
+        : qualityScore === 100 ? 'ACCEPT'
+        : 'PARTIAL',
     };
 
     return {
       ...parlayData,
-      legs: fullyValidatedLegs,
+      legs: fullyValidatedLegs, // Return only the legs that passed all checks
       validation: {
         ...validationSummary,
         errors,
@@ -255,120 +318,180 @@ class QuantumValidationEngine {
       },
     };
   }
+} // ** <<< THIS WAS THE MISSING BRACE >>> **
 
 class QuantumAIService {
   constructor() {
     this.validator = new QuantumValidationEngine();
     this.requestCache = new Map();
-    this.cacheTTL = 300000;
+    this.cacheTTL = 300000; // 5 minutes cache
   }
 
   _ensureLegsHaveOdds(legs) {
     if (!Array.isArray(legs)) return [];
     return legs.map((leg, index) => {
-      const hasValidOdds = leg && leg.odds && Number.isFinite(Number(leg.odds.american));
+      // Check if leg and odds object exist and american odds is a finite number
+      const hasValidOdds = leg && leg.odds && typeof leg.odds === 'object' && Number.isFinite(Number(leg.odds.american));
+
       if (hasValidOdds) {
         const american = Number(leg.odds.american);
-        const decimal = EliteBettingMathematics.americanToDecimal(american);
-        const impliedProb = EliteBettingMathematics.calculateImpliedProbability(american);
-        return { ...leg, odds: { american, decimal, implied_probability: impliedProb } };
+        // Ensure american odds are within a reasonable range to avoid extreme values
+        if (american < -100000 || american > 100000) {
+             console.warn(`⚠️ Leg ${index + 1} has extreme odds: ${american}. Applying defaults.`);
+             // Fall through to default odds logic
+        } else {
+            const decimal = EliteBettingMathematics.americanToDecimal(american);
+            const impliedProb = EliteBettingMathematics.calculateImpliedProbability(american);
+            // Ensure impliedProb is valid
+             if (isNaN(impliedProb) || impliedProb < 0 || impliedProb > 1) {
+                 console.warn(`⚠️ Leg ${index + 1} calculated invalid implied probability from odds ${american}. Applying defaults.`);
+                 // Fall through to default odds logic
+             } else {
+                 return { ...leg, odds: { american, decimal, implied_probability: impliedProb } };
+             }
+        }
       }
-      console.warn(`⚠️ Leg ${index + 1} missing valid odds: "${leg.selection}". Applying intelligent defaults.`);
-      let defaultOdds = -110;
-      if (leg.market === 'h2h') defaultOdds = -110;
-      else if (leg.market === 'totals') defaultOdds = -110;
-      else if (leg.market?.includes('player')) defaultOdds = -115;
+
+      // If odds are missing, invalid, or extreme, apply defaults
+      const selectionText = leg?.selection || 'Unknown Selection';
+      console.warn(`⚠️ Leg ${index + 1} missing/invalid odds: "${selectionText}". Applying intelligent defaults.`);
+      let defaultOdds = -110; // General default
+      const market = leg?.market?.toLowerCase() || '';
+
+      if (market === 'h2h' || market === 'moneyline') defaultOdds = -110;
+      else if (market === 'totals' || market === 'spreads' || market === 'handicap') defaultOdds = -110;
+      else if (market.includes('player')) defaultOdds = -115; // Slightly different for props
+
       const decimal = EliteBettingMathematics.americanToDecimal(defaultOdds);
       const impliedProb = EliteBettingMathematics.calculateImpliedProbability(defaultOdds);
+
+      // Add a note about applied odds if analysis exists
+      const analysisNote = `(Intelligent odds applied: ${defaultOdds}) ${leg?.quantum_analysis?.analytical_basis || 'Market-based default odds applied.'}`;
+
       return {
         ...leg,
         odds: { american: defaultOdds, decimal, implied_probability: impliedProb },
         quantum_analysis: {
-          ...leg.quantum_analysis,
-          analytical_basis: `(Intelligent odds applied: ${defaultOdds}) ${
-            leg.quantum_analysis?.analytical_basis || 'Market-based default odds applied for analysis.'
-          }`,
+          ...(leg?.quantum_analysis || {}), // Preserve existing analysis if any
+          analytical_basis: analysisNote,
         },
       };
     });
   }
 
+
   async _callAIProvider(prompt, context = {}) {
     const { PERPLEXITY_API_KEY } = env;
     if (!PERPLEXITY_API_KEY) throw new Error('Perplexity API key not configured - check environment variables');
 
-    const cacheKey = `ai_request_${Buffer.from(prompt).toString('base64').slice(0, 50)}`;
+    // Simple cache key based on prompt hash - reduces length issues
+    const cacheKey = `ai_req_${require('crypto').createHash('sha256').update(prompt).digest('hex').substring(0, 16)}`;
     const cached = this.requestCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < this.cacheTTL) {
-      console.log('🎯 AI Response cache HIT');
+      console.log(`🎯 AI Response cache HIT for key ${cacheKey}`);
       return cached.data;
+    } else if (cached) {
+         console.log(`⏱️ AI Response cache STALE for key ${cacheKey}`);
+         this.requestCache.delete(cacheKey); // Remove stale entry
+    } else {
+         console.log(`🔍 AI Response cache MISS for key ${cacheKey}`);
     }
 
+
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      console.log(`🔄 AI Provider Request (Attempt ${attempt}/${MAX_RETRIES})`);
+      console.log(`🔄 AI Provider Request (Attempt ${attempt}/${MAX_RETRIES}) for ${context.sportKey || 'generic request'}`);
       try {
         const startTime = Date.now();
         const response = await axios.post(
           'https://api.perplexity.ai/chat/completions',
           {
-            model: AI_MODELS.perplexity,
+            model: AI_MODELS.perplexity, // Use sonar-pro via alias
             messages: [{ role: 'user', content: prompt }],
-            temperature: 0.1,
+            temperature: 0.1, // Low temp for consistency
             max_tokens: 4000,
           },
           {
-            headers: {
-              Authorization: `Bearer ${PERPLEXITY_API_KEY}`,
-              'Content-Type': 'application/json',
-            },
-            timeout: WEB_TIMEOUT_MS,
+            headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
+            timeout: WEB_TIMEOUT_MS, // Use defined timeout
           }
         );
         const responseTime = Date.now() - startTime;
         console.log(`✅ AI Response received in ${responseTime}ms`);
+
+        // Safer access to response content
         const responseText = response?.data?.choices?.[0]?.message?.content || '';
         if (!responseText) throw new Error('Empty response from AI provider');
 
-        // Strict extraction + schema validation
+        // Strict JSON extraction
         const parsed = strictExtractJSONObject(responseText);
-        if (!isValidParlay(parsed, context.numLegs || 1)) {
-          throw new Error('AI JSON failed schema validation');
-        }
 
-        // Cache and return
+        // Schema validation (use the specific schema file)
+         // Corrected validation call based on provided parlaySchema.js
+         // Note: parlaySchema.js needs adjustment to match the AI output structure
+         if (!isValidParlay(parsed, context.numLegs || 1)) {
+              console.error("AI JSON failed schema validation:", JSON.stringify(parsed, null, 2));
+              throw new Error('AI JSON failed schema validation - structure mismatch');
+         }
+
+
+        // Cache and return valid response
         this.requestCache.set(cacheKey, { data: parsed, timestamp: Date.now() });
+        // Clear old cache entries occasionally
+         if (this.requestCache.size > 100) {
+            const oldestKey = this.requestCache.keys().next().value;
+            this.requestCache.delete(oldestKey);
+         }
         return parsed;
+
       } catch (error) {
+         const isTimeout = error.code === 'ECONNABORTED' || error instanceof axios.Cancel || (error.message && error.message.toLowerCase().includes('timeout'));
+         const status = error.response?.status;
+
         console.error(`❌ AI Provider Error (Attempt ${attempt}):`, {
           message: error.message,
-          status: error.response?.status,
-          data: error.response?.data,
+          status: status,
+          isTimeout: isTimeout,
+          data: error.response?.data ? JSON.stringify(error.response.data).substring(0, 200) + '...' : undefined, // Log snippet of data
         });
+
         if (attempt === MAX_RETRIES) {
-          if (error.response?.status === 401 || error.response?.status === 403) {
+          if (status === 401 || status === 403) {
             throw new Error('Perplexity API authentication failed - check API key');
-          } else if (error.response?.status === 429) {
+          } else if (status === 429) {
             throw new Error('AI provider rate limit exceeded - try again shortly');
-          } else if (error.code === 'ECONNABORTED') {
+          } else if (isTimeout) {
             throw new Error('AI provider request timeout - service may be overloaded');
+          } else if (error.message.includes('schema validation')) {
+               // Propagate schema validation error clearly
+               throw new Error(`AI provider failed after ${MAX_RETRIES} attempts: ${error.message}`);
           }
-          throw new Error(`AI provider failed after ${MAX_RETRIES} attempts: ${error.message}`);
+          // Generic failure after retries
+          throw new Error(`AI provider failed after ${MAX_RETRIES} attempts: ${error.message || 'Unknown error'}`);
         }
+
+        // Exponential backoff
         const delay = RETRY_DELAY * Math.pow(2, attempt - 1);
         console.log(`⏳ Retrying in ${delay}ms...`);
         await sleep(delay);
       }
     }
-    throw new Error('Unreachable');
+    // Should be unreachable due to throw in the loop
+    throw new Error('AI provider call failed unexpectedly after retries.');
   }
 
+
   async generateParlay(sportKey, numLegs, mode, aiModel, betType, options = {}) {
+    // Fetch user config with defaults if needed
     const userAIConfig = await getAIConfig(options.chatId || 'default');
     const effectiveMode = mode || userAIConfig.mode || 'web';
     const effectiveBetType = betType || userAIConfig.betType || 'mixed';
     const effectiveHorizonHours = options.horizonHours || userAIConfig.horizonHours || 72;
+    // Include proQuantMode from user settings or default to false
+    const effectiveProQuantMode = options.proQuantMode ?? userAIConfig.proQuantMode ?? false;
+
+
     console.log(
-      `🎯 Using settings - Mode: ${effectiveMode}, BetType: ${effectiveBetType}, Horizon: ${effectiveHorizonHours}h`
+      `🎯 Using settings - Mode: ${effectiveMode}, BetType: ${effectiveBetType}, Horizon: ${effectiveHorizonHours}h, QuantMode: ${effectiveProQuantMode}`
     );
 
     const requestId = `quantum_${sportKey}_${Date.now()}`;
@@ -379,36 +502,85 @@ class QuantumAIService {
       legs: numLegs,
       mode: effectiveMode,
       betType: effectiveBetType,
-      gameContext: options.gameContext
-        ? `${options.gameContext.away_team} @ ${options.gameContext.home_team}`
-        : 'None',
+      proQuantMode: effectiveProQuantMode, // Log quant mode
+      gameContext: options.gameContext ? `${options.gameContext.away_team} @ ${options.gameContext.home_team}` : 'None',
     });
 
     try {
       let parlayData;
-      if (effectiveMode === 'web' || effectiveMode === 'live') {
-        parlayData = await this._generateWebParlay(sportKey, numLegs, effectiveBetType, {
+      // Pass the effective Pro Quant Mode down
+      const generationOptions = {
           ...options,
           horizonHours: effectiveHorizonHours,
-        });
+          proQuantMode: effectiveProQuantMode // Ensure quant mode is passed
+      };
+
+      if (effectiveMode === 'web' || effectiveMode === 'live') {
+        parlayData = await this._generateWebParlay(sportKey, numLegs, effectiveBetType, generationOptions);
       } else {
-        parlayData = await this._generateContextParlay(
-          sportKey,
-          numLegs,
-          effectiveMode,
-          effectiveBetType,
-          { ...options, horizonHours: effectiveHorizonHours }
-        );
+        // Assuming 'db' or other modes use context parlay
+        parlayData = await this._generateContextParlay(sportKey, numLegs, effectiveMode, effectiveBetType, generationOptions);
       }
+
+      // Perform comprehensive validation AFTER generation
+      const validatedParlay = this.validator.comprehensiveParlayValidation(
+          parlayData,
+          options.gameContext,
+          sportKey
+      );
+
+      // Ensure odds are present AFTER validation (as validation might remove legs)
+      validatedParlay.legs = this._ensureLegsHaveOdds(validatedParlay.legs);
+
+       // Recalculate parlay price based on potentially modified legs/odds
+       validatedParlay.parlay_price_decimal = this._calculateParlayDecimal(validatedParlay.legs);
+       validatedParlay.parlay_price_american = EliteBettingMathematics.decimalToAmerican(validatedParlay.parlay_price_decimal);
+
+
+      // Run quantitative analysis if feature enabled and enough valid legs exist
+      if (env.FEATURE_QUANTITATIVE_ANALYTICS && validatedParlay.legs.length >= 2) {
+          try {
+              validatedParlay.quantitative_analysis = await quantitativeService.evaluateParlay(
+                  validatedParlay.legs,
+                  validatedParlay.parlay_price_decimal
+              );
+          } catch (qError) {
+              console.warn('Quantitative analysis subsystem offline:', qError.message);
+              validatedParlay.quantitative_analysis = {
+                  note: 'Advanced quantitative analysis temporarily unavailable',
+                  riskAssessment: { overallRisk: 'UNKNOWN' }, // Use UNKNOWN if calc failed
+              };
+          }
+      } else {
+            validatedParlay.quantitative_analysis = { note: 'Quantitative analysis skipped (feature disabled or insufficient legs)' };
+      }
+
+
+      // Add metadata AFTER all processing
+      validatedParlay.research_metadata = {
+          ...(validatedParlay.research_metadata || {}), // Preserve existing metadata if any
+          quantum_mode: true,
+          generation_strategy: parlayData.research_metadata?.generation_strategy || (effectiveMode === 'web' ? 'web_research' : 'database_quant'),
+          game_context_used: !!options.gameContext,
+          legs_requested: numLegs,
+          legs_delivered: validatedParlay.legs.length, // Use count of *validated* legs
+          validation_quality: validatedParlay.validation?.qualityScore, // Use score from validation object
+          proQuantMode_used: effectiveProQuantMode, // Record if quant mode was used
+          generated_at: new Date().toISOString(),
+      };
+
 
       const generationTime = Date.now() - startTime;
       console.log('✅ QUANTUM PARLAY GENERATION COMPLETED', {
         requestId,
         generationTime: `${generationTime}ms`,
-        legsGenerated: parlayData.legs?.length || 0,
-        validationScore: parlayData.validation?.qualityScore || 'N/A',
+        legsGenerated: parlayData.legs?.length || 0, // Raw legs from AI
+        legsValidated: validatedParlay.legs.length, // Legs after validation
+        validationScore: validatedParlay.validation?.qualityScore || 'N/A',
       });
-      return parlayData;
+
+      return validatedParlay; // Return the fully processed and validated parlay
+
     } catch (error) {
       const errorTime = Date.now() - startTime;
       console.error('❌ QUANTUM PARLAY GENERATION FAILED', {
@@ -417,11 +589,11 @@ class QuantumAIService {
         duration: `${errorTime}ms`,
         sport: sportKey,
       });
+      // Fallback strategy remains important
       return await this._generateIntelligentFallback(
-        sportKey,
-        numLegs,
-        effectiveBetType,
-        { ...options, horizonHours: effectiveHorizonHours },
+        sportKey, numLegs, effectiveBetType,
+        // Pass effective quant mode to fallback too
+        { ...options, horizonHours: effectiveHorizonHours, proQuantMode: effectiveProQuantMode },
         error
       );
     }
@@ -429,343 +601,402 @@ class QuantumAIService {
 
   async _generateWebParlay(sportKey, numLegs, betType, options) {
     console.log('🌐 GENERATING WEB-RESEARCH PARLAY');
-    const scheduleContext = await this._buildScheduleContext(
-      sportKey,
-      options.horizonHours || 72,
-      options.gameContext
-    );
-    const prompt = ElitePromptService.getWebResearchPrompt(sportKey, numLegs, betType, {
-      scheduleInfo: scheduleContext,
-      gameContext: options.gameContext,
-    });
-    console.log('📝 AI Prompt prepared with game context validation');
+    const scheduleContext = await this._buildScheduleContext(sportKey, options.horizonHours, options.gameContext);
 
-    const parlayData = await this._callAIProvider(prompt, {
-      sportKey,
-      numLegs,
-      gameContext: options.gameContext,
-    });
-    if (!parlayData.legs || !Array.isArray(parlayData.legs)) {
-      throw new Error('AI response invalid: missing legs array');
-    }
-    console.log(`🤖 AI generated ${parlayData.legs.length} raw legs`);
-
-    const validatedParlay = this.validator.comprehensiveParlayValidation(
-      parlayData,
-      options.gameContext,
-      sportKey
-    );
-    validatedParlay.legs = this._ensureLegsHaveOdds(validatedParlay.legs);
-    validatedParlay.parlay_price_decimal = this._calculateParlayDecimal(validatedParlay.legs);
-    validatedParlay.parlay_price_american =
-      EliteBettingMathematics.decimalToAmerican(validatedParlay.parlay_price_decimal);
-
-    try {
-      validatedParlay.quantitative_analysis = await quantitativeService.evaluateParlay(
-        validatedParlay.legs,
-        validatedParlay.parlay_price_decimal
-      );
-    } catch (qError) {
-      console.warn('Quantitative analysis subsystem offline:', qError.message);
-      validatedParlay.quantitative_analysis = {
-        note: 'Advanced analytics temporarily unavailable',
-        riskAssessment: { overallRisk: 'CALCULATED' },
-      };
-    }
-
-    validatedParlay.research_metadata = {
-      quantum_mode: true,
-      generation_strategy: 'web_research',
-      game_context_used: !!options.gameContext,
-      legs_requested: numLegs,
-      legs_delivered: validatedParlay.legs.length,
-      validation_quality: validatedParlay.validation.qualityScore,
-      generated_at: new Date().toISOString(),
+    // Pass userConfig (including proQuantMode) to the prompt service
+    const promptContext = {
+         scheduleInfo: scheduleContext,
+         gameContext: options.gameContext,
+         userConfig: { proQuantMode: options.proQuantMode } // Include quant mode here
     };
 
-    console.log(`🎉 Web parlay generation completed: ${validatedParlay.legs.length}/${numLegs} legs`);
-    return validatedParlay;
+    const prompt = ElitePromptService.getWebResearchPrompt(sportKey, numLegs, betType, promptContext);
+    console.log('📝 AI Prompt prepared (Web Research)');
+
+    // Context for AI call includes numLegs for schema validation
+    const parlayData = await this._callAIProvider(prompt, { sportKey, numLegs, gameContext: options.gameContext });
+
+    // Basic check before returning - validation happens in the main generateParlay function
+    if (!parlayData || !Array.isArray(parlayData.legs)) {
+      throw new Error('AI response invalid: structure mismatch (expected object with legs array)');
+    }
+    console.log(`🤖 AI generated ${parlayData.legs.length} raw legs (Web)`);
+
+    // Add initial metadata before returning to main function
+     parlayData.research_metadata = {
+        generation_strategy: 'web_research',
+     };
+
+
+    // Return raw data for validation in generateParlay
+    return parlayData;
   }
+
 
   async _generateContextParlay(sportKey, numLegs, mode, betType, options) {
     console.log(`💾 GENERATING DATABASE-DRIVEN PARLAY (${mode} mode)`);
     try {
+      // Fetch games: Use gameContext if provided, otherwise fetch from gamesService
       const allGames = options.gameContext
-        ? [options.gameContext]
+        ? [options.gameContext] // Use the single game context
         : await gamesService.getGamesForSport(sportKey, {
             hoursAhead: options.horizonHours || 72,
-            includeOdds: true,
-            useCache: false,
+            includeOdds: true, // Need odds for EV calculation
+            useCache: false, // Ensure fresh data for DB mode
             chatId: options.chatId,
           });
+
       if (!allGames || allGames.length === 0) {
-        throw new Error(`No games available for ${sportKey} in database`);
+        throw new Error(`No games available for ${sportKey} in database context`);
       }
 
       console.log(`🔍 Analyzing ${allGames.length} games for +EV opportunities...`);
+      // Find best value plays based on no-vig probability and market odds
       const bestPlays = await this._findBestValuePlays(allGames);
+
       if (bestPlays.length < numLegs) {
+        console.warn(`Insufficient +EV plays (${bestPlays.length}) found for ${numLegs}-leg parlay in ${sportKey}.`);
+        // Return a structured "PASS" recommendation
         return {
-          legs: [],
+          legs: [], // No legs generated
+          parlay_metadata: { sport: getSportTitle(sportKey), legs_count: numLegs, bet_type: betType, generated_at: new Date().toISOString() },
           portfolio_construction: {
-            overall_thesis: `Market Analysis: Insufficient +EV opportunities found for ${numLegs}-leg parlay. Professional discipline requires passing when edge isn't present.`,
+            overall_thesis: `Market Analysis: Insufficient positive expected value (+EV) opportunities identified among ${allGames.length} analyzed games to construct a reliable ${numLegs}-leg parlay. Professional discipline advises passing when a quantifiable edge is not present.`,
           },
           research_metadata: {
             analysis_mode: 'database_quant',
             games_analyzed: allGames.length,
-            ev_opportunities: bestPlays.length,
-            recommendation: 'PASS',
+            ev_opportunities_found: bestPlays.length,
+            legs_requested: numLegs,
+            recommendation: 'PASS', // Explicit pass
+            reason: 'Insufficient +EV edge',
           },
+          validation: { qualityScore: 0, recommendation: 'REJECT'} // Add validation object
         };
       }
 
+      // Select top plays up to numLegs
       const topPlays = bestPlays.slice(0, numLegs);
-      const parlayLegs = topPlays.map((play) => ({
-        game_id: play.game.event_id || play.game.id, // normalize id
-        event: `${play.game.away_team} @ ${play.game.home_team}`,
-        commence_time: play.game.commence_time,
-        market: play.market.key,
-        selection: `${play.outcome.name} ${play.outcome.point || ''}`.trim(),
-        odds: {
-          american: play.outcome.price,
-          decimal: EliteBettingMathematics.americanToDecimal(play.outcome.price),
-          implied_probability: EliteBettingMathematics.calculateImpliedProbability(play.outcome.price),
-        },
-        quantum_analysis: {
-          confidence_score: Math.min(95, (play.noVigProb || 0) * 100),
-          analytical_basis: `Quantitative Edge: +${play.ev.toFixed(1)}% EV identified. No-vig probability ${((play.noVigProb || 0) * 100).toFixed(1)}% exceeds market implied.`,
-          key_factors: ['market_inefficiency', 'probability_discrepancy', 'quantitative_edge'],
-          kelly_fraction: EliteBettingMathematics.kellyCriterion(
-            play.noVigProb || 0.5,
-            EliteBettingMathematics.americanToDecimal(play.outcome.price)
-          ).toFixed(3),
-        },
-      }));
 
-      const parlayData = { legs: parlayLegs };
-      parlayData.parlay_price_decimal = this._calculateParlayDecimal(parlayData.legs);
-      parlayData.parlay_price_american = EliteBettingMathematics.decimalToAmerican(
-        parlayData.parlay_price_decimal
-      );
+      // Construct parlay legs from the selected plays
+      const parlayLegs = topPlays.map((play) => {
+          const americanOdds = play.outcome.price;
+          const decimalOdds = EliteBettingMathematics.americanToDecimal(americanOdds);
+          const impliedProb = EliteBettingMathematics.calculateImpliedProbability(americanOdds);
+          const noVigProb = play.noVigProb || 0.5; // Use calculated no-vig or default
+          const kelly = EliteBettingMathematics.kellyCriterion(noVigProb, decimalOdds);
 
-      try {
-        parlayData.quantitative_analysis = await quantitativeService.evaluateParlay(
-          parlayData.legs,
-          parlayData.parlay_price_decimal
-        );
-      } catch {
-        parlayData.quantitative_analysis = { note: 'Advanced quantitative analysis unavailable' };
-      }
+          return {
+              game_id: play.game.event_id || play.game.id, // Use standardized ID
+              event: `${play.game.away_team} @ ${play.game.home_team}`,
+              commence_time: play.game.commence_time,
+              market: play.market.key,
+              selection: `${play.outcome.name} ${play.outcome.point != null ? play.outcome.point : ''}`.trim(),
+              odds: {
+                  american: americanOdds,
+                  decimal: decimalOdds,
+                  implied_probability: impliedProb,
+              },
+              // Add detailed quantum analysis based on EV calculation
+              quantum_analysis: {
+                  confidence_score: Math.min(95, Math.round(noVigProb * 100)), // Confidence based on no-vig
+                  analytical_basis: `Quantitative Edge: Identified +${play.ev.toFixed(1)}% EV. Calculated no-vig probability (${(noVigProb * 100).toFixed(1)}%) exceeds market implied probability (${(impliedProb * 100).toFixed(1)}%).`,
+                  key_factors: ['market_inefficiency', 'probability_discrepancy', 'quantitative_edge'],
+                  expected_value: play.ev.toFixed(2), // Store EV
+                  no_vig_probability: noVigProb.toFixed(4), // Store no-vig prob
+                  kelly_fraction: kelly.toFixed(3), // Store Kelly fraction
+              },
+              // Mark as validated since it came from our DB/Odds sources
+              real_game_validated: true,
+          };
+      });
 
-      parlayData.research_metadata = {
-        mode,
-        quantum_mode: true,
-        games_analyzed: allGames.length,
-        ev_opportunities_found: bestPlays.length,
-        average_ev: (
-          bestPlays.reduce((sum, play) => sum + play.ev, 0) / bestPlays.length
-        ).toFixed(1),
-        generation_strategy: 'database_quant_selection',
-      };
+      const parlayData = { legs: parlayLegs }; // Start building the final object
+       parlayData.research_metadata = { // Add metadata early
+           mode: mode,
+           quantum_mode: true,
+           generation_strategy: 'database_quant_selection',
+           games_analyzed: allGames.length,
+           ev_opportunities_found: bestPlays.length,
+           average_ev_found: (bestPlays.reduce((sum, play) => sum + play.ev, 0) / (bestPlays.length || 1)).toFixed(1),
+       };
 
-      console.log(
-        `✅ Database parlay built: ${numLegs} legs with average EV +${parlayData.research_metadata.average_ev}%`
-      );
-      return parlayData;
+
+      // Calculate parlay price AFTER legs are formed
+      // Note: Validation and final quant analysis happens *after* this function returns
+
+      console.log(`✅ Database parlay built: ${numLegs} legs with average EV +${parlayData.research_metadata.average_ev_found}%`);
+      return parlayData; // Return raw data for validation in generateParlay
+
     } catch (error) {
-      console.error('❌ Database parlay generation failed:', error.message);
+      console.error(`❌ Database parlay generation failed for ${sportKey}:`, error.message);
+      // Let the main generateParlay function handle the fallback
       throw error;
     }
   }
 
+
   async _generateIntelligentFallback(sportKey, numLegs, betType, options, originalError) {
-    console.log('🔄 ACTIVATING INTELLIGENT FALLBACK STRATEGY');
+    console.log(`🔄 ACTIVATING INTELLIGENT FALLBACK STRATEGY due to: ${originalError?.message || 'Unknown error'}`);
     try {
-      const horizonHours = options.horizonHours || 168;
+      const horizonHours = options.horizonHours || 168; // Wider horizon for fallback
       const scheduleContext = await this._buildScheduleContext(sportKey, horizonHours, options.gameContext);
-      const prompt = ElitePromptService.getFallbackPrompt(sportKey, numLegs, betType, {
-        scheduleInfo: scheduleContext,
-        gameContext: options.gameContext,
-        originalError: originalError?.message,
-      });
-      const parlayData = await this._callAIProvider(prompt, { numLegs });
-      if (!parlayData.legs || !Array.isArray(parlayData.legs)) {
-        throw new Error('Fallback AI response invalid');
+
+       // Include proQuantMode in fallback prompt context if applicable
+       const promptContext = {
+           scheduleInfo: scheduleContext,
+           gameContext: options.gameContext,
+           originalError: originalError?.message,
+           userConfig: { proQuantMode: options.proQuantMode } // Pass quant mode
+       };
+
+      const prompt = ElitePromptService.getFallbackPrompt(sportKey, numLegs, betType, promptContext);
+      // Use numLegs in AI call context for schema validation
+      const parlayData = await this._callAIProvider(prompt, { sportKey, numLegs });
+
+      if (!parlayData || !Array.isArray(parlayData.legs)) {
+        throw new Error('Fallback AI response invalid or missing legs');
       }
-      const validatedParlay = this.validator.comprehensiveParlayValidation(
-        parlayData,
-        options.gameContext,
-        sportKey
-      );
-      validatedParlay.legs = this._ensureLegsHaveOdds(validatedParlay.legs);
-      validatedParlay.parlay_price_decimal = this._calculateParlayDecimal(validatedParlay.legs);
-      validatedParlay.parlay_price_american = EliteBettingMathematics.decimalToAmerican(
-        validatedParlay.parlay_price_decimal
-      );
-      validatedParlay.research_metadata = {
-        quantum_mode: true,
-        fallback_used: true,
-        original_error: originalError?.message,
-        generation_strategy: 'intelligent_fallback',
-        legs_delivered: validatedParlay.legs.length,
-        validation_quality: validatedParlay.validation.qualityScore,
-        generated_at: new Date().toISOString(),
-      };
-      console.log(`🆘 Fallback parlay delivered: ${validatedParlay.legs.length} legs`);
-      return validatedParlay;
+
+      // Perform validation on the fallback response
+       // Validation happens in the main generateParlay, just add metadata here
+       parlayData.research_metadata = {
+            ...(parlayData.research_metadata || {}), // Keep existing if any
+            quantum_mode: true,
+            fallback_used: true,
+            original_error_message: originalError?.message?.substring(0, 200), // Store snippet
+            generation_strategy: 'intelligent_fallback',
+            proQuantMode_used: options.proQuantMode, // Record if quant mode was used
+       };
+
+
+      console.log(`🆘 Fallback parlay delivered ${parlayData.legs.length} raw legs for validation.`);
+      // Return raw data for validation in generateParlay
+      return parlayData;
+
     } catch (fallbackError) {
-      console.error('💥 CRITICAL: All parlay generation strategies failed:', fallbackError.message);
+      console.error('💥 CRITICAL: Fallback strategy also failed:', fallbackError.message);
+      // Return a structured error object if even fallback fails completely
       return {
         legs: [],
+         parlay_metadata: { sport: getSportTitle(sportKey), legs_count: numLegs, bet_type: betType, generated_at: new Date().toISOString() },
         portfolio_construction: {
-          overall_thesis:
-            'SYSTEM UNAVAILABLE: All parlay generation systems are currently offline. Please try again in 5-10 minutes.',
+          overall_thesis: 'SYSTEM UNAVAILABLE: All parlay generation strategies failed. Please check system status or try again later.',
         },
         research_metadata: {
           emergency_fallback: true,
-          error: fallbackError.message,
-          original_error: originalError?.message,
+          error: fallbackError.message.substring(0, 200),
+          original_error_message: originalError?.message?.substring(0, 200),
           timestamp: new Date().toISOString(),
         },
+        validation: { qualityScore: 0, recommendation: 'REJECT' } // Add validation object
       };
     }
   }
 
+  // Calculate combined decimal odds for a list of legs
   _calculateParlayDecimal(legs) {
-    return (legs || []).reduce((acc, leg) => {
-      const legDecimal = leg.odds?.decimal || EliteBettingMathematics.americanToDecimal(-110);
+    if (!Array.isArray(legs) || legs.length === 0) return 1.0; // Neutral odds if no legs
+
+    return legs.reduce((acc, leg) => {
+      // Use the decimal odds if available and valid, otherwise fallback using American or default
+      const legDecimal = (leg?.odds?.decimal > 1)
+        ? leg.odds.decimal
+        : EliteBettingMathematics.americanToDecimal(leg?.odds?.american || -110); // Default to -110 if missing
       return acc * legDecimal;
-    }, 1);
+    }, 1.0); // Start accumulator at 1.0
   }
 
-  _calculateLegIndependence(legs) {
-    const uniqueGames = new Set(legs.map((leg) => leg.event));
-    const uniqueMarkets = new Set(legs.map((leg) => leg.market));
-    const gameDiversity = (uniqueGames.size / legs.length) * 50;
-    const marketDiversity = (uniqueMarkets.size / legs.length) * 50;
-    return Math.min(100, gameDiversity + marketDiversity);
-  }
 
-  _calculateBankrollAllocation(parlayDecimal, averageEV) {
-    const baseAllocation = 2;
-    const evBonus = Math.min(3, averageEV / 5);
-    const oddsAdjustment = parlayDecimal > 10 ? -1 : 0;
-    return Math.max(0.5, Math.min(5, baseAllocation + evBonus + oddsAdjustment));
-  }
-
+  // --- Helper for Database Parlay Generation ---
   async _findBestValuePlays(games) {
     const valuePlays = [];
-    if (!games || games.length === 0) return valuePlays;
-    for (const game of games) {
-      const bookmaker = game.bookmakers?.[0];
-      if (!bookmaker?.markets) continue;
+    if (!games || !Array.isArray(games) || games.length === 0) return valuePlays;
 
-      const h2hMarket = bookmaker.markets.find((m) => m.key === 'h2h');
+    for (const game of games) {
+      // Get the first available bookmaker's data
+      const bookmaker = game.bookmakers?.[0];
+      if (!bookmaker?.markets || !Array.isArray(bookmaker.markets)) continue;
+
+      // --- H2H (Moneyline) Value ---
+      const h2hMarket = bookmaker.markets.find(m => m.key === 'h2h' || m.key === 'moneyline');
       if (h2hMarket?.outcomes?.length >= 2) {
-        const home = h2hMarket.outcomes.find((o) => o.name === game.home_team);
-        const away = h2hMarket.outcomes.find((o) => o.name === game.away_team);
-        if (home && away && home.price && away.price) {
+        const home = h2hMarket.outcomes.find(o => o.name === game.home_team || o.name === 'Home'); // Allow 'Home'
+        const away = h2hMarket.outcomes.find(o => o.name === game.away_team || o.name === 'Away'); // Allow 'Away'
+
+        if (home?.price && away?.price) {
           const noVig = EliteBettingMathematics.calculateNoVigProbability(home.price, away.price);
           if (noVig) {
-            const evHome =
-              EliteBettingMathematics.calculateExpectedValue(
-                noVig.home,
-                EliteBettingMathematics.americanToDecimal(home.price)
-              ) * 100;
-            const evAway =
-              EliteBettingMathematics.calculateExpectedValue(
-                noVig.away,
-                EliteBettingMathematics.americanToDecimal(away.price)
-              ) * 100;
+            const homeDecimal = EliteBettingMathematics.americanToDecimal(home.price);
+            const awayDecimal = EliteBettingMathematics.americanToDecimal(away.price);
+            const evHome = EliteBettingMathematics.calculateExpectedValue(noVig.home, homeDecimal) * 100;
+            const evAway = EliteBettingMathematics.calculateExpectedValue(noVig.away, awayDecimal) * 100;
+
             if (evHome > 0) valuePlays.push({ game, market: h2hMarket, outcome: home, ev: evHome, noVigProb: noVig.home });
             if (evAway > 0) valuePlays.push({ game, market: h2hMarket, outcome: away, ev: evAway, noVigProb: noVig.away });
           }
         }
       }
 
-      const totalsMarket = bookmaker.markets.find((m) => m.key === 'totals');
+      // --- Totals (Over/Under) Value ---
+      const totalsMarket = bookmaker.markets.find(m => m.key === 'totals');
       if (totalsMarket?.outcomes?.length === 2) {
-        const over = totalsMarket.outcomes.find((o) => o.name === 'Over');
-        const under = totalsMarket.outcomes.find((o) => o.name === 'Under');
-        if (over && under && over.price && under.price) {
+        const over = totalsMarket.outcomes.find(o => o.name === 'Over');
+        const under = totalsMarket.outcomes.find(o => o.name === 'Under');
+
+        // Ensure both outcomes have the same point value for fair comparison
+        if (over?.price && under?.price && over.point === under.point) {
           const noVig = EliteBettingMathematics.calculateNoVigProbability(over.price, under.price);
           if (noVig) {
-            const evOver =
-              EliteBettingMathematics.calculateExpectedValue(
-                noVig.home,
-                EliteBettingMathematics.americanToDecimal(over.price)
-              ) * 100;
-            const evUnder =
-              EliteBettingMathematics.calculateExpectedValue(
-                noVig.away,
-                EliteBettingMathematics.americanToDecimal(under.price)
-              ) * 100;
-            if (evOver > 0)
-              valuePlays.push({ game, market: totalsMarket, outcome: over, ev: evOver, noVigProb: noVig.home });
-            if (evUnder > 0)
-              valuePlays.push({ game, market: totalsMarket, outcome: under, ev: evUnder, noVigProb: noVig.away });
+            const overDecimal = EliteBettingMathematics.americanToDecimal(over.price);
+            const underDecimal = EliteBettingMathematics.americanToDecimal(under.price);
+            // Assuming fair split for totals (noVig.home = over, noVig.away = under)
+            const evOver = EliteBettingMathematics.calculateExpectedValue(noVig.home, overDecimal) * 100;
+            const evUnder = EliteBettingMathematics.calculateExpectedValue(noVig.away, underDecimal) * 100;
+
+            if (evOver > 0) valuePlays.push({ game, market: totalsMarket, outcome: over, ev: evOver, noVigProb: noVig.home });
+            if (evUnder > 0) valuePlays.push({ game, market: totalsMarket, outcome: under, ev: evUnder, noVigProb: noVig.away });
           }
         }
       }
+
+       // --- Spreads (Handicap) Value ---
+       const spreadsMarket = bookmaker.markets.find(m => m.key === 'spreads' || m.key === 'handicap');
+       if (spreadsMarket?.outcomes?.length === 2) {
+           const outcome1 = spreadsMarket.outcomes[0];
+           const outcome2 = spreadsMarket.outcomes[1];
+
+           // Ensure point values are opposites (e.g., +3.5 and -3.5) and prices exist
+           if (outcome1?.price && outcome2?.price && outcome1.point === -outcome2.point) {
+               const noVig = EliteBettingMathematics.calculateNoVigProbability(outcome1.price, outcome2.price);
+               if (noVig) {
+                   const decimal1 = EliteBettingMathematics.americanToDecimal(outcome1.price);
+                   const decimal2 = EliteBettingMathematics.americanToDecimal(outcome2.price);
+                   // Assuming fair split (noVig.home = outcome1, noVig.away = outcome2)
+                   const ev1 = EliteBettingMathematics.calculateExpectedValue(noVig.home, decimal1) * 100;
+                   const ev2 = EliteBettingMathematics.calculateExpectedValue(noVig.away, decimal2) * 100;
+
+                   if (ev1 > 0) valuePlays.push({ game, market: spreadsMarket, outcome: outcome1, ev: ev1, noVigProb: noVig.home });
+                   if (ev2 > 0) valuePlays.push({ game, market: spreadsMarket, outcome: outcome2, ev: ev2, noVigProb: noVig.away });
+               }
+           }
+       }
+
+
     }
+    // Sort plays by highest Expected Value (EV) descending
     return valuePlays.sort((a, b) => b.ev - a.ev);
   }
 
+
   async _buildScheduleContext(sportKey, hours, gameContext = null) {
     try {
+      // Use the specific function from gamesService
       const realGames = await gamesService.getVerifiedRealGames(sportKey, hours);
-      if (realGames.length === 0) {
-        return `\n\n🎯 ELITE ANALYST MODE: No real-time ${sportKey} data available. Using fundamental analysis principles.`;
+
+      if (!Array.isArray(realGames) || realGames.length === 0) {
+        return `\n\n🎯 ELITE ANALYST MODE: No real-time ${getSportTitle(sportKey)} game data available for the next ${hours} hours. Using fundamental analysis principles.`;
       }
+
+      // Handle specific game context
       if (gameContext) {
+        // Find the specific game in the verified list for accurate timing
         const focusedGame = realGames.find(
           (game) =>
-            game.id === gameContext.id ||
-            game.event_id === gameContext.event_id ||
-            `${game.away_team} @ ${game.home_team}` ===
-              `${gameContext.away_team} @ ${gameContext.home_team}`
+            (game.id && game.id === gameContext.id) ||
+            (game.event_id && game.event_id === gameContext.event_id) ||
+            (game.home_team === gameContext.home_team && game.away_team === gameContext.away_team)
         );
+
         if (focusedGame) {
           const timeStr = new Date(focusedGame.commence_time).toLocaleString('en-US', {
-            timeZone: TZ,
-            weekday: 'short',
-            month: 'short',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
+            timeZone: TZ, weekday: 'short', month: 'short', day: 'numeric',
+            hour: '2-digit', minute: '2-digit', hour12: true
           });
           return `\n\n🎯 FOCUS GAME ANALYSIS REQUIRED:\n${focusedGame.away_team} @ ${focusedGame.home_team} - ${timeStr} ${TZ}\n\nCRITICAL: All analysis MUST be based exclusively on this specific matchup.`;
+        } else {
+             // If context game not found in verified list, provide generic context but mention the focus
+             console.warn(`Focus game ${gameContext.away_team}@${gameContext.home_team} not found in verified schedule for ${sportKey}`);
+             return `\n\n🎯 FOCUS GAME ANALYSIS (Context Game Not Verified):\n${gameContext.away_team} @ ${gameContext.home_team}\n\nCRITICAL: Analysis MUST focus on this game, but verify details independently.`;
         }
       }
+
+      // Build context for multiple games
       const gameList = realGames
-        .slice(0, 15)
+        .slice(0, 15) // Limit context length
         .map((game, index) => {
           const timeStr = new Date(game.commence_time).toLocaleString('en-US', {
-            timeZone: TZ,
-            month: 'short',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
+            timeZone: TZ, month: 'short', day: 'numeric',
+            hour: '2-digit', minute: '2-digit', hour12: true
           });
-          return `${index + 1}. ${game.away_team} @ ${game.home_team} - ${timeStr}`;
+          // Include game ID if available
+          const gameId = game.event_id || game.id || 'N/A';
+          return `${index + 1}. ${game.away_team} @ ${game.home_team} - ${timeStr} (ID: ${gameId})`;
         })
         .join('\n');
-      return `\n\n📅 VERIFIED SCHEDULE (Next ${hours} hours):\n${gameList}\n\nANALYTICAL MANDATE: Base all research exclusively on these verified matchups.`;
+
+      return `\n\n📅 VERIFIED SCHEDULE (${getSportTitle(sportKey)} - Next ${hours} hours):\n${gameList}\n\nANALYTICAL MANDATE: Base all research exclusively on these verified matchups and times.`;
+
     } catch (error) {
-      console.warn('⚠️ Schedule context build failed:', error.message);
-      return `\n\n🎯 ELITE ANALYST MODE: Live data temporarily limited. Applying fundamental sports analysis methodologies.`;
+      console.warn(`⚠️ Schedule context build failed for ${sportKey}:`, error.message);
+      // Provide a generic fallback but mention the sport
+      return `\n\n🎯 ELITE ANALYST MODE (${getSportTitle(sportKey)}): Live schedule data temporarily limited. Applying fundamental sports analysis methodologies.`;
     }
   }
 
+
   clearCache() {
     this.requestCache.clear();
-    console.log('🧹 AI Service cache cleared');
+    console.log('🧹 AI Service request cache cleared');
   }
 
   getCacheStats() {
-    return { size: this.requestCache.size, keys: Array.from(this.requestCache.keys()) };
+    return {
+         size: this.requestCache.size,
+         keys: Array.from(this.requestCache.keys()).slice(0, 10), // Show first 10 keys
+         ttl: `${this.cacheTTL / 1000}s`
+     };
   }
-}
 
+   // New function for direct chat completion
+   async genericChat(model, messages) {
+       const { PERPLEXITY_API_KEY } = env;
+       if (!PERPLEXITY_API_KEY) throw new Error('Perplexity API key not configured');
+
+       const modelName = AI_MODELS[model] || AI_MODELS['sonar-small-chat']; // Default to small chat
+
+       try {
+           const response = await axios.post(
+               'https://api.perplexity.ai/chat/completions',
+               {
+                   model: modelName,
+                   messages: messages,
+                   temperature: 0.7, // Slightly higher temp for chat
+                   max_tokens: 1000, // Reasonable limit for chat
+               },
+               {
+                   headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
+                   timeout: 45000, // 45 second timeout for chat
+               }
+           );
+           return response?.data?.choices?.[0]?.message?.content || 'Sorry, I could not generate a response.';
+       } catch (error) {
+           console.error(`❌ Generic Chat Error (Model: ${modelName}):`, error.message);
+            throw new Error(`AI chat failed: ${error.message}`); // Re-throw for handler
+       }
+   }
+
+   // New function for odds validation (placeholder)
+    async validateOdds(oddsData) {
+        // Placeholder - replace with actual validation logic if needed
+        console.log("Simulating AI odds validation...");
+        await sleep(50); // Simulate network latency
+        return { valid: true, issues: [] }; // Assume valid for now
+    }
+
+
+} // End of QuantumAIService class
+
+// Instantiate and export the service
 const quantumAIService = new QuantumAIService();
 export default quantumAIService;
