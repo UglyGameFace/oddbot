@@ -4,7 +4,7 @@ import quantumAIService from '../../services/aiService.js';
 import * as sportsSvc from '../../services/sportsService.js'; // Use your sports service
 import gamesService from '../../services/gamesService.js'; // Needed for renderOrRetry
 import { sentryService } from '../../services/sentryService.js';
-// ** FIX: Import CORRECT state function names **
+// ** Import CORRECT state function names **
 import { setUserState, getUserState, getParlaySlip, setParlaySlip, getAIConfig, clearUserState } from '../state.js';
 // ** FIX: REMOVED incorrect import for formatParlayText from enterpriseUtilities **
 // import { formatParlayText as originalFormatParlayText } from '../../utils/enterpriseUtilities.js'; // <--- REMOVED THIS LINE
@@ -18,28 +18,30 @@ const getSportTitle = sportsSvc.getSportTitle;
 async function safeEditMessage(bot, chatId, messageId, text, options = {}) {
   try {
     const opts = { ...options, reply_markup: options.reply_markup || {} };
+    // Add disable_web_page_preview to prevent link previews unless explicitly wanted
     if (opts.disable_web_page_preview === undefined) {
         opts.disable_web_page_preview = true;
     }
     return await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...opts });
   } catch (err) {
     const msg = err?.response?.body?.description || err?.message || String(err);
-    if (msg.includes('message is not modified')) return null;
-    if (msg.includes('message to edit not found')) {
+    if (msg.includes('message is not modified')) return null; // Ignore "not modified"
+    if (msg.includes('message to edit not found')) { // If original message deleted, send new one
       console.warn(`Original message ${messageId} not found, sending new message.`);
+      // Ensure options are passed to sendMessage as well
       const sendOpts = { ...options };
        if (sendOpts.disable_web_page_preview === undefined) {
            sendOpts.disable_web_page_preview = true;
        }
       return await bot.sendMessage(chatId, text, sendOpts);
     }
-    console.error(`safeEditMessage failed: ${msg}`, err);
-    throw err;
+    console.error(`safeEditMessage failed: ${msg}`, err); // Log other errors
+    throw err; // Re-throw for upstream handling
   }
 }
 
 // ** FIX: Define formatParlayText locally as it's not imported **
-// (Using the definition from the earlier version of ai.js)
+// (Using the definition from the earlier version of ai.js you provided)
 function formatParlayText(parlay, sportKey) {
   if (!parlay) return "Error: Parlay data is missing."; // Handle null/undefined parlay
   const {
@@ -101,6 +103,7 @@ function formatParlayText(parlay, sportKey) {
 const ITEMS_PER_PAGE = 10;
 
 async function sendAiSportSelectionMenu(bot, chatId, messageId = null, page = 0) {
+  // Use getAllSports as confirmed in sportsService.js
   const allSports = sportsSvc.sortSports(await sportsSvc.getAllSports());
   if (!allSports || allSports.length === 0) {
     const errorText = '❌ No sports available currently. Please check data sources or try again later.';
@@ -238,66 +241,62 @@ async function gateLegsToVerified(legs, sportKey, horizonHours, gameContext) {
       const verified = await gamesService.getVerifiedRealGames(sportKey, horizonHours || 72);
       if (!Array.isArray(verified) || verified.length === 0) {
           console.warn(`No verified games found for ${sportKey}. Cannot gate legs.`);
-          // If no verified games, return original legs but mark them as unverified?
-          // For now, returning empty seems safer to prevent display of potentially invalid games.
           return [];
       }
       const idSet = new Set(verified.map(g => g.event_id ?? g.id).filter(id => typeof id === 'string' || typeof id === 'number'));
       const nameSet = new Set(verified.map(g => `${g.away_team} @ ${g.home_team}`.toLowerCase()));
 
-      const filtered = (legs || []).filter((leg) => {
-          if (!leg || typeof leg !== 'object') return false;
-          // Add 'real_game_validated' flag
-          leg.real_game_validated = false; // Default to false
+      const filtered = (legs || []).map(leg => { // Use map to add validation flag
+          if (!leg || typeof leg !== 'object') return null; // Skip invalid leg structures
+
+          let isValid = false;
           if ((typeof leg.game_id === 'string' || typeof leg.game_id === 'number') && idSet.has(leg.game_id)) {
-                leg.real_game_validated = true;
-                return true;
-          }
-          if (leg.event && typeof leg.event === 'string' && nameSet.has(leg.event.toLowerCase())) {
-                 leg.real_game_validated = true;
-                 return true;
-          }
-          if (gameContext && typeof leg.selection === 'string') {
-                // If context is provided, assume it's for a real game even if not in the generic list
-                 leg.real_game_validated = true;
-                 return true;
+              isValid = true;
+          } else if (leg.event && typeof leg.event === 'string' && nameSet.has(leg.event.toLowerCase())) {
+              isValid = true;
+          } else if (gameContext && typeof leg.selection === 'string') {
+              // Assume valid if context provided, but might lack specific game_id initially
+              isValid = true;
           }
 
-          console.warn(`Leg filtered (no verified match): ${leg.event || 'No event'} - ${leg.selection || 'No Selection'}`);
-          return false;
-      });
-
-      // Normalize those that passed filtering
-      if (gameContext) {
-          for (const leg of filtered) { // Only iterate filtered legs
-              if (!leg.event) leg.event = `${gameContext.away_team} @ ${gameContext.home_team}`;
-              if (!leg.commence_time) leg.commence_time = gameContext.commence_time;
-              if (!leg.game_id && (gameContext.event_id || gameContext.id)) {
-                  leg.game_id = gameContext.event_id || gameContext.id;
+          if (isValid) {
+              // Normalize if context exists
+              if (gameContext) {
+                  if (!leg.event) leg.event = `${gameContext.away_team} @ ${gameContext.home_team}`;
+                  if (!leg.commence_time) leg.commence_time = gameContext.commence_time;
+                  if (!leg.game_id && (gameContext.event_id || gameContext.id)) {
+                      leg.game_id = gameContext.event_id || gameContext.id;
+                  }
               }
+              return { ...leg, real_game_validated: true }; // Add flag
+          } else {
+              console.warn(`Leg filtered (no verified match): ${leg.event || 'No event'} - ${leg.selection || 'No Selection'}`);
+              return null; // Exclude this leg
           }
-      }
-      return filtered; // Return only verified legs
+      }).filter(Boolean); // Remove null entries
+
+      return filtered;
   } catch (error) {
       console.error(`Error gating legs for ${sportKey}:`, error);
       sentryService.captureError(error, { extra: { sportKey, stage: 'gateLegsToVerified' } });
-      return legs || []; // Return original legs on error? Or empty? Returning original might be confusing. Empty is safer.
+      return []; // Return empty on error
   }
 }
+
 
 async function renderOrRetry(bot, chatId, messageId, sportKey, numLegs, parlay, state) {
   const { horizonHours, gameContext } = state || {};
 
    if (typeof parlay !== 'object' || parlay === null) {
-        parlay = { legs: [] }; // Default empty if parlay invalid
+        parlay = { legs: [] };
         console.error("renderOrRetry received invalid 'parlay' object:", parlay);
    }
    if (!Array.isArray(parlay.legs)) {
-        parlay.legs = []; // Ensure legs is array
+        parlay.legs = [];
         console.warn("renderOrRetry received parlay with non-array 'legs':", parlay);
    }
 
-  // Gate the legs *before* checking the count
+  // Gate the legs first
   const gatedLegs = await gateLegsToVerified(parlay.legs, sportKey, horizonHours, gameContext);
 
   // Check if enough *verified* legs exist
@@ -316,13 +315,13 @@ async function renderOrRetry(bot, chatId, messageId, sportKey, numLegs, parlay, 
     return;
   }
 
-  // Create the final parlay object using ONLY the gated legs
+  // Use ONLY the gated legs for the final parlay object
   const finalParlay = { ...parlay, legs: gatedLegs };
-  // Pass the final parlay object to the formatter
-  const text = formatParlayText(finalParlay, sportKey);
+  // Pass the final parlay to the formatter
+  const text = formatParlayText(finalParlay, sportKey); // Ensure this uses the locally defined function
 
   await safeEditMessage(bot, chatId, messageId, text, {
-      parse_mode: 'HTML',
+      parse_mode: 'HTML', // Formatter uses HTML
       reply_markup: {
           inline_keyboard: [
               [{ text: '✨ Start New AI Parlay', callback_data: 'ai_start_new' }],
@@ -387,9 +386,9 @@ export function registerAICallbacks(bot) {
         }
         if (data.startsWith('ai_step_legs_')) {
             const numLegs = parseInt(data.substring('ai_step_legs_'.length), 10);
-            const userState = await getUserState(chatId); // Use correct function name
+            const userState = await getUserState(chatId);
             if (userState?.sportKey && userState.current_step === 'ai_legs' && !isNaN(numLegs) && numLegs >= 2 && numLegs <= 10) {
-                await setUserState(chatId, { ...userState, numLegs, current_step: 'ai_generate' }); // Use correct function name
+                await setUserState(chatId, { ...userState, numLegs, current_step: 'ai_generate' });
                 await triggerParlayGeneration(bot, chatId, messageId, userState.sportKey, numLegs);
             } else {
                 await safeEditMessage(bot, chatId, messageId, "❌ Session error or invalid legs (2-10). Start again /ai.", { reply_markup: {} });
@@ -398,7 +397,7 @@ export function registerAICallbacks(bot) {
             return;
         }
         if (data === 'ai_back_sport') {
-            const userState = await getUserState(chatId); // Use correct function name
+            const userState = await getUserState(chatId);
             await sendAiSportSelectionMenu(bot, chatId, messageId, userState?.currentPage || 0);
             return;
         }
@@ -423,7 +422,7 @@ export function registerAICallbacks(bot) {
             }
             return;
         }
-        if (data === 'ai_noop') return; // Acknowledged already
+        if (data === 'ai_noop') return;
 
         console.warn(`Unhandled AI callback: ${data}`);
 
