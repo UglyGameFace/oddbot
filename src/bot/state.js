@@ -139,3 +139,4 @@ export const hasActiveAISession = StateManager.hasActiveAISession.bind(StateMana
 export const getAllActiveSessions = StateManager.getAllActiveSessions.bind(StateManager);
 
 // ** FIX: Added the missing closing brace for the file scope **
+} // <-- This closing brace was missing
