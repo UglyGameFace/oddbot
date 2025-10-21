@@ -7,7 +7,7 @@ import { ElitePromptService } from './elitePromptService.js';
 import { sleep } from '../utils/asyncUtils.js';
 import { getAIConfig } from '../bot/state.js';
 import { strictExtractJSONObject } from '../utils/strictJson.js';
-import { isValidParlay } from '../schemas/parlaySchema.js';
+import { isValidParlayResponse } from '../schemas/parlaySchema.js'; // Renamed import
 
 const TZ = env.TIMEZONE || 'America/New_York';
 const WEB_TIMEOUT_MS = 75000;
