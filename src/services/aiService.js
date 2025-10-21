@@ -9,6 +9,7 @@ import { getAIConfig } from '../bot/state.js';
 import { strictExtractJSONObject } from '../utils/strictJson.js';
 import { isValidParlayResponse } from '../schemas/parlaySchema.js'; // Renamed import
 import { getSportTitle } from './sportsService.js'; // Added this import
+import crypto from 'crypto';
 
 const TZ = env.TIMEZONE || 'America/New_York';
 const WEB_TIMEOUT_MS = 75000;
