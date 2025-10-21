@@ -9,16 +9,16 @@ const memoryCache = new Map();
 
 async function getConfig(telegramId, type) {
   const cacheKey = `memory:${telegramId}:${type}`;
-  
+
   console.log(`🔧 getConfig called: ${telegramId}, ${type}`);
-  
+
   // Try Redis first
   try {
     const redis = await getRedisClient();
     if (redis) {
       const configKey = `user:config:${telegramId}:${type}`;
       const cachedConfig = await redis.get(configKey);
-      
+
       if (cachedConfig) {
         console.log(`✅ Redis HIT for ${configKey}`);
         try {
@@ -50,10 +50,10 @@ async function getConfig(telegramId, type) {
   // Default configurations
   console.log(`🔄 Using defaults for ${type}`);
   const defaults = {
-    ai: { 
-      mode: 'web', 
-      model: 'perplexity', 
-      betType: 'mixed', 
+    ai: {
+      mode: 'web',
+      model: 'perplexity',
+      betType: 'mixed',
       horizonHours: 72,
       quantitativeMode: 'conservative',
       includeProps: false,
@@ -63,39 +63,39 @@ async function getConfig(telegramId, type) {
       fallbackOnNoGames: true,
       bookmakers: ['draftkings', 'fanduel']
     },
-    builder: { 
-      minOdds: -200, 
-      maxOdds: 500, 
-      avoidSameGame: true, 
+    builder: {
+      minOdds: -200,
+      maxOdds: 500,
+      avoidSameGame: true,
       cutoffHours: 48,
       excludedTeams: [],
       requireVerifiedGames: true
     }
   };
-  
+
   const defaultConfig = { ...defaults[type] };
   // Cache in memory
   memoryCache.set(cacheKey, { data: defaultConfig, timestamp: Date.now() });
-  
+
   return defaultConfig;
 }
 
 async function setConfig(telegramId, type, newConfigData) {
   console.log(`🔧 setConfig called: ${telegramId}, ${type}`, newConfigData);
-  
+
   const cacheKey = `memory:${telegramId}:${type}`;
-  
+
   try {
     // Update memory cache immediately
     memoryCache.set(cacheKey, { data: newConfigData, timestamp: Date.now() });
-    
+
     // Try to save to Redis
     const redis = await getRedisClient();
     if (redis) {
       const configKey = `user:config:${telegramId}:${type}`;
       await redis.set(configKey, JSON.stringify(newConfigData), 'EX', 86400); // 24 hours
       console.log(`✅ Redis SET for ${configKey}`);
-      
+
       // Verify the write
       const verify = await redis.get(configKey);
       if (verify) {
@@ -106,32 +106,8 @@ async function setConfig(telegramId, type, newConfigData) {
     } else {
       console.warn('⚠️ Redis not available, using memory cache only');
     }
-    
+
     return true;
   } catch (error) {
     console.error('❌ Config save failed:', error.message);
-    // Still keep in memory cache even if Redis fails
-    return false;
-  }
-}
-
-export const getAIConfig = (id) => getConfig(id, 'ai');
-export const setAIConfig = (id, cfg) => setConfig(id, 'ai', cfg);
-
-export const getBuilderConfig = (id) => getConfig(id, 'builder');
-export const setBuilderConfig = (id, cfg) => setConfig(id, 'builder', cfg);
-
-// Re-export state manager functions
-import StateManager from './stateManager.js';
-export const setUserState = StateManager.setUserState.bind(StateManager);
-export const getUserState = StateManager.getUserState.bind(StateManager);
-export const getParlaySlip = StateManager.getParlaySlip.bind(StateManager);
-export const setParlaySlip = StateManager.setParlaySlip.bind(StateManager);
-export const setValidationState = StateManager.setValidationState.bind(StateManager);
-export const getValidationState = StateManager.getValidationState.bind(StateManager);
-export const saveToken = StateManager.saveToken.bind(StateManager);
-export const loadToken = StateManager.loadToken.bind(StateManager);
-export const clearUserState = StateManager.clearUserState.bind(StateManager);
-export const getUserActivityStats = StateManager.getUserActivityStats.bind(StateManager);
-export const hasActiveAISession = StateManager.hasActiveAISession.bind(StateManager);
-export const getAllActiveSessions = StateManager.getAllActiveSessions.bind(StateManager);
+    // Still keep in memory cache
