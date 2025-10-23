@@ -1,4 +1,3 @@
-===FILE:oddbot-main.zip/src/bot/state.js===
 // src/bot/state.js - COMPLETE FILE with setUserState Robustness Fix
 import stateManager from './stateManager.js';
 import databaseService from '../services/databaseService.js'; // For fetching initial settings
