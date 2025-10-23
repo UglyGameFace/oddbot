@@ -1,809 +1,481 @@
-// src/services/quantitativeService.js - COMPLETE FIXED VERSION
-import { withTimeout } from '../utils/asyncUtils.js';
+// src/services/quantitativeService.js - EV-DRIVEN UPDATE
+import { sentryService } from './sentryService.js'; // Added Sentry
+import { toDecimalFromAmerican, toAmericanFromDecimal } from '../utils/botUtils.js'; // Use shared utils
 
-// Probability calculation utilities
+// --- Core Probability & Odds Utilities ---
 class ProbabilityCalculator {
-  static clampProb(x) {
-    if (!Number.isFinite(x)) return 0.5;
-    return Math.max(0.0001, Math.min(0.9999, x));
+  static clampProb(p) {
+    if (typeof p !== 'number' || !Number.isFinite(p)) return 0.5; // Default invalid probability to 50%
+    return Math.max(0.01, Math.min(0.99, p)); // Clamp between 1% and 99%
   }
 
-  static calculateEV(decimalOdds, probability) {
-    const p = this.clampProb(probability);
-    return (decimalOdds * p - 1) * 100;
+  // Calculates Expected Value as a percentage (per $100 wagered)
+  static calculateEVPercentage(decimalOdds, modelProbability) {
+    if (decimalOdds <= 1 || !modelProbability) return -100; // Cannot profit if odds <= 1
+    const p = this.clampProb(modelProbability);
+    // EV = (Probability of Winning * Amount Won Per Dollar) - (Probability of Losing * Amount Lost Per Dollar)
+    // Amount Won Per Dollar = decimalOdds - 1
+    // Amount Lost Per Dollar = 1
+    // EV = p * (decimalOdds - 1) - (1 - p) * 1
+    // EV = p * decimalOdds - p - 1 + p
+    // EV = p * decimalOdds - 1
+    // EV % = (p * decimalOdds - 1) * 100
+    const ev = (p * decimalOdds - 1) * 100;
+    return ev;
   }
 
-  static kellyFraction(decimalOdds, probability) {
-    const p = this.clampProb(probability);
-    const b = Math.max(0, decimalOdds - 1);
-    if (b === 0) return 0;
-    const k = ((decimalOdds * p) - 1) / b;
-    return Math.max(0, k);
+  // Calculates the Kelly Criterion fraction
+  static kellyFraction(decimalOdds, modelProbability) {
+    if (decimalOdds <= 1 || !modelProbability) return 0; // Cannot bet if odds <= 1 or no probability
+    const p = this.clampProb(modelProbability);
+    const b = decimalOdds - 1; // Net odds received on a win
+    if (b <= 0) return 0; // Cannot bet if net odds are not positive
+    const q = 1 - p; // Probability of losing
+    // Kelly formula: f* = (bp - q) / b
+    const kelly = (b * p - q) / b;
+    return Math.max(0, kelly); // Kelly fraction cannot be negative
   }
 
+  // Convert American odds from AI input to Decimal
   static americanToDecimal(americanOdds) {
-    if (americanOdds > 0) return (americanOdds / 100) + 1;
-    return (100 / Math.abs(americanOdds)) + 1;
+     // Use imported function, add validation
+     if (typeof americanOdds !== 'number' || americanOdds === 0) return 1.0; // Invalid odds return 1.0
+     return toDecimalFromAmerican(americanOdds);
   }
 
-  static decimalToAmerican(decimalOdds) {
-    if (decimalOdds >= 2) return Math.round((decimalOdds - 1) * 100);
-    return Math.round(-100 / (decimalOdds - 1));
-  }
-
-  static impliedProbability(decimalOdds) {
-    if (decimalOdds <= 0) return 0;
+  // Calculate Implied Probability from Decimal Odds
+   static impliedProbability(decimalOdds) {
+    if (typeof decimalOdds !== 'number' || decimalOdds <= 1) return 0;
     return 1 / decimalOdds;
   }
 
-  static noVigProbability(probHome, probAway, probDraw = 0) {
-    const total = probHome + probAway + probDraw;
-    if (total === 0) return { home: 0, away: 0, draw: 0 };
-    return {
-      home: probHome / total,
-      away: probAway / total,
-      draw: probDraw / total
-    };
-  }
-}
-
-// Leg probability resolver
-class LegProbabilityResolver {
-  static resolveLegFairProb(leg) {
-    // Priority: explicit fair_prob -> confidence -> no_vig_prob -> implied from odds -> 0.5
-    if (Number.isFinite(leg.fair_prob)) return ProbabilityCalculator.clampProb(leg.fair_prob);
-    if (Number.isFinite(leg.confidence)) return ProbabilityCalculator.clampProb(leg.confidence);
-    if (Number.isFinite(leg.no_vig_prob)) return ProbabilityCalculator.clampProb(leg.no_vig_prob);
-
-    const dec = this.resolveLegDecimalOdds(leg);
-    if (Number.isFinite(dec) && dec > 1) {
-      const implied = 1 / dec;
-      const approxNoVig = ProbabilityCalculator.clampProb(implied / 0.95); // Light haircut for vig
-      return approxNoVig;
-    }
-
-    return 0.5;
+  // Convert Decimal back to American for output/display if needed
+   static decimalToAmerican(decimalOdds) {
+      if (typeof decimalOdds !== 'number' || decimalOdds <= 1) return null; // Or return a default like '+10000'?
+      return toAmericanFromDecimal(decimalOdds);
   }
 
-  static resolveLegDecimalOdds(leg) {
-    if (Number.isFinite(leg.odds_decimal) && leg.odds_decimal > 1) return leg.odds_decimal;
-    const fromQuote = leg?.best_quote?.decimal;
-    if (Number.isFinite(fromQuote) && fromQuote > 1) return fromQuote;
-    return undefined;
-  }
-}
+} // End ProbabilityCalculator
 
-// Risk assessment engine
+// --- Risk Assessment Engine ---
+// Updated to use inputs from the AI's detailed leg output
 class RiskAssessmentEngine {
-  static assessRisks(legs, calibrated, validationMetrics = null) {
+  static assessRisks(legs = [], parlayMetrics = {}) {
     const risks = [];
-    const markets = legs.map((leg) => leg.market);
-    const uniqueGames = new Set(legs.map((leg) => leg.game));
+    if (!Array.isArray(legs) || legs.length === 0) {
+      return { risks: [{ type: 'INPUT', severity: 'CRITICAL', message: 'No legs provided for risk assessment.' }], overallRisk: 'REJECTED' };
+    }
     const numLegs = legs.length;
 
-    // Add validation risks if available
-    if (validationMetrics) {
-      if (validationMetrics.validation_rate < 0.5) {
-        risks.push({
-          type: 'VALIDATION',
-          severity: 'HIGH',
-          message: 'Low real game validation rate',
-          impact: 'Many legs may be based on non-existent games'
-        });
-      } else if (validationMetrics.validation_rate < 0.8) {
-        risks.push({
-          type: 'VALIDATION',
-          severity: 'MEDIUM',
-          message: 'Moderate real game validation rate',
-          impact: 'Some legs may not be verified'
-        });
-      }
+    // 1. Injury Gate Risk
+    const criticalInjuryGates = legs.flatMap(leg =>
+      (leg.injury_gates || []).filter(gate =>
+         /\((Questionable|Doubtful|Out)\)/i.test(gate) // Check for critical statuses
+      )
+    );
+    if (criticalInjuryGates.length > 0) {
+      risks.push({
+        type: 'INJURY',
+        severity: 'HIGH',
+        message: `Critical player statuses unresolved: ${criticalInjuryGates.slice(0, 2).join(', ')}${criticalInjuryGates.length > 2 ? '...' : ''}`,
+        impact: 'Parlay validity depends on player availability.'
+      });
     }
 
-    // Correlation risk (same games)
-    const sameGameRatio = uniqueGames.size / numLegs;
-    if (sameGameRatio < 0.7) {
+    // 2. Correlation Risk (using AI's assessment primarily)
+    const highCorrLegs = legs.filter(leg => /high positive/i.test(leg.correlation_notes || ''));
+    const negCorrLegs = legs.filter(leg => /negative/i.test(leg.correlation_notes || ''));
+    if (negCorrLegs.length > 0) {
+       risks.push({
+        type: 'CORRELATION',
+        severity: 'CRITICAL', // Negative correlation often invalidates parlays
+        message: `Negative correlation detected between legs: ${negCorrLegs.map(l => l.selection).join(' vs ')}`,
+        impact: 'Parlay likely invalid or has significantly reduced true odds.'
+      });
+    } else if (parlayMetrics.correlation_score > 0.3 || highCorrLegs.length >= 2) { // Use combined score or count
       risks.push({
         type: 'CORRELATION',
-        severity: 'HIGH',
-        message: 'Too many legs from similar games/teams',
-        impact: 'Joint probability overestimated'
-      });
-    }
-
-    // Market concentration risk
-    const marketVariety = new Set(markets).size;
-    if (marketVariety < Math.min(3, numLegs)) {
-      risks.push({
-        type: 'MARKET_CONCENTRATION',
         severity: 'MEDIUM',
-        message: 'Low market variety increases correlation risk',
-        impact: 'Reduced diversification benefits'
+        message: `Potential positive correlation detected (Score: ${parlayMetrics.correlation_score?.toFixed(2) ?? 'N/A'}).`,
+        impact: 'Joint probability might be slightly lower than product.'
       });
     }
 
-    // Overconfidence risk
-    const highConfidenceLegs = legs.filter((leg) => (leg.fair_prob || 0) > 0.7).length;
-    if (highConfidenceLegs > numLegs * 0.5) {
-      risks.push({
-        type: 'OVERCONFIDENCE',
-        severity: 'MEDIUM',
-        message: 'High number of high-confidence legs suggests potential overestimation',
-        impact: 'Probabilities may be inflated'
-      });
+    // 3. Market Signal Conflict Risk
+    const rlmConflicts = legs.filter(leg =>
+        leg.market_signals?.reverse_line_movement &&
+        /against model|conflicts with edge/i.test(leg.market_signals.reverse_line_movement)
+    );
+    if (rlmConflicts.length > 0) {
+        risks.push({
+            type: 'MARKET_SIGNAL',
+            severity: 'MEDIUM',
+            message: `Reverse line movement conflicts with model edge on ${rlmConflicts.length} leg(s).`,
+            impact: 'Sharp money may disagree with the model.'
+        });
     }
 
-    // Price efficiency awareness
-    if (calibrated.jointProbability < 0.75 * legs.reduce((acc, l) => acc * ProbabilityCalculator.clampProb(l.fair_prob || l.confidence || 0.5), 1)) {
-      risks.push({
-        type: 'MARKET_EFFICIENCY',
-        severity: 'LOW',
-        message: 'Calibration significantly reduced joint probability; market may be efficient',
-        impact: 'Limited edge opportunities'
-      });
+    // 4. Low Edge / Negative EV Risk
+    if (parlayMetrics.parlay_ev_per_100 < 1) { // EV threshold (e.g., 1%)
+        risks.push({
+            type: 'VALUE',
+            severity: 'HIGH',
+            message: `Low or negative overall EV (${parlayMetrics.parlay_ev_per_100?.toFixed(2)}%) after analysis.`,
+            impact: 'Parlay is likely unprofitable long-term.'
+        });
+    } else if (legs.some(leg => leg.ev_per_100 < 0.5)) { // Check individual leg EV
+         risks.push({
+            type: 'VALUE',
+            severity: 'LOW',
+            message: 'One or more legs have very marginal EV.',
+            impact: 'Reduces overall parlay value and robustness.'
+        });
     }
 
-    // Odds quality risk
-    const legsWithOdds = legs.filter(leg => LegProbabilityResolver.resolveLegDecimalOdds(leg));
-    if (legsWithOdds.length < legs.length) {
-      risks.push({
-        type: 'ODDS_QUALITY',
-        severity: 'MEDIUM',
-        message: `${legs.length - legsWithOdds.length} legs missing reliable odds data`,
-        impact: 'Probability estimates less reliable'
-      });
+    // 5. Data Quality / Stale Odds Risk (Check Timestamps)
+    const now = Date.now();
+    const staleLegs = legs.filter(leg => {
+        if (!leg.timestamp) return true; // Missing timestamp is high risk
+        try {
+            return (now - new Date(leg.timestamp).getTime()) > 15 * 60 * 1000; // Older than 15 mins
+        } catch { return true; } // Invalid timestamp
+    });
+     if (staleLegs.length > 0) {
+        risks.push({
+            type: 'DATA_STALE',
+            severity: 'MEDIUM',
+            message: `${staleLegs.length} leg(s) based on potentially stale odds (>15 min old).`,
+            impact: 'Current market price may differ, affecting EV.'
+        });
     }
 
-    const severityOrder = { HIGH: 3, ELEVATED: 2, MODERATE: 1, LOW: 0 };
-    const overall = risks.some((r) => r.severity === 'HIGH') ? 'HIGH' :
-                   risks.some((r) => r.severity === 'ELEVATED') ? 'ELEVATED' :
-                   risks.length > 0 ? 'MODERATE' : 'LOW';
+    // Determine Overall Risk Level
+    let overallRisk = 'LOW';
+    if (risks.some(r => r.severity === 'CRITICAL')) overallRisk = 'REJECTED';
+    else if (risks.some(r => r.severity === 'HIGH')) overallRisk = 'HIGH';
+    else if (risks.filter(r => r.severity === 'MEDIUM').length >= 2) overallRisk = 'HIGH';
+    else if (risks.some(r => r.severity === 'MEDIUM')) overallRisk = 'MEDIUM';
+    // else remains LOW
 
     return {
       risks,
-      overallRisk: overall,
-      riskFactors: risks.map((r) => r.type),
-      riskScore: this.calculateRiskScore(risks, numLegs)
+      overallRisk: overallRisk, // LOW, MEDIUM, HIGH, REJECTED
+      riskFactors: risks.map((r) => r.type), // List of risk types identified
     };
   }
 
-  static calculateRiskScore(risks, numLegs) {
-    const severityWeights = { HIGH: 3, ELEVATED: 2, MODERATE: 1, LOW: 0.5 };
-    const baseScore = risks.reduce((score, risk) => score + severityWeights[risk.severity], 0);
-    const legPenalty = Math.max(0, (numLegs - 3) * 0.2); // Penalty for too many legs
-    return Math.min(10, baseScore + legPenalty);
-  }
-}
+} // End RiskAssessmentEngine
 
-// Calibration engine
-class CalibrationEngine {
-  constructor(calibrationFactors) {
-    this.factors = calibrationFactors;
-  }
-
-  applyComprehensiveCalibration(rawProbabilities, rawJointProb, bookmakerJointProb, legs, validationMetrics = null) {
-    // 1) Shrink individual probabilities toward 0.5 to reduce overconfidence
-    const shrunkProbabilities = rawProbabilities.map((p) => {
-      const s = p.raw * (1 - this.factors.overconfidenceShrinkage)
-              + 0.5 * this.factors.overconfidenceShrinkage;
-      return { ...p, shrunk: ProbabilityCalculator.clampProb(Math.max(0.4, Math.min(0.9, s))) };
-    });
-
-    // 2) Shrunk joint probability under (approx) independence
-    let shrunkJointProb = shrunkProbabilities.reduce((acc, p) => acc * p.shrunk, 1);
-
-    // 3) Correlation penalty
-    const correlationPenalty = this.calculateCorrelationPenalty(legs);
-
-    const correlatedJointProb = shrunkJointProb * (1 - correlationPenalty);
-
-    // 4) Vig adjustment (global haircut)
-    const vigAdjustedProb = correlatedJointProb * this.factors.vigAdjustment;
-
-    // 5) Line movement risk per leg
-    const finalProbability = vigAdjustedProb * Math.pow(1 - this.factors.lineMovementRisk, legs.length);
-
-    // 6) Apply validation penalty if low validation rate
-    let validationAdjustedProb = finalProbability;
-    if (validationMetrics && validationMetrics.validation_rate < 0.8) {
-      const validationPenalty = 1 - (validationMetrics.validation_rate * 0.5); // Up to 50% penalty for poor validation
-      validationAdjustedProb = finalProbability * (1 - validationPenalty);
-    }
-
-    // Ensure not below 80% of bookmaker implied probability
-    const realisticProbability = Math.max(
-      validationAdjustedProb,
-      bookmakerJointProb * 0.8
-    );
-
-    return {
-      legProbabilities: shrunkProbabilities,
-      jointProbability: ProbabilityCalculator.clampProb(realisticProbability),
-      adjustments: {
-        shrinkage: this.factors.overconfidenceShrinkage,
-        correlationPenalty,
-        vigAdjustment: this.factors.vigAdjustment,
-        lineMovementRisk: this.factors.lineMovementRisk,
-        validationPenalty: validationMetrics ? (1 - validationMetrics.validation_rate) * 0.5 : 0
-      }
-    };
-  }
-
-  calculateCorrelationPenalty(legs) {
-    const numLegs = legs.length;
-    const basePenalty = Math.min(
-      this.factors.maxCorrelationPenalty,
-      this.factors.correlationPenaltyPerLeg * numLegs
-    );
-
-    // Same-game clusters
-    const byGame = new Map();
-    legs.forEach((l) => {
-      const key = l.game || 'UNK';
-      byGame.set(key, (byGame.get(key) || 0) + 1);
-    });
-    const sameGameSurcharge = [...byGame.values()]
-      .filter((n) => n > 1)
-      .reduce((sum, n) => sum + 0.02 * (n - 1), 0);
-
-    // Market concentration
-    const marketSet = new Set(legs.map((l) => l.market));
-    const marketConcentration = Math.max(0, (numLegs - marketSet.size)) * 0.01;
-
-    return Math.min(
-      this.factors.maxCorrelationPenalty,
-      basePenalty + sameGameSurcharge + marketConcentration
-    );
-  }
-}
-
-// Recommendation engine
+// --- Recommendation Engine ---
+// Simplified recommendations based on EV, Kelly, and Risk
 class RecommendationEngine {
-  static generateRecommendations(calibrated, rawEV, calibratedEV, numLegs, riskAssessment, validationMetrics = null) {
-    const recommendations = [];
+    static generateRecommendations(parlayMetrics, riskAssessment) {
+        const recommendations = [];
+        const ev = parlayMetrics?.parlay_ev_per_100 ?? -100;
+        const kellyRec = parlayMetrics?.kelly_stake?.recommended_fraction ?? 0;
+        const riskLevel = riskAssessment?.overallRisk ?? 'REJECTED';
 
-    // Validation-based recommendations
-    if (validationMetrics) {
-      if (validationMetrics.validation_rate < 0.5) {
-        recommendations.push({
-          type: 'VALIDATION_ISSUE',
-          priority: 'HIGH',
-          message: 'Low real game validation - many legs may be based on non-existent games',
-          action: 'Use verified schedule data or try Live mode',
-          confidence: 'high'
-        });
-      } else if (validationMetrics.validation_rate < 0.8) {
-        recommendations.push({
-          type: 'VALIDATION_WARNING',
-          priority: 'MEDIUM',
-          message: 'Moderate real game validation - some legs may not be verified',
-          action: 'Consider using Live mode for better verification',
-          confidence: 'medium'
-        });
-      }
+        if (riskLevel === 'REJECTED') {
+            recommendations.push({
+                priority: 'CRITICAL',
+                message: `Parlay REJECTED due to: ${riskAssessment.risks.find(r => r.severity === 'CRITICAL')?.message || 'Critical risk factors.'}`,
+                action: 'DO NOT BET. Re-evaluate legs or wait for updates (e.g., injuries).'
+            });
+            return recommendations; // Stop further recommendations if rejected
+        }
+
+        // EV Based
+        if (ev > 15) {
+             recommendations.push({ priority: 'HIGH', type: 'EV', message: `Strong positive EV (+${ev.toFixed(1)}%) detected.` });
+        } else if (ev > 5) {
+             recommendations.push({ priority: 'MEDIUM', type: 'EV', message: `Moderate positive EV (+${ev.toFixed(1)}%) detected.` });
+        } else if (ev > 0) {
+             recommendations.push({ priority: 'LOW', type: 'EV', message: `Marginal positive EV (+${ev.toFixed(1)}%). Consider risk.` });
+        } else {
+             recommendations.push({ priority: 'HIGH', type: 'EV', message: `Negative EV (${ev.toFixed(1)}%) detected.` });
+        }
+
+        // Staking Based
+        if (kellyRec > 0.02) { // e.g., > 2% bankroll via Quarter Kelly
+             recommendations.push({ priority: 'HIGH', type: 'STAKE', message: `Significant edge warrants consideration. Recommended stake: ${(kellyRec * 100).toFixed(1)}% bankroll.` });
+        } else if (kellyRec > 0.005) { // e.g., > 0.5% bankroll
+             recommendations.push({ priority: 'MEDIUM', type: 'STAKE', message: `Modest edge. Recommended stake: ${(kellyRec * 100).toFixed(1)}% bankroll.` });
+        } else {
+             recommendations.push({ priority: 'LOW', type: 'STAKE', message: `Minimal edge. Consider minimum stake or passing. Recommended: ${(kellyRec * 100).toFixed(1)}% bankroll.` });
+        }
+
+        // Risk Based
+        if (riskLevel === 'HIGH') {
+             recommendations.push({ priority: 'HIGH', type: 'RISK', message: `High risk factors identified. ${riskAssessment.risks.filter(r=>r.severity ==='HIGH').map(r=>r.type).join(', ')}`, action: 'Reduce stake significantly or avoid.' });
+        } else if (riskLevel === 'MEDIUM') {
+             recommendations.push({ priority: 'MEDIUM', type: 'RISK', message: `Medium risk factors present. ${riskAssessment.risks.filter(r=>r.severity ==='MEDIUM').map(r=>r.type).join(', ')}`, action: 'Consider slightly reduced stake.' });
+        }
+
+        // Specific Actionable Items from Risks
+         riskAssessment.risks.forEach(risk => {
+             if (risk.type === 'INJURY' && risk.severity === 'HIGH') {
+                 recommendations.push({ priority: 'HIGH', type: 'ACTION', message: 'Re-evaluate parlay once injury statuses are final.', action: 'WAIT/CHECK INJURIES' });
+             }
+              if (risk.type === 'DATA_STALE') {
+                 recommendations.push({ priority: 'MEDIUM', type: 'ACTION', message: 'Odds may be stale. Verify current prices before betting.', action: 'CHECK CURRENT ODDS' });
+             }
+              if (risk.type === 'MARKET_SIGNAL' && risk.severity === 'MEDIUM') {
+                 recommendations.push({ priority: 'MEDIUM', type: 'ACTION', message: 'Sharp money may conflict with model. Consider reducing stake.', action: 'REDUCE STAKE' });
+             }
+         });
+
+
+        // Combine Actionable Advice
+        let primaryAction = "Review risks and stake recommendations.";
+        if (riskLevel === 'REJECTED') primaryAction = "DO NOT BET.";
+        else if (recommendations.some(r => r.action === 'WAIT/CHECK INJURIES')) primaryAction = "WAIT for injury updates before betting.";
+        else if (ev <= 0) primaryAction = "AVOID due to negative EV.";
+        else if (riskLevel === 'HIGH') primaryAction = "REDUCE STAKE significantly due to high risk.";
+        else if (kellyRec > 0.005) primaryAction = `Consider betting ${(kellyRec * 100).toFixed(1)}% of bankroll.`;
+        else primaryAction = "Consider minimum stake or pass due to low edge.";
+
+
+        // Sort by priority (CRITICAL > HIGH > MEDIUM > LOW)
+         const priorityOrder = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
+         recommendations.sort((a, b) => (priorityOrder[b.priority] || 0) - (priorityOrder[a.priority] || 0));
+
+
+        return {
+            list: recommendations.slice(0, 5), // Limit to top 5 recommendations
+            primaryAction: primaryAction
+        };
     }
 
-    // EV-based recommendations
-    if (calibratedEV > 10) {
-      recommendations.push({
-        type: 'STRONG_EDGE',
-        priority: 'HIGH',
-        message: 'Strong positive EV detected after calibration',
-        action: 'Consider full stake on this parlay',
-        confidence: 'high'
-      });
-    } else if (calibratedEV > 0) {
-      recommendations.push({
-        type: 'MODEST_EDGE',
-        priority: 'MEDIUM',
-        message: 'Modest positive EV - conservative approach recommended',
-        action: 'Consider reduced stake or breaking into smaller parlays',
-        confidence: 'medium'
-      });
-    } else {
-      recommendations.push({
-        type: 'NEGATIVE_EV',
-        priority: 'HIGH',
-        message: 'Negative EV after realistic calibration',
-        action: 'Avoid this parlay or significantly reduce stake',
-        confidence: 'high'
-      });
-    }
+} // End RecommendationEngine
 
-    // Leg count recommendations
-    if (numLegs >= 4 && calibratedEV < rawEV * 0.3) {
-      recommendations.push({
-        type: 'REDUCE_LEGS',
-        priority: 'MEDIUM',
-        message: 'Large leg count significantly reduces realistic EV',
-        action: `Consider 2-3 leg parlay instead of ${numLegs} legs`,
-        confidence: 'medium'
-      });
-    }
 
-    // Correlation recommendations
-    if (calibrated.adjustments.correlationPenalty > 0.15) {
-      recommendations.push({
-        type: 'DIVERSIFY',
-        priority: 'MEDIUM',
-        message: 'High correlation penalty suggests need for diversification',
-        action: 'Include legs from different games/markets',
-        confidence: 'medium'
-      });
-    }
-
-    // Risk-based recommendations
-    if (riskAssessment.overallRisk === 'HIGH') {
-      recommendations.push({
-        type: 'HIGH_RISK',
-        priority: 'HIGH',
-        message: 'Parlay carries elevated risk levels',
-        action: 'Consider significantly reduced stake or alternative bets',
-        confidence: 'high'
-      });
-    }
-
-    return recommendations.sort((a, b) => {
-      const priorityOrder = { HIGH: 3, MEDIUM: 2, LOW: 1 };
-      return priorityOrder[b.priority] - priorityOrder[a.priority];
-    });
-  }
-}
-
-// Optimal structure analyzer
-class OptimalStructureAnalyzer {
-  static findOptimalStructure(legs, rawProbabilities) {
-    if (legs.length <= 2) {
-      return { optimalLegs: legs.length, message: 'Current structure is optimal' };
-    }
-
-    // Sort legs by highest raw confidence
-    const sorted = legs
-      .map((leg, idx) => ({ leg, probability: ProbabilityCalculator.clampProb(rawProbabilities[idx].raw) }))
-      .sort((a, b) => b.probability - a.probability);
-
-    const counts = [2, 3, 4].filter((n) => n <= legs.length);
-
-    const analysis = counts.map((k) => {
-      const chosen = sorted.slice(0, k);
-      const jointProb = chosen.reduce((acc, item) => acc * item.probability, 1);
-      const decimalOdds = chosen.reduce(
-        (acc, item) => acc * (LegProbabilityResolver.resolveLegDecimalOdds(item.leg) || 1.9),
-        1
-      );
-
-      const rawEV = ProbabilityCalculator.calculateEV(decimalOdds, jointProb);
-
-      // Quick calibration heuristic
-      const basePenalty = Math.min(0.30, 0.05 * k);
-      const quickProb = jointProb
-        * (1 - basePenalty)
-        * 0.95
-        * Math.pow(1 - 0.02, k)
-        * 0.85;
-
-      const calibratedEV = ProbabilityCalculator.calculateEV(decimalOdds, ProbabilityCalculator.clampProb(quickProb));
-
-      return {
-        legs: k,
-        legsList: chosen.map((c) => c.leg.pick),
-        rawEV,
-        calibratedEV,
-        jointProbability: jointProb,
-        decimalOdds,
-        kellyFraction: ProbabilityCalculator.kellyFraction(decimalOdds, quickProb)
-      };
-    });
-
-    const best = analysis.reduce((a, b) => (b.calibratedEV > a.calibratedEV ? b : a));
-
-    return {
-      bestCombination: best,
-      allCombinations: analysis,
-      recommendation:
-        best.legs !== legs.length
-          ? `Consider reducing to ${best.legs} legs for better risk-adjusted returns`
-          : 'Current leg count appears optimal'
-    };
-  }
-}
-
-// Main Quantitative Service Class
+// --- Main Quantitative Service Class ---
+// Updated to use the AI's provided probabilities and structure
 class QuantitativeService {
-  /**
-   * @param {Partial<CalibrationFactors>} [overrides]
-   * @param {{logger?:{info:Function,warn:Function,error:Function}}} [deps]
-   */
-  constructor(overrides = {}, deps = {}) {
-    const defaults = {
-      overconfidenceShrinkage: 0.15,
-      correlationPenaltyPerLeg: 0.05,
-      maxCorrelationPenalty: 0.30,
-      vigAdjustment: 0.95,
-      lineMovementRisk: 0.02
-    };
-
-    this.calibrationFactors = Object.freeze({ ...defaults, ...overrides });
-    this.logger = deps.logger || { info: () => {}, warn: () => {}, error: () => {} };
-    this.calibrationEngine = new CalibrationEngine(this.calibrationFactors);
+  constructor(deps = {}) {
+    // Calibration factors are less relevant now, AI provides calibrated prob
+    this.logger = deps.logger || { info: (...args) => console.log(...args), warn: (...args) => console.warn(...args), error: (...args) => console.error(...args) };
+    // Kelly Cap Policy
+    this.kellyCap = 0.25; // e.g., Quarter Kelly
+    console.log(`📈 Quantitative Service Initialized (Kelly Cap: ${this.kellyCap * 100}%)`);
   }
 
   /**
-   * Comprehensive parlay evaluation with calibration
-   * @param {Leg[]} legs
-   * @param {number} parlayDecimalOdds
-   * @returns {Promise<EvaluateResult|{error:string}>}
+   * Evaluates a parlay based on detailed leg data provided by the AI.
+   * @param {Array<object>} legs - Array of leg objects matching the AI output contract.
+   * @returns {Promise<object>} - Evaluation result including metrics, risks, and recommendations.
    */
-  async evaluateParlay(legs, parlayDecimalOdds) {
-    if (!Array.isArray(legs) || legs.length === 0) {
-      return { 
-        error: 'No legs provided for evaluation',
-        summary: { verdict: 'INVALID', confidence: 'LOW', keyMetric: 'No legs to analyze' }
+  async evaluateParlay(legs) {
+    this.logger.info(`🔬 Evaluating parlay with ${legs?.length || 0} legs...`);
+
+    // --- 1. Input Validation ---
+    if (!Array.isArray(legs) || legs.length < 2) { // Require at least 2 legs for a parlay
+      this.logger.error('❌ evaluateParlay: Invalid input - legs array must have at least 2 elements.');
+      return {
+        error: 'Invalid input: Parlay must have at least 2 legs.',
+        summary: { verdict: 'INVALID', primaryAction: 'Provide at least 2 valid legs.' },
+        combined_parlay_metrics: null, riskAssessment: null, recommendations: null
       };
     }
+
+    // Validate structure of each leg (basic check)
+    const invalidLegs = legs.filter(leg =>
+        typeof leg.price !== 'number' ||
+        typeof leg.model_probability !== 'number' ||
+        typeof leg.implied_probability !== 'number' ||
+        typeof leg.ev_per_100 !== 'number'
+        // Add more checks if needed (e.g., market_type, selection)
+    );
+    if (invalidLegs.length > 0) {
+        this.logger.error(`❌ evaluateParlay: ${invalidLegs.length} leg(s) have missing/invalid required fields (price, model_probability, etc.).`);
+         sentryService.captureError(new Error("Invalid leg structure in evaluateParlay"), { component: 'quantitativeService', operation: 'evaluateParlay_InputValidation', invalidLegsSample: invalidLegs.slice(0,1), level: 'warning' });
+        return {
+             error: `Invalid leg structure: ${invalidLegs.length} leg(s) missing required numeric fields (price, model_probability, etc.).`,
+             summary: { verdict: 'INVALID', primaryAction: 'Ensure AI provides all required fields per leg.' },
+             combined_parlay_metrics: null, riskAssessment: null, recommendations: null
+        };
+    }
+
 
     try {
-      // Extract leg-level probabilities and usable decimal odds
-      const rawProbabilities = legs.map((leg) => {
-        const raw = LegProbabilityResolver.resolveLegFairProb(leg);
-        const odds = LegProbabilityResolver.resolveLegDecimalOdds(leg);
-        return {
-          raw,
-          market: leg.market,
-          player: leg.pick,
-          game: leg.game,
-          odds,
-          validated: leg.real_game_validated || false
+        // --- 2. Calculate Combined Metrics ---
+        let combinedDecimalOdds = 1.0;
+        let combinedModelProbability = 1.0;
+        let correlationAdjustmentFactor = 1.0; // Start with no adjustment
+
+        legs.forEach(leg => {
+            const decimalOdds = ProbabilityCalculator.americanToDecimal(leg.price);
+            if (decimalOdds <= 1) {
+                this.logger.warn(`⚠️ Leg with invalid decimal odds (${decimalOdds} from ${leg.price}) skipped in combined calculation.`);
+                // Optionally handle this more strictly (e.g., reject parlay)
+                return; // Skip this leg in combined calculation
+            }
+            combinedDecimalOdds *= decimalOdds;
+            combinedModelProbability *= ProbabilityCalculator.clampProb(leg.model_probability);
+
+            // Simple correlation adjustment based on AI notes (can be refined)
+            if (/high positive/i.test(leg.correlation_notes || '')) {
+                correlationAdjustmentFactor *= 0.98; // Apply a small penalty per high correlation note
+            }
+            // Note: Negative correlation should ideally lead to rejection earlier
+        });
+
+        // Apply correlation adjustment
+        const adjustedCombinedModelProbability = ProbabilityCalculator.clampProb(combinedModelProbability * correlationAdjustmentFactor);
+
+        const combinedAmericanOdds = ProbabilityCalculator.decimalToAmerican(combinedDecimalOdds);
+        const parlayEV = ProbabilityCalculator.calculateEVPercentage(combinedDecimalOdds, adjustedCombinedModelProbability);
+        const fullKelly = ProbabilityCalculator.kellyFraction(combinedDecimalOdds, adjustedCombinedModelProbability);
+
+        const parlayMetrics = {
+            combined_decimal_odds: parseFloat(combinedDecimalOdds.toFixed(4)),
+            combined_american_odds: combinedAmericanOdds ? (combinedAmericanOdds > 0 ? `+${combinedAmericanOdds}`: `${combinedAmericanOdds}`) : 'N/A',
+            // Use adjusted probability for final metrics
+            combined_probability_product: parseFloat(adjustedCombinedModelProbability.toFixed(4)),
+            parlay_ev_per_100: parseFloat(parlayEV.toFixed(2)),
+            kelly_stake: {
+                full_kelly_fraction: parseFloat(fullKelly.toFixed(4)),
+                half_kelly_fraction: parseFloat((fullKelly / 2).toFixed(4)),
+                quarter_kelly_fraction: parseFloat((fullKelly / 4).toFixed(4)),
+                // Apply the cap policy
+                recommended_fraction: parseFloat(Math.min(fullKelly * this.kellyCap, 0.10).toFixed(4)), // Apply cap, max 10%
+                bankroll_allocation_percent: parseFloat((Math.min(fullKelly * this.kellyCap, 0.10) * 100).toFixed(2))
+            },
+            // Include correlation score if provided by AI or calculated here
+            correlation_score: legs[0]?.correlation_score ?? null, // Placeholder - needs actual calculation or AI input
+             rejection_reason: null // Will be set by risk assessment if needed
         };
-      });
 
-      // Calculate validation metrics
-      const validatedLegs = legs.filter(leg => leg.real_game_validated).length;
-      const validationRate = validatedLegs / legs.length;
-      const validationMetrics = {
-        real_games_validated: validatedLegs,
-        total_legs: legs.length,
-        validation_rate: validationRate,
-        data_quality: validationRate > 0.8 ? 'HIGH' : validationRate > 0.5 ? 'MEDIUM' : 'LOW',
-        recommendation: validationRate < 0.5 ? 
-          'Consider using verified schedule data' : 'Good real game coverage'
-      };
 
-      // If parlay odds not provided, approximate by multiplying leg odds
-      const computedParlayOdds = rawProbabilities.reduce(
-        (acc, p) => acc * (Number.isFinite(p.odds) && p.odds > 1 ? p.odds : 1.9),
-        1
-      );
-      const decimalOdds = Number.isFinite(parlayDecimalOdds) && parlayDecimalOdds > 1
-        ? parlayDecimalOdds
-        : computedParlayOdds;
+        // --- 3. Assess Risks ---
+        // Pass the calculated parlay metrics to risk assessment
+        const riskAssessment = RiskAssessmentEngine.assessRisks(legs, parlayMetrics);
+        parlayMetrics.overall_risk_assessment = riskAssessment.overallRisk; // Add risk level to metrics
+        if (riskAssessment.overallRisk === 'REJECTED') {
+             parlayMetrics.rejection_reason = riskAssessment.risks.find(r => r.severity === 'CRITICAL')?.message || 'Critical risk factors identified.';
+        }
 
-      // Raw joint probability under independence
-      const rawJointProbability = rawProbabilities.reduce((acc, p) => acc * ProbabilityCalculator.clampProb(p.raw), 1);
-      const bookmakerJointProbability = 1 / decimalOdds;
 
-      this.logger.info?.('🔬 QUANTITATIVE ANALYSIS');
-      this.logger.info?.(`- Raw Joint Probability: ${(rawJointProbability * 100).toFixed(2)}%`);
-      this.logger.info?.(`- Bookmaker Implied: ${(bookmakerJointProbability * 100).toFixed(2)}%`);
-      this.logger.info?.(`- Real Game Validation: ${validatedLegs}/${legs.length} legs (${(validationRate * 100).toFixed(1)}%)`);
+        // --- 4. Generate Recommendations ---
+        const recommendations = RecommendationEngine.generateRecommendations(parlayMetrics, riskAssessment);
 
-      // Apply comprehensive calibration with validation metrics
-      const calibrated = this.calibrationEngine.applyComprehensiveCalibration(
-        rawProbabilities,
-        rawJointProbability,
-        bookmakerJointProbability,
-        legs,
-        validationMetrics
-      );
 
-      // EVs (percentage terms)
-      const rawEV = ProbabilityCalculator.calculateEV(decimalOdds, rawJointProbability);
-      const calibratedEV = ProbabilityCalculator.calculateEV(decimalOdds, calibrated.jointProbability);
+        // --- 5. Generate Summary ---
+        const summary = this.generateSummary(parlayMetrics, riskAssessment, recommendations);
 
-      // Risk assessment with validation metrics
-      const riskAssessment = RiskAssessmentEngine.assessRisks(legs, calibrated, validationMetrics);
+        this.logger.info(`✅ Parlay evaluation complete. Verdict: ${summary.verdict}, EV: ${parlayMetrics.parlay_ev_per_100}%, Risk: ${riskAssessment.overallRisk}`);
 
-      // Recommendations with validation metrics
-      const recommendations = RecommendationEngine.generateRecommendations(
-        calibrated,
-        rawEV,
-        calibratedEV,
-        legs.length,
-        riskAssessment,
-        validationMetrics
-      );
+        return {
+            // Return the structure expected by aiService
+            legs: legs, // Return the input legs (potentially annotated by AI)
+            combined_parlay_metrics: parlayMetrics,
+            riskAssessment: riskAssessment,
+            recommendations: recommendations,
+            summary: summary,
+            error: null
+        };
 
-      // Optimal structure suggestion
-      const optimalStructure = OptimalStructureAnalyzer.findOptimalStructure(legs, rawProbabilities);
-
-      // Breakeven and Kelly
-      const breakevenProbability = 1 / decimalOdds;
-      const safetyMargin = calibrated.jointProbability - breakevenProbability;
-      const kellyFraction = ProbabilityCalculator.kellyFraction(decimalOdds, calibrated.jointProbability);
-      const kellyFractionHalf = Math.max(0, kellyFraction / 2);
-
-      return {
-        raw: {
-          jointProbability: rawJointProbability,
-          evPercentage: rawEV,
-          decimalOdds,
-          bookmakerImpliedProbability: bookmakerJointProbability,
-          theoreticalEdge: rawEV > 0 ? 'POSITIVE' : 'NEGATIVE'
-        },
-        calibrated: {
-          jointProbability: calibrated.jointProbability,
-          evPercentage: calibratedEV,
-          legProbabilities: calibrated.legProbabilities,
-          adjustments: calibrated.adjustments,
-          realisticEdge: calibratedEV > 5 ? 'HIGH' : calibratedEV > 0 ? 'LOW' : 'NEGATIVE'
-        },
-        riskAssessment,
-        recommendations,
-        optimalStructure,
-        validation: validationMetrics,
-        breakeven: {
-          breakevenProbability,
-          safetyMargin
-        },
-        staking: {
-          kellyFraction,
-          kellyFractionHalf,
-          recommendedStake: this.calculateRecommendedStake(kellyFractionHalf, riskAssessment.overallRisk, validationRate)
-        },
-        summary: this.generateSummary(calibratedEV, riskAssessment, recommendations, validationMetrics)
-      };
     } catch (error) {
-      console.error('❌ Quantitative analysis failed:', error);
+      this.logger.error('❌ Quantitative analysis failed critically:', error);
+       sentryService.captureError(error, { component: 'quantitativeService', operation: 'evaluateParlay_Overall', level: 'error' });
       return {
         error: `Analysis failed: ${error.message}`,
-        summary: {
-          verdict: 'ERROR',
-          confidence: 'LOW',
-          keyMetric: 'Analysis error',
-          primaryRecommendation: 'Try again with different parameters'
-        }
+        summary: { verdict: 'ERROR', primaryAction: 'Internal analysis error occurred.' },
+        combined_parlay_metrics: null, riskAssessment: null, recommendations: null
       };
     }
   }
-  
-  /**
-   * Placeholder for Monte Carlo simulation
-   * @param {Leg[]} legs
-   * @param {number} simulations
-   * @returns {Promise<object>}
-   */
-  async runMonteCarloSimulation(legs, simulations = 10000) {
-    // This is a placeholder for a more complex simulation.
-    // In a real implementation, you would:
-    // 1. Get the calibrated probability for each leg.
-    // 2. Run a loop for the number of simulations.
-    // 3. In each simulation, generate a random number for each leg and see if it "wins" based on its probability.
-    // 4. Count the number of times the entire parlay "wins".
-    // 5. Return the win percentage and other stats.
+
+  // Simplified summary generation
+  generateSummary(parlayMetrics, riskAssessment, recommendations) {
+    const verdict = riskAssessment.overallRisk === 'REJECTED' ? 'REJECTED' :
+                    (parlayMetrics.parlay_ev_per_100 > 0 ? 'POSITIVE_EV' : 'NEGATIVE_EV');
+
+    let confidence = 'MEDIUM';
+    if (riskAssessment.overallRisk === 'LOW' && parlayMetrics.parlay_ev_per_100 > 5) confidence = 'HIGH';
+    if (riskAssessment.overallRisk === 'HIGH' || riskAssessment.overallRisk === 'REJECTED' || parlayMetrics.parlay_ev_per_100 <= 0) confidence = 'LOW';
+
     return {
-      message: "Monte Carlo simulation is not fully implemented yet.",
-      simulations,
-      estimatedWinProbability: 0,
+      verdict: verdict, // REJECTED, POSITIVE_EV, NEGATIVE_EV
+      confidence: confidence, // LOW, MEDIUM, HIGH
+      keyMetric: `EV: ${parlayMetrics?.parlay_ev_per_100?.toFixed(1)}%`,
+      riskLevel: riskAssessment?.overallRisk ?? 'UNKNOWN',
+      primaryAction: recommendations?.primaryAction || 'Review details carefully.'
     };
   }
 
-  /**
-   * Placeholder for processing user feedback
-   * @param {object} feedback
-   * @returns {Promise<boolean>}
-   */
-  async processFeedback(feedback) {
-    // This is a placeholder for a feedback mechanism.
-    // In a real implementation, you would:
-    // 1. Store the feedback in your database, linked to the parlay.
-    // 2. Use this feedback to fine-tune your prompts and models.
-    console.log("Feedback received:", feedback);
-    return true;
-  }
 
+    // --- Deprecated/Placeholder Methods ---
+    // These are kept for reference or if needed later but are not the primary focus now
 
-  /**
-   * Enhanced evaluation with real game validation
-   */
-  async evaluateParlayWithValidation(legs, parlayDecimalOdds, sportKey) {
-    if (!Array.isArray(legs) || legs.length === 0) {
-      return { 
-        error: 'No legs provided for evaluation',
-        summary: { verdict: 'INVALID', confidence: 'LOW' }
-      };
+    async evaluateParlayWithValidation(legs, parlayDecimalOdds, sportKey) {
+       console.warn("evaluateParlayWithValidation is deprecated; validation should be part of the leg data passed to evaluateParlay.");
+       // Simple pass-through, assuming validation flags are already in legs
+       return this.evaluateParlay(legs);
     }
 
-    try {
-      // Check if legs are validated against real games
-      const validatedLegs = legs.filter(leg => leg.real_game_validated);
-      const validationRate = validatedLegs.length / legs.length;
-      
-      if (validationRate < 0.5) {
-        console.warn(`⚠️ Low real game validation: ${validatedLegs.length}/${legs.length} legs validated`);
-      }
 
-      const baseEvaluation = await this.evaluateParlay(legs, parlayDecimalOdds);
-      
-      // Add validation metrics to the evaluation
-      return {
-        ...baseEvaluation,
-        validation: {
-          real_games_validated: validatedLegs.length,
-          total_legs: legs.length,
-          validation_rate: validationRate,
-          data_quality: validationRate > 0.8 ? 'HIGH' : validationRate > 0.5 ? 'MEDIUM' : 'LOW',
-          recommendation: validationRate < 0.5 ? 
-            'Consider using verified schedule data' : 'Good real game coverage'
+    async sensitivityAnalysis(legs, parlayDecimalOdds) {
+       console.warn("sensitivityAnalysis is not fully implemented with the new EV structure.");
+       // Basic structure, needs rework to use model_probability from legs
+       return {
+           message: "Sensitivity analysis needs update for the new data structure.",
+           baseEvaluation: await this.evaluateParlay(legs), // Evaluate as-is
+           breakEvenAnalysis: [],
+           mostVulnerableLeg: null
+       };
+    }
+
+   async runMonteCarloSimulation(legs, simulations = 1000) { // Reduced default sims
+       console.warn("runMonteCarloSimulation is a placeholder.");
+       const evalResult = await this.evaluateParlay(legs);
+       return {
+           message: "Monte Carlo simulation is a basic placeholder.",
+           simulations,
+           estimatedWinProbability: evalResult?.combined_parlay_metrics?.combined_probability_product ?? 0, // Use calculated prob
+           estimatedEV: evalResult?.combined_parlay_metrics?.parlay_ev_per_100 ?? 0
+       };
+   }
+
+   async processFeedback(feedback) {
+       console.log("Feedback received (placeholder):", feedback);
+       // In a real implementation: store feedback linked to parlay ID/legs
+       return true;
+   }
+
+    async quickEvaluate(legs) {
+        console.warn("quickEvaluate is deprecated; use evaluateParlay and extract summary.");
+        try {
+            const fullAnalysis = await this.evaluateParlay(legs);
+            if (fullAnalysis.error) return { error: fullAnalysis.error, verdict: 'ERROR' };
+
+             return {
+                verdict: fullAnalysis.summary.verdict,
+                confidence: fullAnalysis.summary.confidence,
+                calibratedEV: fullAnalysis.combined_parlay_metrics?.parlay_ev_per_100,
+                jointProbability: fullAnalysis.combined_parlay_metrics?.combined_probability_product,
+                riskLevel: fullAnalysis.riskAssessment?.overallRisk,
+                recommendedStakeFraction: fullAnalysis.combined_parlay_metrics?.kelly_stake?.recommended_fraction,
+                primaryRecommendation: fullAnalysis.summary.primaryAction
+            };
+        } catch (error) {
+             console.error('❌ Quick evaluation failed:', error.message);
+             return { error: `Quick evaluation failed: ${error.message}`, verdict: 'ERROR' };
         }
-      };
-    } catch (error) {
-      console.error('❌ Validation evaluation failed:', error);
-      return {
-        error: `Validation analysis failed: ${error.message}`,
-        summary: {
-          verdict: 'ERROR',
-          confidence: 'LOW',
-          keyMetric: 'Validation error'
-        }
-      };
     }
-  }
 
-  /**
-   * Generate detailed sensitivity analysis
-   * @param {Leg[]} legs
-   * @param {number} parlayDecimalOdds
-   */
-  async sensitivityAnalysis(legs, parlayDecimalOdds) {
-    try {
-      const baseEvaluation = await this.evaluateParlay(legs, parlayDecimalOdds);
 
-      const breakEvenAnalysis = legs.map((leg, index) => {
-        const currentProb = LegProbabilityResolver.resolveLegFairProb(leg);
-        let breakEvenProb = currentProb;
-
-        // Decrease this leg's probability until raw EV crosses zero
-        for (let testProb = currentProb; testProb > 0.3; testProb -= 0.01) {
-          const testLegs = [...legs];
-          testLegs[index] = { ...leg, fair_prob: ProbabilityCalculator.clampProb(testProb) };
-
-          const testJointProb = testLegs.reduce((acc, l) => acc * ProbabilityCalculator.clampProb(LegProbabilityResolver.resolveLegFairProb(l)), 1);
-          const testEV = ProbabilityCalculator.calculateEV(parlayDecimalOdds, testJointProb);
-
-          if (testEV <= 0) {
-            breakEvenProb = testProb;
-            break;
-          }
-        }
-
-        const marginForError = currentProb - breakEvenProb;
-        return {
-          leg: leg.pick,
-          currentProbability: currentProb,
-          breakEvenProbability: breakEvenProb,
-          marginForError,
-          vulnerability:
-            marginForError < 0.10 ? 'HIGH' :
-            marginForError < 0.15 ? 'MEDIUM' : 'LOW'
-        };
-      });
-
-      const mostVulnerableLeg = breakEvenAnalysis.reduce((most, cur) => {
-        if (!most) return cur;
-        if (cur.vulnerability === 'HIGH' && most.vulnerability !== 'HIGH') return cur;
-        if (cur.vulnerability === most.vulnerability && cur.marginForError < most.marginForError) return cur;
-        return most;
-      }, null);
-
-      return {
-        baseEvaluation,
-        breakEvenAnalysis,
-        mostVulnerableLeg,
-        overallRobustness: this.calculateOverallRobustness(breakEvenAnalysis)
-      };
-    } catch (error) {
-      console.error('❌ Sensitivity analysis failed:', error);
-      return {
-        error: `Sensitivity analysis failed: ${error.message}`,
-        baseEvaluation: null
-      };
-    }
-  }
-
-  // ========== PRIVATE METHODS ==========
-
-  calculateRecommendedStake(kellyFraction, riskLevel, validationRate = 1.0) {
-    try {
-      const riskMultipliers = { 
-        LOW: 1.0, 
-        MODERATE: 0.7, 
-        ELEVATED: 0.4, 
-        HIGH: 0.2 
-      };
-      const multiplier = riskMultipliers[riskLevel] || 0.5;
-      
-      // Apply validation rate penalty
-      const validationMultiplier = Math.min(1.0, validationRate * 1.2); // Up to 20% boost for full validation
-      
-      return Math.min(0.1, kellyFraction * multiplier * validationMultiplier); // Cap at 10% of bankroll
-    } catch (error) {
-      console.error('Stake calculation error:', error);
-      return 0.02; // Default 2% on error
-    }
-  }
-
-  generateSummary(calibratedEV, riskAssessment, recommendations, validationMetrics = null) {
-    const primaryRec = recommendations[0];
-    
-    let verdict = calibratedEV > 0 ? 'CONSIDER_BET' : 'AVOID_BET';
-    let confidence = riskAssessment.overallRisk === 'LOW' ? 'HIGH' : 'MEDIUM';
-    
-    // Adjust based on validation
-    if (validationMetrics && validationMetrics.validation_rate < 0.5) {
-      verdict = 'AVOID_BET';
-      confidence = 'LOW';
-    }
-    
-    return {
-      verdict,
-      confidence,
-      keyMetric: `Calibrated EV: ${calibratedEV.toFixed(2)}%`,
-      primaryRecommendation: primaryRec?.action || 'No specific recommendation',
-      riskLevel: riskAssessment.overallRisk,
-      validationStatus: validationMetrics?.data_quality || 'UNKNOWN'
-    };
-  }
-
-  calculateOverallRobustness(breakEvenAnalysis) {
-    const avgMargin = breakEvenAnalysis.reduce((sum, leg) => sum + leg.marginForError, 0) / breakEvenAnalysis.length;
-    if (avgMargin > 0.15) return 'HIGH';
-    if (avgMargin > 0.10) return 'MEDIUM';
-    if (avgMargin > 0.05) return 'LOW';
-    return 'VERY_LOW';
-  }
-
-  /**
-   * Quick evaluation for simple use cases
-   */
-  async quickEvaluate(legs, parlayDecimalOdds) {
-    try {
-      const fullAnalysis = await this.evaluateParlay(legs, parlayDecimalOdds);
-      
-      if (fullAnalysis.error) {
-        return fullAnalysis;
-      }
-
-      // Return simplified version
-      return {
-        verdict: fullAnalysis.summary.verdict,
-        confidence: fullAnalysis.summary.confidence,
-        calibratedEV: fullAnalysis.calibrated.evPercentage,
-        jointProbability: fullAnalysis.calibrated.jointProbability,
-        riskLevel: fullAnalysis.riskAssessment.overallRisk,
-        recommendedStake: fullAnalysis.staking.recommendedStake,
-        primaryRecommendation: fullAnalysis.summary.primaryRecommendation
-      };
-    } catch (error) {
-      console.error('❌ Quick evaluation failed:', error);
-      return {
-        error: `Quick evaluation failed: ${error.message}`,
-        verdict: 'ERROR',
-        confidence: 'LOW'
-      };
-    }
-  }
-}
+} // End QuantitativeService Class
 
 // Create and export singleton instance
 const quantitativeServiceInstance = new QuantitativeService();
 
 export default quantitativeServiceInstance;
-export { 
-  QuantitativeService,
+
+// Export internal classes if needed for testing or direct use elsewhere (optional)
+export {
   ProbabilityCalculator,
-  LegProbabilityResolver,
   RiskAssessmentEngine,
-  CalibrationEngine,
   RecommendationEngine,
-  OptimalStructureAnalyzer
+  QuantitativeService // Export the class itself too
 };
