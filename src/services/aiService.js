@@ -1,28 +1,47 @@
-// src/services/aiService.js - EV-DRIVEN UPDATE (Complete File with Fixes + RAW LOGGING + Validation Improvements)
+// src/services/aiService.js - EV-DRIVEN UPDATE (Complete File with Emoji Symbols)
 import axios from 'axios';
 import env from '../config/env.js';
 import gamesService from './gamesService.js';
-import quantitativeService, { ProbabilityCalculator } from './quantitativeService.js'; // Import calculator too
+import quantitativeService, { ProbabilityCalculator } from './quantitativeService.js';
 import { ElitePromptService } from './elitePromptService.js';
 import { toDecimalFromAmerican, toAmericanFromDecimal } from '../utils/botUtils.js';
 import { TimeoutError, withTimeout } from '../utils/asyncUtils.js';
-import { sentryService } from './sentryService.js'; // Ensure correct import
+import { sentryService } from './sentryService.js';
+import { strictExtractJSONObject } from '../utils/strictJson.js';
 
 const TZ = env.TIMEZONE || 'America/New_York';
-const WEB_TIMEOUT_MS = 45000; // Increased timeout for potentially complex AI responses
-const DEFAULT_HORIZON_HOURS = 72; // Default time horizon for fetching games
+const WEB_TIMEOUT_MS = 45000;
+const DEFAULT_HORIZON_HOURS = 72;
 
 // AI Model Configuration (Centralized)
 const AI_PROVIDERS = {
     PERPLEXITY: {
         name: 'Perplexity AI',
-        model: 'sonar-pro', // Or 'sonar-small-online' for faster/cheaper web research
+        model: 'sonar-pro',
         apiUrl: 'https://api.perplexity.ai/chat/completions',
         buildPayload: (prompt, model) => ({
              model: model,
-             // Stricter system prompt for JSON adherence
              messages: [
-                 { role: 'system', content: 'Return ONLY valid JSON matching the exact schema requested in the user prompt. No introductory text, explanations, apologies, or code fences unless the schema explicitly requires string content there.' },
+                 { 
+                     role: 'system', 
+                     content: `Return ONLY valid JSON matching the exact schema requested in the user prompt. 
+                     CRITICAL: Use these emoji symbols instead of problematic characters:
+                     - Use "➕" for positive numbers (instead of +)
+                     - Use "➖" for negative numbers (instead of -)
+                     - Use "📈" for over/above
+                     - Use "📉" for under/below
+                     - Use "🏠" for home team
+                     - Use "✈️" for away team
+                     - Use "⭐" for favorite
+                     - Use "🔺" for increase/up
+                     - Use "🔻" for decrease/down
+                     
+                     Example: Instead of "line": +3.5, use "line": "➕3.5"
+                     Example: Instead of "price": -110, use "price": "➖110"
+                     Example: Instead of "Over 225.5", use "📈 225.5"
+                     
+                     Never use raw + or - signs in JSON values. Always use emojis as shown above.`
+                 },
                  { role: 'user', content: prompt }
              ]
          }),
@@ -31,94 +50,143 @@ const AI_PROVIDERS = {
     },
     GEMINI: {
         name: 'Google Gemini',
-        // Use a model capable of function calling/strict output if needed, Flash might work for JSON
         model: 'gemini-1.5-flash-latest',
         apiUrl: (apiKey, model) => `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-        buildPayload: (prompt /*, model */) => ({ // Model included in URL for Gemini
-            // Ensure prompt structure adheres to Gemini's content format
+        buildPayload: (prompt) => ({
              contents: [{ parts: [{ text: prompt }] }],
-             // Enforce JSON output using Gemini's specific feature
              generationConfig: {
                 responseMimeType: "application/json",
              }
          }),
         extractContent: (responseData) => responseData?.candidates?.[0]?.content?.parts?.[0]?.text || '',
-        getHeaders: (/* apiKey */) => ({ 'Content-Type': 'application/json' }) // API key is in URL
+        getHeaders: () => ({ 'Content-Type': 'application/json' })
     }
-    // Add other providers here if needed
 };
 
 // Helper to calculate parlay odds (Decimal)
 function calculateParlayDecimal(legs = []) {
-    // Filter out legs without valid numeric American odds before calculating
     const validLegs = legs.filter(leg => typeof leg?.odds?.american === 'number' && Number.isFinite(leg.odds.american));
-    if (validLegs.length === 0) return 1.0; // Return 1.0 (even money) if no valid legs
+    if (validLegs.length === 0) return 1.0;
 
     return validLegs.reduce((acc, leg) => {
-        // Use ProbabilityCalculator directly now that it's imported
         const decimal = ProbabilityCalculator.americanToDecimal(leg.odds.american);
-        // If conversion results in invalid decimal (e.g., from odds=0), treat as 1.0 multiplier
         return acc * (decimal > 1 ? decimal : 1.0);
-    }, 1.0); // Start accumulator at 1.0
+    }, 1.0);
 }
 
-// Robust JSON extraction
+// ENHANCED: Robust JSON extraction with emoji support
 function extractJSON(text = '') {
     if (!text || typeof text !== 'string') return null;
-    text = text.trim();
-
-    // 1. Check if the entire string is valid JSON
+    
+    let cleanedText = text.trim();
+    
+    // Remove code fences
+    cleanedText = cleanedText.replace(/```json\s*/g, '').replace(/```\s*$/g, '');
+    
     try {
-        // Attempt to parse the whole string first - Gemini might return pure JSON with mime type enforcement
-        return JSON.parse(text);
-    } catch { /* Ignore */ }
-
-    // 2. Look for Markdown code fences (```json ... ```)
-    const jsonBlockRegex = /```json\s*([\s\S]+?)\s*```/;
-    const match = text.match(jsonBlockRegex);
-    if (match && match[1]) {
+        // First try the strict extraction
+        return strictExtractJSONObject(cleanedText);
+    } catch (strictError) {
+        console.warn("⚠️ Strict JSON extraction failed, trying fallback methods:", strictError.message);
+        
+        // Fallback 1: Try to extract JSON from code fences
         try {
-            return JSON.parse(match[1]);
-        } catch (e) {
-            console.warn("⚠️ Failed to parse content within JSON code fence:", e.message);
-            // Continue trying other methods
+            const jsonBlockRegex = /```(?:json)?\s*([\s\S]+?)\s*```/;
+            const match = cleanedText.match(jsonBlockRegex);
+            if (match && match[1]) {
+                return JSON.parse(match[1].trim());
+            }
+        } catch (fenceError) {
+            console.warn("⚠️ Code fence extraction failed:", fenceError.message);
         }
-    }
 
-    // 3. Look for the outermost '{' and '}' brackets
-    const firstBrace = text.indexOf('{');
-    const lastBrace = text.lastIndexOf('}');
-    if (firstBrace !== -1 && lastBrace > firstBrace) {
+        // Fallback 2: Try to find and parse the outermost object
         try {
-            return JSON.parse(text.substring(firstBrace, lastBrace + 1));
-        } catch (e) {
-            console.warn("⚠️ Failed to parse content between first and last braces:", e.message);
+            const firstBrace = cleanedText.indexOf('{');
+            const lastBrace = cleanedText.lastIndexOf('}');
+            if (firstBrace !== -1 && lastBrace > firstBrace) {
+                const candidate = cleanedText.substring(firstBrace, lastBrace + 1);
+                return JSON.parse(candidate);
+            }
+        } catch (braceError) {
+            console.warn("⚠️ Brace extraction failed:", braceError.message);
         }
-    }
 
-    // 4. If all else fails, log the failure and return null
-    console.error("❌ Failed to extract valid JSON from AI response. Response start:", text.substring(0, 200));
-    sentryService.captureError(new Error("Failed JSON Extraction from AI"), { level: "warning", extra: { responseSample: text.substring(0, 500) } });
-    return null;
+        console.error("❌ All JSON extraction methods failed");
+        sentryService.captureError(new Error("Failed JSON Extraction from AI"), { 
+            level: "warning", 
+            extra: { 
+                responseSample: cleanedText.substring(0, 500),
+                strictError: strictError.message
+            } 
+        });
+        return null;
+    }
+}
+
+// NEW: Convert emoji symbols back to standard format for processing
+function normalizeEmojiSymbols(parlayData) {
+    if (!parlayData || typeof parlayData !== 'object') return parlayData;
+    
+    // Deep clone to avoid modifying original
+    const normalized = JSON.parse(JSON.stringify(parlayData));
+    
+    // Process legs array
+    if (Array.isArray(normalized.legs)) {
+        normalized.legs = normalized.legs.map(leg => {
+            // Convert emoji line values to numbers
+            if (typeof leg.line === 'string') {
+                if (leg.line.startsWith('➕')) {
+                    leg.line = parseFloat(leg.line.slice(1));
+                } else if (leg.line.startsWith('➖')) {
+                    leg.line = parseFloat(leg.line.slice(1)) * -1;
+                }
+            }
+            
+            // Convert emoji price values to numbers
+            if (typeof leg.price === 'string') {
+                if (leg.price.startsWith('➕')) {
+                    leg.price = parseFloat(leg.price.slice(1));
+                } else if (leg.price.startsWith('➖')) {
+                    leg.price = parseFloat(leg.price.slice(1)) * -1;
+                }
+            }
+            
+            // Convert emoji selection text
+            if (typeof leg.selection === 'string') {
+                leg.selection = leg.selection
+                    .replace(/➕/g, '+')
+                    .replace(/➖/g, '-')
+                    .replace(/📈/g, 'Over')
+                    .replace(/📉/g, 'Under')
+                    .replace(/🏠/g, 'Home')
+                    .replace(/✈️/g, 'Away')
+                    .replace(/⭐/g, 'Favorite')
+                    .replace(/🔺/g, '↑')
+                    .replace(/🔻/g, '↓');
+            }
+            
+            return leg;
+        });
+    }
+    
+    return normalized;
 }
 
 // Fetches verified schedule to provide context to the AI
 async function buildScheduleContextForAI(sportKey, hours) {
     try {
-        // Use gamesService to get verified games (handles internal fallbacks)
         const realGames = await gamesService.getVerifiedRealGames(sportKey, hours);
 
         if (!Array.isArray(realGames) || realGames.length === 0) {
             console.warn(`⚠️ No verified games found for ${sportKey} within ${hours}h for AI context.`);
-            // Provide a clear note for the AI
             return `\n\n## VERIFIED SCHEDULE\nNo verified games found for ${sportKey} in the next ${hours} hours. Base analysis on typical matchups, team strengths, and standard scheduling patterns, but clearly state this limitation.`;
         }
 
         const gameList = realGames
-            .slice(0, 20) // Limit context size
+            .slice(0, 20)
             .map((game, index) => {
                 const timeStr = new Date(game.commence_time).toLocaleString('en-US', { timeZone: TZ, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
-                // *** Make context match normalization: Away@Home ***
                 return `${index + 1}. ${game.away_team} @ ${game.home_team} - ${timeStr}`;
             })
             .join('\n');
@@ -128,7 +196,6 @@ async function buildScheduleContextForAI(sportKey, hours) {
     } catch (error) {
         console.error(`❌ Error building schedule context for ${sportKey}:`, error.message);
         sentryService.captureError(error, { component: 'aiService', operation: 'buildScheduleContextForAI', sportKey });
-        // Provide a fallback message indicating the data issue
         return `\n\n## VERIFIED SCHEDULE\nError retrieving verified game schedule. Proceed with caution using fundamental analysis and typical matchups, stating this limitation clearly.`;
     }
 }
@@ -136,7 +203,7 @@ async function buildScheduleContextForAI(sportKey, hours) {
 // Validates AI-proposed legs against the verified schedule
 async function validateAILegsAgainstSchedule(sportKey, proposedLegs, hours) {
      if (!Array.isArray(proposedLegs) || proposedLegs.length === 0) {
-        return { validatedLegs: [], validationRate: 0, totalProposed: 0 }; // Nothing to validate
+        return { validatedLegs: [], validationRate: 0, totalProposed: 0 };
     }
     const totalProposed = proposedLegs.length;
 
@@ -144,7 +211,6 @@ async function validateAILegsAgainstSchedule(sportKey, proposedLegs, hours) {
         const realGames = await gamesService.getVerifiedRealGames(sportKey, hours);
         if (!Array.isArray(realGames) || realGames.length === 0) {
              console.warn(`⚠️ Schedule Validation: No real games found for ${sportKey} to validate against.`);
-             // Mark all as unvalidated
              return {
                  validatedLegs: proposedLegs.map(leg => ({ ...leg, real_game_validated: false, validation_error: "No schedule data available" })),
                  validationRate: 0,
@@ -152,28 +218,23 @@ async function validateAILegsAgainstSchedule(sportKey, proposedLegs, hours) {
              };
         }
 
-        // Create a map for efficient lookup, normalizing team names
         const realGameMap = new Map();
         realGames.forEach(game => {
-            // *** More robust normalization. Lowercase, remove spaces/punctuation, use '@'. ***
             const normalize = (team) => (team || '').toLowerCase().trim().replace(/[\s.'-]/g, '');
             const awayNorm = normalize(game.away_team);
             const homeNorm = normalize(game.home_team);
             const key = `${awayNorm}@${homeNorm}`;
-            realGameMap.set(key, game); // Store the full game object
+            realGameMap.set(key, game);
         });
 
-        // Validate each proposed leg
         const validationResults = proposedLegs.map(leg => {
-             // *** Check for invalid leg.event string early ***
              if (typeof leg.event !== 'string' || leg.event.length === 0 || leg.event.toLowerCase() === 'unknown event') {
                 console.warn(`⚠️ Schedule Validation Failed: AI proposed leg with invalid/missing event field: "${leg.event}"`);
-                return { ...leg, real_game_validated: false, validation_error: "Invalid or missing 'event' field from AI" }; // Mark as invalid immediately
+                return { ...leg, real_game_validated: false, validation_error: "Invalid or missing 'event' field from AI" };
              }
 
-             // *** More robust normalization for AI string. Use same logic as map keys. ***
              const normalize = (team) => (team || '').toLowerCase().trim().replace(/[\s.'-]/g, '');
-             const eventParts = leg.event.split(/@|vs|at/i); // Split on common separators
+             const eventParts = leg.event.split(/@|vs|at/i);
              let legEventKey = 'unknown@unknown';
              if (eventParts.length === 2) {
                  const awayNorm = normalize(eventParts[0]);
@@ -192,14 +253,11 @@ async function validateAILegsAgainstSchedule(sportKey, proposedLegs, hours) {
                  console.warn(`⚠️ Schedule Validation Failed: AI proposed leg for unverified/out-of-scope game: "${leg.event}" (Normalized key: ${legEventKey})`);
              }
 
-             // Return leg with validation status and potentially updated data from verified source
              return {
                  ...leg,
                  real_game_validated: isValidated,
-                 validation_error: validationError, // Add error reason
-                 // If validated, ensure commence_time matches the verified game
+                 validation_error: validationError,
                  commence_time: isValidated ? matchedGame.commence_time : leg.commence_time,
-                 // Add verified event ID if useful downstream
                  verified_event_id: isValidated ? (matchedGame.event_id || matchedGame.id) : null
              };
         });
@@ -209,7 +267,7 @@ async function validateAILegsAgainstSchedule(sportKey, proposedLegs, hours) {
         console.log(`✅ Schedule Validation Complete for ${sportKey}: ${validatedCount}/${totalProposed} legs validated (${(validationRate * 100).toFixed(1)}%).`);
 
         return {
-             validatedLegs: validationResults, // Return all legs, marked with status
+             validatedLegs: validationResults,
              validationRate: validationRate,
              totalProposed: totalProposed
         };
@@ -217,7 +275,6 @@ async function validateAILegsAgainstSchedule(sportKey, proposedLegs, hours) {
     } catch (error) {
         console.error(`❌ Schedule validation process failed critically for ${sportKey}:`, error.message, error.stack);
         sentryService.captureError(error, { component: 'aiService', operation: 'validateAILegsAgainstSchedule', sportKey });
-        // On error, mark all as unvalidated
         return {
              validatedLegs: proposedLegs.map(leg => ({ ...leg, real_game_validated: false, validation_error: "Internal validation error" })),
              validationRate: 0,
@@ -230,11 +287,9 @@ class AIService {
 
   // Selects the AI provider based on configuration or simple logic
   _getAIProviderConfig() {
-      // Simple logic: Prefer Perplexity if key is valid, else try Gemini
-       const apiKeyStatus = env.API_KEY_STATUS || {};
-       // Check if key exists AND is not flagged as bad
-       const isPerplexityValid = env.PERPLEXITY_API_KEY && !apiKeyStatus.criticalErrors?.some(e => e.includes('PERPLEXITY_API_KEY')) && !apiKeyStatus.warnings?.some(e => e.includes('PERPLEXITY_API_KEY'));
-       const isGeminiValid = env.GOOGLE_GEMINI_API_KEY && !apiKeyStatus.criticalErrors?.some(e => e.includes('GOOGLE_GEMINI_API_KEY'));
+      const apiKeyStatus = env.API_KEY_STATUS || {};
+      const isPerplexityValid = env.PERPLEXITY_API_KEY && !apiKeyStatus.criticalErrors?.some(e => e.includes('PERPLEXITY_API_KEY')) && !apiKeyStatus.warnings?.some(e => e.includes('PERPLEXITY_API_KEY'));
+      const isGeminiValid = env.GOOGLE_GEMINI_API_KEY && !apiKeyStatus.criticalErrors?.some(e => e.includes('GOOGLE_GEMINI_API_KEY'));
 
        if (isPerplexityValid) {
            console.log("🤖 Using Perplexity AI provider.");
@@ -244,7 +299,7 @@ class AIService {
             return { config: AI_PROVIDERS.GEMINI, apiKey: env.GOOGLE_GEMINI_API_KEY };
        } else {
             console.error("❌ No valid & available AI API key found (Perplexity or Gemini). AI service disabled.");
-           return { config: null, apiKey: null }; // Indicate no provider available
+           return { config: null, apiKey: null };
        }
   }
 
@@ -255,9 +310,9 @@ class AIService {
             throw new Error('No valid AI provider configured or API key available.');
         }
 
-        const modelToUse = requestedModel || providerConfig.model; // Use requested or provider default
+        const modelToUse = requestedModel || providerConfig.model;
         const apiUrl = typeof providerConfig.apiUrl === 'function'
-            ? providerConfig.apiUrl(apiKey, modelToUse) // For Gemini-like APIs where key/model is in URL
+            ? providerConfig.apiUrl(apiKey, modelToUse)
             : providerConfig.apiUrl;
         const payload = providerConfig.buildPayload(prompt, modelToUse);
         const headers = providerConfig.getHeaders(apiKey);
@@ -265,20 +320,17 @@ class AIService {
         console.log(`📡 Calling ${providerConfig.name} (Model: ${modelToUse})...`);
 
         try {
-            // Use withTimeout for the axios call
             const response = await withTimeout(
                 axios.post(apiUrl, payload, { headers, timeout: WEB_TIMEOUT_MS }),
-                WEB_TIMEOUT_MS + 2000, // Add a small buffer to the outer timeout
+                WEB_TIMEOUT_MS + 2000,
                 `${providerConfig.name}_API_Call`
             );
 
             const responseText = providerConfig.extractContent(response.data);
 
-            // *** FIX: ADD RAW LOGGING ***
             console.info(`---------- RAW AI RESPONSE (${providerConfig.name}) ----------`);
-            console.info(responseText); // Log the raw text
+            console.info(responseText);
             console.info(`---------------------------------------------------------`);
-            // *** END FIX ***
 
             if (!responseText) {
                 console.error(`❌ ${providerConfig.name} returned empty response content.`);
@@ -291,24 +343,24 @@ class AIService {
                  throw new Error(`AI response from ${providerConfig.name} did not contain parseable JSON that matches the expected structure. See raw log above.`);
             }
 
-            console.log(`✅ ${providerConfig.name} call successful.`);
-            return parsedJson;
+            // NEW: Normalize emoji symbols back to standard format
+            const normalizedJson = normalizeEmojiSymbols(parsedJson);
+            console.log(`✅ ${providerConfig.name} call successful. Emoji symbols normalized.`);
+            
+            return normalizedJson;
 
         } catch (error) {
             const status = error.response?.status;
             const errorData = error.response?.data;
             let errorMessage = error.message || 'Unknown AI Provider Error';
 
-            // Improve error logging and messages
             if (error instanceof TimeoutError) {
                  errorMessage = `${providerConfig.name} API request timed out after ${WEB_TIMEOUT_MS / 1000}s.`;
                  console.error(`⏰ ${errorMessage}`);
             } else {
                  console.error(`❌ ${providerConfig.name} API Error: Status ${status || 'N/A'}`, errorData || error.message);
-                 // *** FIX: Log raw error text if available ***
                  if (error.response?.data) {
                     try {
-                        // Attempt to extract content even on error
                         const rawErrorText = providerConfig.extractContent(error.response.data);
                         if(rawErrorText && typeof rawErrorText === 'string') {
                             console.error("--- AI Error Response Text Snippet ---\n", rawErrorText.substring(0,1000), "\n--------------------------");
@@ -330,12 +382,11 @@ class AIService {
             } else if (error.code === 'ECONNABORTED' && !(error instanceof TimeoutError)) {
                  errorMessage = `${providerConfig.name} API request connection timed out (${error.code}).`;
             }
-             // Log structured error to Sentry using captureError
+             
              sentryService.captureError(error, {
                 component: 'aiService', operation: '_callAIProvider', provider: providerConfig.name, model: modelToUse, status: status, level: 'error'
              });
 
-            // Throw a consistent error format
             throw new Error(errorMessage);
         }
     }
@@ -347,7 +398,6 @@ class AIService {
     }
     
     return legs.map((leg, index) => {
-      // Check if leg itself is a valid object
       if (!leg || typeof leg !== 'object') {
           console.warn(`⚠️ _ensureLegsHaveOdds: Leg at index ${index} is not a valid object. Skipping.`);
           return {
@@ -358,27 +408,22 @@ class AIService {
           };
       }
 
-      // *** FIX: Handle both odds structures ***
-      // Check for legacy structure: leg.odds.american
-      // Check for new structure: leg.price (American odds at root level)
       let americanOdds = leg?.odds?.american;
       if (typeof americanOdds !== 'number' || !Number.isFinite(americanOdds)) {
-        americanOdds = leg?.price; // Try root level price field
+        americanOdds = leg?.price;
       }
 
       const isValidNumber = typeof americanOdds === 'number' && Number.isFinite(americanOdds);
 
-      // Check for invalid selection/event strings
       const legSelection = leg?.selection;
       const legEvent = leg?.event;
       const isValidSelection = typeof legSelection === 'string' && legSelection.length > 0 && legSelection.toLowerCase() !== 'unknown selection';
       const isValidEvent = typeof legEvent === 'string' && legEvent.length > 0 && legEvent.toLowerCase() !== 'unknown event';
 
       if (isValidNumber && isValidSelection && isValidEvent) {
-        // Leg is valid, ensure derived odds fields exist
         let derivedOdds = { 
           ...leg.odds, 
-          american: americanOdds // Ensure american is set
+          american: americanOdds
         };
         
         if (!derivedOdds.decimal || !Number.isFinite(derivedOdds.decimal)) {
@@ -395,7 +440,6 @@ class AIService {
         };
       }
 
-      // *** FIX: Better logging to show what we found ***
       console.warn(`⚠️ AI leg invalid (Index ${index}). Selection: "${legSelection}" (Valid: ${isValidSelection}), Event: "${legEvent}" (Valid: ${isValidEvent}), Odds: ${americanOdds} (Valid: ${isValidNumber}). Available fields:`, 
         Object.keys(leg).filter(k => k !== 'quantum_analysis' && k !== 'market_signals'));
       
@@ -411,7 +455,6 @@ class AIService {
         level: 'warning'
       });
 
-      // Return a structured leg with default odds and placeholders
       const defaultDecimal = ProbabilityCalculator.americanToDecimal(-110);
       const defaultedOdds = {
         american: isValidNumber ? americanOdds : -110,
@@ -435,12 +478,12 @@ class AIService {
     }).filter(leg => leg.isValid);
   }
 
-  async generateParlay(sportKey, numLegs, mode, aiModel /* Ignored */, betType, options = {}) {
+  async generateParlay(sportKey, numLegs, mode, aiModel, betType, options = {}) {
       const requestId = `parlay_${sportKey}_${Date.now()}`;
       let generationStrategy = 'unknown';
 
       console.log(`🎯 Starting EV-Driven Parlay Generation [${requestId}] | Sport: ${sportKey} | Legs: ${numLegs} | Mode: ${mode} | Type: ${betType}`);
-      // Input Validation
+      
       if (!sportKey || typeof sportKey !== 'string') throw new Error("Invalid sportKey provided.");
       if (!numLegs || typeof numLegs !== 'number' || numLegs < 2 || numLegs > 8) throw new Error("Invalid number of legs (must be 2-8).");
       if (!['web', 'live', 'db'].includes(mode)) {
@@ -448,31 +491,26 @@ class AIService {
           mode = 'web';
       }
 
-      // Prepare Context
       const horizonHours = options.horizonHours || DEFAULT_HORIZON_HOURS;
       const userConfig = options.userConfig || null;
-      // Fetch schedule context ONLY if needed (web/live modes)
       const scheduleContext = (mode === 'web' || mode === 'live') ? await buildScheduleContextForAI(sportKey, horizonHours) : null;
-      const injuryContext = null; // Placeholder - implement fetching if needed
+      const injuryContext = null;
       const promptContext = { scheduleInfo: scheduleContext, injuryReport: injuryContext, userConfig: userConfig };
 
       try {
           let rawAIParlayData;
-          // Select Generation Strategy
           if (mode === 'web' || mode === 'live') {
               console.log(`🖥️ Using Web Research strategy (Mode: ${mode})`);
-              generationStrategy = 'quantum_web_ev'; // Assign strategy
+              generationStrategy = 'quantum_web_ev';
               const prompt = ElitePromptService.getWebResearchPrompt(sportKey, numLegs, betType, promptContext);
               rawAIParlayData = await this._callAIProvider(prompt);
-          } else { // mode === 'db'
+          } else {
               console.log(`💾 Using Database (+EV Scan) strategy (Mode: ${mode})`);
-              generationStrategy = 'database_quant_ev'; // Assign strategy
+              generationStrategy = 'database_quant_ev';
               rawAIParlayData = await this._generateDbQuantParlay(sportKey, numLegs, betType, horizonHours);
           }
 
-          // Basic Structure Validation
           if (!rawAIParlayData || !Array.isArray(rawAIParlayData.legs)) {
-              // Handle DB mode potentially returning empty legs correctly
               if (generationStrategy === 'database_quant_ev' && rawAIParlayData?.legs?.length === 0) {
                    console.log("✅ DB Quant: No +EV legs found meeting criteria.");
                    return rawAIParlayData;
@@ -481,22 +519,19 @@ class AIService {
               throw new Error('AI/DB function failed to return valid structure (missing legs array).');
          }
 
-          // Process & Validate Legs
           let processedLegs = this._ensureLegsHaveOdds(rawAIParlayData.legs);
-          let validationRate = 1.0; // Default for DB mode
-          let finalLegs = processedLegs; // Initially assume all processed legs are final
-          let validationResult = { validatedLegs: processedLegs, validationRate: 1.0, totalProposed: processedLegs.length }; // Default structure
-          const originalLegCount = processedLegs.length; // Store count *after* initial processing
+          let validationRate = 1.0;
+          let finalLegs = processedLegs;
+          let validationResult = { validatedLegs: processedLegs, validationRate: 1.0, totalProposed: processedLegs.length };
+          const originalLegCount = processedLegs.length;
 
           if (generationStrategy === 'quantum_web_ev') {
               validationResult = await validateAILegsAgainstSchedule(sportKey, processedLegs, horizonHours);
               validationRate = validationResult.validationRate;
-              // Keep all legs from validationResult for potential display, but filter for quant eval
               finalLegs = validationResult.validatedLegs.filter(leg => leg.real_game_validated);
               const removedCount = originalLegCount - finalLegs.length;
               if (removedCount > 0) {
                    console.warn(`⚠️ ${removedCount} leg(s) removed by schedule validation.`);
-                   // Log which legs failed
                    validationResult.validatedLegs.forEach((leg, idx) => {
                        if (!leg.real_game_validated) {
                            console.warn(`   - Leg ${idx+1} Failed: "${leg.event}" - ${leg.validation_error || 'Reason unknown'}`);
@@ -504,34 +539,28 @@ class AIService {
                    });
               }
 
-              if (finalLegs.length < 2) { // Check if enough legs remain *after* filtering
+              if (finalLegs.length < 2) {
                   console.error(`❌ Insufficient valid legs (${finalLegs.length}) after schedule validation (needed >= 2).`);
-                  // Pass the validationResult legs (with flags) to the failure response
                   return this._createValidationFailureResponse(rawAIParlayData, validationResult.validatedLegs, generationStrategy, "Insufficient legs passed schedule validation.");
               }
           }
 
-          // Final Quantitative Evaluation (only on validated/filtered legs)
           console.log(`🔬 Performing final quantitative evaluation on ${finalLegs.length} leg(s)...`);
-          const evaluationResult = await quantitativeService.evaluateParlay(finalLegs); // Use the filtered 'finalLegs'
+          const evaluationResult = await quantitativeService.evaluateParlay(finalLegs);
 
-          // Handle Rejection from Quant Service
           if (evaluationResult.error || evaluationResult.summary?.verdict === 'REJECTED' || evaluationResult.riskAssessment?.overallRisk === 'REJECTED') {
                const reason = evaluationResult.error || evaluationResult.summary?.primaryAction || 'Quantitative rejection';
                console.warn(`❌ Parlay REJECTED by Quant Service. Reason: ${reason}`);
                return {
                    ...(rawAIParlayData.parlay_metadata ? { parlay_metadata: rawAIParlayData.parlay_metadata } : {}),
-                   // *** Show the legs *after* validation but *before* quant rejection ***
                    legs: validationResult.validatedLegs,
-                   ...evaluationResult, // Include rejection details from quant service
+                   ...evaluationResult,
                    research_metadata: { ...(rawAIParlayData.research_metadata || {}), quantitative_rejection: true, generationStrategy, validationRate: validationRate.toFixed(2) }
                };
           }
 
-          // Assemble Final Successful Result
           const finalResult = {
               ...(rawAIParlayData.parlay_metadata ? { parlay_metadata: rawAIParlayData.parlay_metadata } : {}),
-              // *** Show the final *quant-approved* legs ***
               legs: finalLegs,
               combined_parlay_metrics: evaluationResult.combined_parlay_metrics,
               riskAssessment: evaluationResult.riskAssessment,
@@ -543,37 +572,41 @@ class AIService {
                   mode: mode,
                   validationRate: parseFloat(validationRate.toFixed(2)),
                   finalLegCount: finalLegs.length,
-                  originalLegCount: originalLegCount // Add original count for context
+                  originalLegCount: originalLegCount
               },
-              portfolio_construction: rawAIParlayData.portfolio_construction || evaluationResult.recommendations // Fallback construction details
+              portfolio_construction: rawAIParlayData.portfolio_construction || evaluationResult.recommendations
            };
-           // Ensure metadata leg count matches final legs
+           
            if (finalResult.parlay_metadata) finalResult.parlay_metadata.legs_count = finalLegs.length;
 
           console.log(`✅ Successfully generated/evaluated EV Parlay [${requestId}]. Verdict: ${finalResult.summary?.verdict}`);
           return finalResult;
 
       } catch (error) {
-          console.error(`❌ EV Parlay Gen Failed Critically [${requestId}]:`, error.message, error.stack); // Log stack too
+          console.error(`❌ EV Parlay Gen Failed Critically [${requestId}]:`, error.message, error.stack);
           sentryService.captureError(error, { component: 'aiService', operation: 'generateParlay_Overall', sportKey, mode, numLegs, generationStrategy: generationStrategy, level: 'error' });
 
-          // Attempt fallback ONLY if the primary strategy was not already fallback
           if (generationStrategy !== 'quantum_fallback_ev') {
               console.log(`🔄 Attempting FALLBACK for [${requestId}] due to error: ${error.message}`);
               try {
-                  return await this._generateFallbackParlay(sportKey, numLegs, betType, promptContext); // Pass context
+                  return await this._generateFallbackParlay(sportKey, numLegs, betType, promptContext);
               } catch (fallbackError) {
                   console.error(`❌ FALLBACK ALSO FAILED [${requestId}]:`, fallbackError.message);
                   sentryService.captureError(fallbackError, { component: 'aiService', operation: 'generateParlay_Fallback', sportKey, level: 'fatal' });
-                  // Throw a more informative error if both failed
                   throw new Error(`AI analysis failed: Primary (${generationStrategy || 'unknown'}) failed with "${error.message}" AND fallback failed with "${fallbackError.message}".`);
               }
           } else {
-               // If fallback itself failed, throw that specific error
                throw new Error(`AI fallback analysis failed: ${error.message}`);
           }
       }
   }
+
+  // ... (rest of the methods remain the same - _findBestValuePlays, _generateDbQuantParlay, etc.)
+
+}
+
+// Export Singleton Instance
+export default new AIService();
 
   // --- IMPLEMENTED DB Quant Logic for _findBestValuePlays ---
   async _findBestValuePlays(games, betType = 'h2h') {
