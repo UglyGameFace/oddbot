@@ -4,27 +4,7 @@ import { stateManagerInstance as stateManager } from './stateManager.js';
 import databaseService from '../services/databaseService.js'; // For fetching initial settings
 import { sentryService } from '../services/sentryService.js'; // For error reporting
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 const DEFAULT_TTL = 600; // 10 minutes default TTL
-
-
-
 
 // --- User State Management ---
 
@@ -126,31 +106,13 @@ export async function deleteUserState(chatId) {
   } catch (error) {
     console.error(`[State] Error deleting state for ${chatId}:`, error);
     sentryService.captureError(error, { component: 'state', operation: 'deleteUserState', chatId });
-@@ -112,162 +106,159 @@ export async function deleteUserState(chatId) {
+    return false;
+  }
+}
 
 // --- User Configuration Management ---
 
 // Helper to get config with defaults
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 async function getConfig(chatId, configType, defaults) {
   if (!chatId || !configType || !defaults) {
     console.error('[State] getConfig invalid args.', { chatId, configType });
@@ -205,12 +167,6 @@ async function setConfig(chatId, configType, data) {
         sentryService.captureError(error, { component: 'state', operation: 'setConfig', configType, chatId });
         return false;
     }
-
-
-
-
-
-
 }
 
 
@@ -253,10 +209,6 @@ export async function setBuilderConfig(chatId, data) {
 }
 
 // --- Parlay Slip Management (Using temporary user state) ---
-
-
-
-
 export async function getParlaySlip(chatId) {
   const state = await getUserState(chatId);
   if (state?.parlay_slip && Array.isArray(state.parlay_slip.legs)) {
@@ -264,10 +216,6 @@ export async function getParlaySlip(chatId) {
   }
   return null;
 }
-
-
-
-
 
 export async function setParlaySlip(chatId, slip, ttlSeconds = 1800) {
 
