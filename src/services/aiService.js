@@ -17,7 +17,7 @@ const AI_PROVIDERS = {
     PERPLEXITY: {
         name: 'Perplexity AI',
         model: 'sonar-pro', // Or 'sonar-small-online' for faster/cheaper web research
-        apiUrl: '[https://api.perplexity.ai/chat/completions](https://api.perplexity.ai/chat/completions)',
+        apiUrl: 'https://api.perplexity.ai/chat/completions',
         buildPayload: (prompt, model) => ({
              model: model,
              // Stricter system prompt for JSON adherence
