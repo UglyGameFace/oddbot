@@ -1,5 +1,6 @@
-// src/bot/state.js - COMPLETE FILE with setUserState Robustness Fix
-import stateManager from './stateManager.js';
+// src/bot/state.js - COMPLETE FILE - Fix stateManager Instance Usage
+// *** FIX: Import the exported INSTANCE, not the class default ***
+import { stateManagerInstance as stateManager } from './stateManager.js';
 import databaseService from '../services/databaseService.js'; // For fetching initial settings
 import { sentryService } from '../services/sentryService.js'; // For error reporting
 
@@ -18,11 +19,15 @@ export async function getUserState(chatId) {
     return null;
   }
   try {
+    // *** FIX: Now correctly calls .get() on the instance ***
     const state = await stateManager.get(`user:state:${chatId}`);
     // console.log(`[State] getUserState for ${chatId}:`, state); // Optional: Verbose logging
     return state;
   } catch (error) {
-    console.error(`[State] Error getting state for ${chatId}:`, error);
+    // stateManager.get() handles its internal errors and logs them.
+    // Log the context here.
+    console.error(`[State] Error context in getUserState for ${chatId}:`, error.message);
+    // Sentry reporting might be redundant if stateManager already does it, but can keep for context
     sentryService.captureError(error, { component: 'state', operation: 'getUserState', chatId });
     return null; // Return null on error to indicate failure
   }
@@ -48,33 +53,35 @@ export async function setUserState(chatId, data, ttlSeconds = DEFAULT_TTL, merge
     if (merge) {
       // Fetch current state safely, default to {} if null/error
       const currentState = (await getUserState(chatId)) || {};
-      stateToSave = { ...currentState, ...data }; // Merge new data over current state
+      // Ensure currentState is an object before spreading
+      const currentSafe = typeof currentState === 'object' && currentState !== null ? currentState : {};
+      stateToSave = { ...currentSafe, ...data }; // Merge new data over current state
     }
 
-    // Ensure stateToSave is always an object, even if merge=false and data was invalid somehow (defensive)
+    // Ensure stateToSave is always an object
     if (typeof stateToSave !== 'object' || stateToSave === null) {
         console.error(`[State] stateToSave became invalid before saving for ${chatId}. Data:`, data, `Merge:`, merge);
         stateToSave = {}; // Fallback to empty object
     }
 
+    console.log(`[State] Attempting to save state for ${chatId} (merge=${merge}, TTL=${ttlSeconds}):`, stateToSave);
 
-    console.log(`[State] Attempting to save state for ${chatId} (merge=${merge}, TTL=${ttlSeconds}):`, stateToSave); // Log state before saving
-
+    // *** FIX: Now correctly calls .set() on the instance ***
     const success = await stateManager.set(`user:state:${chatId}`, stateToSave, ttlSeconds);
 
     if (!success) {
-      // *** FIX: Log failure explicitly ***
-      console.error(`[State] Failed to save state for ${chatId}. stateManager.set returned false.`);
-      sentryService.captureError(new Error("stateManager.set returned false"), { component: 'state', operation: 'setUserState', chatId, stateData: stateToSave });
+      console.error(`[State] Failed to save state for ${chatId}. stateManager.set returned false or threw error.`);
+      // Sentry reporting might be redundant if stateManager logs it, adjust as needed
+      sentryService.captureError(new Error("stateManager.set returned false/error"), { component: 'state', operation: 'setUserState', chatId, stateData: stateToSave });
       return false; // Indicate failure
     }
 
-    console.log(`[State] State successfully saved for ${chatId}.`); // Log success
+    console.log(`[State] State successfully saved for ${chatId}.`);
     return true; // Indicate success
 
   } catch (error) {
-    // Catch errors potentially thrown by stateManager.set or getUserState
-    console.error(`[State] Error setting state for ${chatId}:`, error);
+    // Catch errors potentially thrown by getUserState or stateManager.set if it throws
+    console.error(`[State] Error during setUserState for ${chatId}:`, error);
     sentryService.captureError(error, { component: 'state', operation: 'setUserState', chatId });
     return false; // Indicate failure
   }
@@ -92,9 +99,10 @@ export async function deleteUserState(chatId) {
     return false;
   }
   try {
+    // *** FIX: Now correctly calls .delete() on the instance ***
     const deleted = await stateManager.delete(`user:state:${chatId}`);
-    console.log(`[State] deleteUserState for ${chatId}: ${deleted ? 'Success' : 'Key not found or error'}`);
-    return deleted; // stateManager.delete returns true if deleted or not found, false on error
+    console.log(`[State] deleteUserState for ${chatId}: ${deleted ? 'Success/Not Found' : 'Error'}`);
+    return deleted; // stateManager.delete should return boolean
   } catch (error) {
     console.error(`[State] Error deleting state for ${chatId}:`, error);
     sentryService.captureError(error, { component: 'state', operation: 'deleteUserState', chatId });
@@ -107,52 +115,50 @@ export async function deleteUserState(chatId) {
 // Helper to get config with defaults
 async function getConfig(chatId, configType, defaults) {
   if (!chatId || !configType || !defaults) {
-    console.error('[State] getConfig called with invalid arguments.', { chatId, configType });
-    return { ...defaults }; // Return defaults on error
+    console.error('[State] getConfig invalid args.', { chatId, configType });
+    return { ...defaults };
   }
   const key = `user:config:${chatId}:${configType}`;
   try {
+    // *** FIX: Now correctly calls .get() on the instance ***
     const storedConfig = await stateManager.get(key);
     if (storedConfig && typeof storedConfig === 'object') {
-      console.log(`[State] Config HIT for ${key}`);
-      return { ...defaults, ...storedConfig }; // Merge stored config over defaults
+      // console.log(`[State] Config HIT for ${key}`); // Can be noisy
+      return { ...defaults, ...storedConfig };
     } else {
-      console.log(`[State] Config MISS for ${key}`);
-      // console.log(`[State] Using defaults for ${configType}`); // Can be noisy, removed default log
-      return { ...defaults }; // Return only defaults if nothing stored or invalid
+      // console.log(`[State] Config MISS for ${key}`); // Can be noisy
+      return { ...defaults };
     }
   } catch (error) {
     console.error(`[State] Error getting config ${key}:`, error);
     sentryService.captureError(error, { component: 'state', operation: 'getConfig', configType, chatId });
-    return { ...defaults }; // Return defaults on error
+    return { ...defaults };
   }
 }
 
 // Helper to set config (no TTL, persistent)
 async function setConfig(chatId, configType, data) {
     if (!chatId || !configType || typeof data !== 'object' || data === null) {
-        console.error('[State] setConfig called with invalid arguments.', { chatId, configType, data });
+        console.error('[State] setConfig invalid args.', { chatId, configType, data });
         return false;
     }
     const key = `user:config:${chatId}:${configType}`;
     try {
-        // Fetch existing config to merge with new data
-        // Determine defaults based on config type
         const defaults = configType === 'ai' ? defaultAIConfig :
                          configType === 'builder' ? defaultBuilderConfig : {};
-        const currentConfig = await getConfig(chatId, configType, defaults); // getConfig handles defaults
-        const newConfig = { ...currentConfig, ...data }; // Merge new data over current
+        const currentConfig = await getConfig(chatId, configType, defaults);
+        const newConfig = { ...currentConfig, ...data };
 
-        console.log(`[State] Saving config ${key}:`, newConfig);
-        // Persist config (pass null for TTL to indicate persistence)
-        const success = await stateManager.set(key, newConfig, null);
+        console.log(`[State] Saving config ${key}`); // Simplified log
+        // *** FIX: Now correctly calls .set() on the instance ***
+        const success = await stateManager.set(key, newConfig, null); // Pass null for TTL
 
         if (!success) {
-            console.error(`[State] Failed to save config ${key}. stateManager.set returned false.`);
+            console.error(`[State] Failed to save config ${key}.`);
             sentryService.captureError(new Error("stateManager.set failed for config"), { component: 'state', operation: 'setConfig', configType, chatId });
             return false;
         }
-        console.log(`[State] Config saved successfully for ${key}.`);
+        console.log(`[State] Config saved for ${key}.`);
         return true;
 
     } catch (error) {
@@ -165,22 +171,16 @@ async function setConfig(chatId, configType, data) {
 
 // --- AI Config ---
 export const defaultAIConfig = Object.freeze({
-  mode: 'web', // Default mode (web, live, db)
-  // model: 'perplexity', // Model selection logic moved to aiService
-  betType: 'mixed', // Default bet type (moneyline, spreads, totals, props, mixed)
-  horizonHours: 72, // Default time horizon for AI game fetching (used if not passed explicitly)
-  quantitativeMode: 'conservative', // conservative, aggressive
-  includeProps: false, // Default setting for including player props
-  proQuantMode: false, // Advanced quantitative features toggle
-  // Add other AI-specific settings here
+  mode: 'web',
+  betType: 'mixed',
+  horizonHours: 72,
+  quantitativeMode: 'conservative',
+  includeProps: false,
+  proQuantMode: false,
 });
 
 export async function getAIConfig(chatId) {
-  // Try fetching from persistent config first
-  const persistentConfig = await getConfig(chatId, 'ai', defaultAIConfig);
-  // If we need to fetch defaults from DB eventually, do it here and merge
-  // For now, persistentConfig already includes defaults if nothing was stored.
-  return persistentConfig;
+  return getConfig(chatId, 'ai', defaultAIConfig);
 }
 
 export async function setAIConfig(chatId, data) {
@@ -190,21 +190,17 @@ export async function setAIConfig(chatId, data) {
 
 // --- Builder Config ---
 export const defaultBuilderConfig = Object.freeze({
-  cutoffHours: 48, // Default lookahead for custom builder (hours)
-  oddsFormat: 'american', // american, decimal
+  cutoffHours: 48,
+  oddsFormat: 'american',
   excludedLeagues: [],
   excludedTeams: [],
   minOdds: -500,
   maxOdds: 500,
-  allowSameGame: false, // Default setting for allowing same-game legs in custom builder
-  // Add other builder-specific settings here
+  allowSameGame: false,
 });
 
 export async function getBuilderConfig(chatId) {
-  // Try fetching from persistent config first
-  const persistentConfig = await getConfig(chatId, 'builder', defaultBuilderConfig);
-  // Merge with DB fetched settings if necessary in the future
-  return persistentConfig;
+  return getConfig(chatId, 'builder', defaultBuilderConfig);
 }
 
 export async function setBuilderConfig(chatId, data) {
@@ -215,41 +211,35 @@ export async function setBuilderConfig(chatId, data) {
 
 export async function getParlaySlip(chatId) {
   const state = await getUserState(chatId);
-  // Ensure slip exists and is an array with legs
   if (state?.parlay_slip && Array.isArray(state.parlay_slip.legs)) {
       return state.parlay_slip;
   }
-  return null; // Return null if no valid slip found
+  return null;
 }
 
-export async function setParlaySlip(chatId, slip, ttlSeconds = 1800) { // 30 min TTL for slip
+export async function setParlaySlip(chatId, slip, ttlSeconds = 1800) {
   if (!slip) {
-    // If setting slip to null/empty, fetch current state and remove the slip property
     const state = await getUserState(chatId);
-    if (state) { // Only update if state exists
+    if (state) {
         delete state.parlay_slip;
-        return setUserState(chatId, state, ttlSeconds, false); // Overwrite with the modified state
+        // Overwrite state, don't merge, as we are deleting a key
+        return setUserState(chatId, state, ttlSeconds, false);
     }
-    return true; // No state existed, so nothing to clear, consider it success
+    return true; // No state to update
   }
-  // If setting a valid slip, merge it into the current state
-  // Ensure slip has a legs array
+  // Merge the new slip into the current state
   const slipToSave = { ...slip, legs: Array.isArray(slip.legs) ? slip.legs : [] };
-  return setUserState(chatId, { parlay_slip: slipToSave }, ttlSeconds, true); // Use merge=true
+  return setUserState(chatId, { parlay_slip: slipToSave }, ttlSeconds, true);
 }
 
 // --- Token Management (For callback data passing) ---
 
-// Uses stateManager directly for simplicity
 const TOKEN_TTL = 300; // 5 minutes for callback tokens
 
 export async function saveToken(tokenId, data) {
-    if (!tokenId || typeof data !== 'object' || data === null) {
-        console.error("[State] saveToken invalid arguments", { tokenId });
-        return false;
-    }
+    if (!tokenId || typeof data !== 'object' || data === null) return false;
     try {
-        console.log(`[State] Saving token ${tokenId}`);
+        // *** FIX: Now correctly calls .set() on the instance ***
         return await stateManager.set(`token:${tokenId}`, data, TOKEN_TTL);
     } catch (error) {
         console.error(`[State] Error saving token ${tokenId}:`, error);
@@ -261,9 +251,8 @@ export async function saveToken(tokenId, data) {
 export async function loadToken(tokenId) {
     if (!tokenId) return null;
     try {
-        const data = await stateManager.get(`token:${tokenId}`);
-        // console.log(`[State] Loading token ${tokenId}:`, data ? 'Found' : 'Not Found'); // Optional: Verbose logging
-        return data;
+        // *** FIX: Now correctly calls .get() on the instance ***
+        return await stateManager.get(`token:${tokenId}`);
     } catch (error) {
         console.error(`[State] Error loading token ${tokenId}:`, error);
         sentryService.captureError(error, { component: 'state', operation: 'loadToken', tokenId });
@@ -274,9 +263,8 @@ export async function loadToken(tokenId) {
 export async function deleteToken(tokenId) {
     if (!tokenId) return false;
     try {
-        const deleted = await stateManager.delete(`token:${tokenId}`);
-        console.log(`[State] Deleting token ${tokenId}: ${deleted ? 'Success' : 'Not found/Error'}`);
-        return deleted;
+        // *** FIX: Now correctly calls .delete() on the instance ***
+        return await stateManager.delete(`token:${tokenId}`);
     } catch (error) {
         console.error(`[State] Error deleting token ${tokenId}:`, error);
         sentryService.captureError(error, { component: 'state', operation: 'deleteToken', tokenId });
