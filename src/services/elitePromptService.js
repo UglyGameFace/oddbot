@@ -9,6 +9,7 @@ const formatRequirement = (req) => `\n  - ${req}`;
 // Define the MINIMAL output contract structure
 // *** FIX: Added explicit instruction about positive odds format ***
 const LEG_OUTPUT_CONTRACT = `{
+          "event": "e.g., Boston Celtics @ New York Knicks", // (string, MUST EXACTLY MATCH a game from VERIFIED SCHEDULE context)
           "sportsbook": "e.g., DraftKings",
           "market_type": "e.g., spread | moneyline | total | player_points",
           "line": -3.5, // (number | null)
@@ -27,8 +28,10 @@ const LEG_OUTPUT_CONTRACT = `{
              "public_bet_split_percent": 60, // (number | null)
              "money_split_percent": 70 // (number | null)
           },
-          "correlation_notes": "Low correlation." // (string | null)
+          "correlation_notes": "Low correlation.", // (string | null),
+          "selection": "e.g., Boston Celtics -3.5" // (string, the actual bet)
        }`;
+
 
 const PARLAY_OUTPUT_CONTRACT = `{
   "parlay_metadata": {
@@ -159,6 +162,8 @@ export class ElitePromptService {
 
     const requirements = [
       // *** RE-VERIFIED FIX FOR ODDS FORMAT ***
+      `Leg Event: Provide the full game event string (e.g., "Away Team @ Home Team") in the 'event' field. This MUST EXACTLY match an entry from the VERIFIED SCHEDULE context.`,
+      `Leg Selection: Provide the specific bet selection (e.g., "Boston Celtics -3.5") in the 'selection' field.`,
       `Market Snapshot: Provide sportsbook, market_type, line (number|null), price (American number - CRITICAL: DO NOT use '+' for positive odds, e.g., 105 not +105), region, UTC timestamp.`,
       `Model Probability: Provide calibrated 'model_probability' (0-1).`,
       `Implied Probability: Calculate 'implied_probability' (0-1) from 'price'.`,
@@ -202,20 +207,21 @@ ${config.edges.map(edge => `• ${edge}`).join('\n')}
 f* = (bp - q) / b, where b = decimal_odds - 1, p = model_probability, q = 1 - p. Recommend Quarter Kelly (f* / 4).
 
 ## PROMPT GUARDRAILS - NON-NEGOTIABLE
+${formatRequirement("ABSOLUTELY CRITICAL: Each leg's 'event' field MUST be a game taken DIRECTLY and EXACTLY from the 'VERIFIED SCHEDULE' section provided above. Do NOT include games not listed there. If you cannot find enough valid games from the list for the requested number of legs, return fewer legs and adjust 'legs_count' accordingly, or return an empty legs array if no valid games can be used.")}
 ${formatRequirement("REJECT or DOWNGRADE parlay if critical injury gates involve 'Questionable' or 'Doubtful' STARTERS for any leg. Wait for official updates.")}
 ${formatRequirement("REJECT parlay if overall calibrated EV ('parlay_ev_per_100') is negative.")}
 ${formatRequirement("REJECT parlay if significant negative correlation exists between legs.")}
 ${formatRequirement("If reverse line movement strongly conflicts with your model's edge for a leg, reduce confidence/probability for that leg OR significantly reduce the recommended Kelly stake for the parlay.")}
-${formatRequirement("Only use games from the VERIFIED SCHEDULE provided in context. Reject parlays involving unverified games.")}
+
 
 ## OUTPUT CONTRACT - EXACT JSON STRUCTURE REQUIRED
-Return ONLY the following JSON structure. Populate ALL fields accurately based on your analysis. Ensure all numeric fields are actual NUMBERS, not strings (and specifically, DO NOT use '+' for positive American odds in the 'price' field).
+Return ONLY the following JSON structure. Populate ALL fields accurately based on your analysis. Ensure all numeric fields are actual NUMBERS, not strings (and specifically, DO NOT use '+' for positive American odds in the 'price' field). Ensure the 'event' field for each leg matches the verified schedule.
 
 \`\`\`json
 ${PARLAY_OUTPUT_CONTRACT}
 \`\`\`
 
-**FINAL CHECK**: Ensure the entire response is ONLY the valid JSON object described above, adhering strictly to the schema and number formatting rules (especially for 'price').`;
+**FINAL CHECK**: Ensure the entire response is ONLY the valid JSON object described above, adhering strictly to the schema and number formatting rules (especially for 'price' and 'event').`;
   }
 
   static getWebResearchPrompt(sportKey, numLegs, betType, researchContext = {}) {
@@ -230,13 +236,13 @@ ${PARLAY_OUTPUT_CONTRACT}
 2. **Data Synthesis**: Synthesize this information to populate the required fields in the JSON output contract (market snapshot, model probability estimation based on consensus/projections, injury gates, market signals).
 3. **Realistic Estimation**: Estimate 'model_probability' based on synthesized data, projections, and common quantitative factors (e.g., rest, back-to-backs). Aim for realistic calibration, acknowledging web data limitations. Be conservative if data is sparse or conflicting. Explicitly follow the number format rules (no '+' for odds).
 4. **Strict Validation**:
-    - **Schedule Adherence**: ONLY propose legs for games listed in the 'VERIFIED SCHEDULE' context.
+    - **Schedule Adherence**: EXTREMELY IMPORTANT - ONLY propose legs for games listed in the 'VERIFIED SCHEDULE' context. The 'event' field in each leg MUST match a game from that list.
     - **Odds Range**: Ensure 'price' is within a realistic market range (e.g., -500 to +500) AND IS A VALID NUMBER (no '+'). If web search finds extreme or invalid odds, double-check or discard the leg.
     - **Player/Team Validity**: Use only real, currently active players and teams relevant to the sport key.
     - **Injury Accuracy**: Cross-reference injury statuses if possible. Accurately reflect statuses found (e.g., Questionable, Out) in 'injury_gates'.
 5. **Timestamping**: Provide accurate UTC timestamps for when odds/data were observed during your search.
 
-**ZERO TOLERANCE**: Do not invent games, players, odds, or injury statuses. If reliable data cannot be found for a required field (e.g., market signals), populate it with 'null'. If critical information (like valid odds or key player status) is missing for a potential leg, EXCLUDE that leg and find an alternative or reduce the number of legs in the parlay.`;
+**ZERO TOLERANCE**: Do not invent games, players, odds, or injury statuses. If reliable data cannot be found for a required field (e.g., market signals), populate it with 'null'. If critical information (like valid odds or key player status) is missing for a potential leg, EXCLUDE that leg and find an alternative or reduce the number of legs in the parlay (updating 'legs_count' in metadata). If NO valid legs can be found from the verified schedule, return an empty 'legs' array.`;
     }
 
   static getFallbackPrompt(sportKey, numLegs, betType, fallbackContext = {}) {
@@ -247,6 +253,8 @@ ${PARLAY_OUTPUT_CONTRACT}
 
     // Simplified requirements for fallback, inheriting the main contract structure
     const fallbackRequirements = [
+      `Leg Event: Provide a realistic matchup string (e.g., "Team A @ Team B") in the 'event' field.`,
+      `Leg Selection: Provide a plausible bet selection (e.g., "Team A -3.5") in the 'selection' field.`,
       `Market Snapshot: Estimate realistic 'price' (number, NO '+'). Set sportsbook="Estimated". Timestamp=now.`,
       `Model Probability: Estimate 'model_probability' (0-1) based on general team strength, home advantage, common factors. Be conservative.`,
       `Implied Probability: Calculate from estimated 'price'.`,
@@ -261,7 +269,7 @@ ${PARLAY_OUTPUT_CONTRACT}
         `Kelly Staking: Recommend very small fractions (e.g., 0.10 Kelly or less).`,
         `Correlation Score: Estimate based on leg markets (e.g., 0 if cross-game).`,
         `Risk Assessment: Default to MEDIUM or HIGH due to lack of real-time data.`,
-        `Key Risks: Must include "Lack of real-time odds", "Assumed player availability".`
+        `Key Risks: Must include "Lack of real-time odds", "Assumed player availability", "Event not verified".` // Added verification note
     ];
 
 
@@ -276,6 +284,7 @@ ${this.#buildContextIntelligence(fallbackContext, currentDate)}
 ${formatRequirement("Assume standard home advantage.")}
 ${formatRequirement("Assume key players AVAILABLE unless widely known long-term injuries exist.")}
 ${formatRequirement("Estimate odds based on perceived team strength differences (numeric price, no '+').")}
+${formatRequirement("Use plausible, typical matchups for the 'event' field.")} // Added instruction for event
 
 ## ${config.title.toUpperCase()} FUNDAMENTAL EDGES (Apply conceptually)
 ${config.edges.map(edge => `• ${edge}`).join('\n')}
@@ -295,7 +304,7 @@ ${formatRequirement("Do NOT use games from VERIFIED SCHEDULE if provided; assume
 
 
 ## OUTPUT CONTRACT - EXACT JSON STRUCTURE REQUIRED (Use estimates/nulls where needed)
-Return ONLY the following JSON structure. Clearly mark estimated fields or provide notes. Ensure 'price' is a number (no '+').
+Return ONLY the following JSON structure. Clearly mark estimated fields or provide notes. Ensure 'price' is a number (no '+'). Fill 'event' with plausible matchups.
 
 \`\`\`json
 ${PARLAY_OUTPUT_CONTRACT}
@@ -315,6 +324,8 @@ ${PARLAY_OUTPUT_CONTRACT}
         // Include VERIFIED SCHEDULE if available
         if (context?.scheduleInfo) {
             intelligence.push(context.scheduleInfo);
+        } else {
+             intelligence.push('\n\n## VERIFIED SCHEDULE\nNo schedule provided. Use typical matchups.'); // Explicit fallback if no schedule
         }
          // Include INJURY DATA if available
          if (context?.injuryReport) {
@@ -372,4 +383,3 @@ export default ElitePromptService;
 
 // Also export the constants if they might be needed elsewhere (e.g., for validation schemas)
 export { LEG_OUTPUT_CONTRACT, PARLAY_OUTPUT_CONTRACT };
-
