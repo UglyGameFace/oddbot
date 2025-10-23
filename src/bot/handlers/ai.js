@@ -1,4 +1,5 @@
-// src/bot/handlers/ai.js - FINAL, COMPLETE, AND CORRECTED (with EV Display Update)
+===FILE:oddbot-main.zip/src/bot/handlers/ai.js===
+// src/bot/handlers/ai.js - FINAL, COMPLETE, AND CORRECTED (with EV Display Update & Error Fix)
 import aiService from '../../services/aiService.js';
 import gamesService from '../../services/gamesService.js';
 import { setUserState, getUserState, getAIConfig } from '../state.js'; // Added getAIConfig
@@ -22,6 +23,9 @@ const PAGE_SIZE = 10; // Number of sports per page
 let sportsCache = null;
 let sportsCacheTime = null;
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes cache for sports list
+
+// *** ADD CONSTANT HERE ***
+const DEFAULT_HORIZON_HOURS_AI = 72; // Define the default horizon for AI requests within this handler
 
 // Helper function for pagination
 function pageOf(arr, page) {
@@ -454,11 +458,12 @@ async function executeAiRequest(bot, chatId, messageId = null) {
             sportKey,
             numLegs,
             mode,
-            null, // aiModel is now internal to aiService
+            null, // aiModel is internal to aiService
             betType,
             { // Pass options object
                 quantitativeMode,
-                horizonHours: DEFAULT_HORIZON_HOURS, // Use default or from settings
+                // *** USE THE LOCALLY DEFINED CONSTANT ***
+                horizonHours: DEFAULT_HORIZON_HOURS_AI, // Use the constant defined in this file
                 userConfig: userConfig, // Pass user config
                 chatId: chatId // Pass chatId if needed downstream
             }
@@ -495,14 +500,14 @@ async function sendParlayResult(bot, chatId, parlayResult, state, messageId) {
     const sportTitle = getSportTitle(sportKey);
 
     // --- Handle Rejections or Errors ---
-    if (parlayResult.error || parlayResult.summary?.verdict === 'REJECTED' || parlayResult.riskAssessment?.overallRisk === 'REJECTED') {
-        const reason = parlayResult.error || parlayResult.summary?.primaryAction || parlayResult.riskAssessment?.risks?.[0]?.message || 'Critical risk factors identified or error occurred.';
+    if (!parlayResult || parlayResult.error || parlayResult.summary?.verdict === 'REJECTED' || parlayResult.riskAssessment?.overallRisk === 'REJECTED') {
+        const reason = parlayResult?.error || parlayResult?.summary?.primaryAction || parlayResult?.riskAssessment?.risks?.[0]?.message || 'Critical risk factors identified or an unexpected error occurred.';
         console.warn(`[Parlay Result] Parlay REJECTED for ${sportKey}. Reason: ${reason}`);
 
         let errorText = `❌ <b>Parlay Rejected</b>\n\n`;
         errorText += `<b>Sport:</b> ${escapeHTML(sportTitle)}\n`;
-        errorText += `<b>Reason:</b> ${escapeHTML(reason)}\n\n`;
-         errorText += `<i>${escapeHTML(parlayResult.recommendations?.primaryAction || 'No suitable parlay could be constructed with the current criteria.')}</i>`;
+        errorText += `<b>Reason:</b> ${escapeHTML(String(reason).substring(0, 500))}\n\n`; // Limit reason length
+         errorText += `<i>${escapeHTML(parlayResult?.recommendations?.primaryAction || 'No suitable parlay could be constructed. Try adjusting settings.')}</i>`;
 
          // Suggest trying again or changing settings
          const keyboard = [
@@ -515,13 +520,13 @@ async function sendParlayResult(bot, chatId, parlayResult, state, messageId) {
 
     // --- Handle Cases with No Valid Legs (e.g., DB Scan finds nothing) ---
     if (!Array.isArray(parlayResult.legs) || parlayResult.legs.length === 0) {
-        const reason = parlayResult.portfolio_construction?.overall_thesis || "No suitable legs found matching criteria.";
+        const reason = parlayResult.portfolio_construction?.overall_thesis || parlayResult.summary?.primaryAction || "No suitable legs found matching criteria.";
         console.log(`[Parlay Result] No valid legs found for ${sportKey}. Reason: ${reason}`);
 
         let noLegsText = `🤷 <b>No Parlay Generated</b>\n\n`;
         noLegsText += `<b>Sport:</b> ${escapeHTML(sportTitle)}\n`;
-        noLegsText += `<b>Reason:</b> ${escapeHTML(reason)}\n\n`;
-         noLegsText += `<i>Consider broadening your criteria (e.g., different bet types, mode) or trying another sport.</i>`;
+        noLegsText += `<b>Reason:</b> ${escapeHTML(String(reason).substring(0, 500))}\n\n`; // Limit reason length
+         noLegsText += `<i>Consider broadening criteria (e.g., different bet types, mode) or trying another sport.</i>`;
 
         const keyboard = [[{ text: '⚙️ Change Settings', callback_data: 'ai_back_sport' }]];
         await safeEditMessage(chatId, messageId, noLegsText, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
@@ -532,40 +537,49 @@ async function sendParlayResult(bot, chatId, parlayResult, state, messageId) {
     // --- Format Successful Parlay ---
     const { legs, combined_parlay_metrics, riskAssessment, recommendations, summary, research_metadata } = parlayResult;
 
+    // Build the response string piece by piece
     let response = `✅ <b>AI-Generated Parlay</b> (${summary?.verdict || 'Analysis Complete'})\n`;
     response += `<b>Sport:</b> ${getSportEmoji(sportKey)} ${escapeHTML(sportTitle)}\n`;
     response += `<b>Mode:</b> ${escapeHTML(research_metadata?.mode?.toUpperCase() || state.mode.toUpperCase())}\n`;
-    response += `<b>Strategy:</b> ${escapeHTML(research_metadata?.generationStrategy || 'Unknown')}\n\n`;
+    // response += `<b>Strategy:</b> ${escapeHTML(research_metadata?.generationStrategy || 'Unknown')}\n\n`; // Maybe too internal
 
 
     // Display Legs
-    response += `<b>Legs (${legs.length}):</b>\n`;
+    response += `\n<b>Legs (${legs.length}):</b>\n`;
     legs.forEach((leg, index) => {
         const game = escapeHTML(leg.event || leg.game || 'Unknown Game');
         const pick = escapeHTML(leg.selection || leg.pick || 'Unknown Pick');
-        const oddsValue = leg.odds?.american ?? leg.price; // Get odds
+        const oddsValue = leg.odds?.american ?? leg.price;
         const oddsStr = (typeof oddsValue === 'number') ? (oddsValue > 0 ? `+${oddsValue}` : `${oddsValue}`) : 'N/A';
         const modelProb = (leg.model_probability !== undefined && leg.model_probability !== null) ? `${(leg.model_probability * 100).toFixed(1)}%` : 'N/A';
         const legEV = (leg.ev_per_100 !== undefined && leg.ev_per_100 !== null) ? `${leg.ev_per_100.toFixed(1)}%` : 'N/A';
-        const validationMark = leg.real_game_validated === false ? '❓' : '✔️'; // Mark unvalidated legs (fallback/web error)
+        // Use validation marker only if validation was attempted (web/live modes)
+        let validationMark = '';
+         if (research_metadata?.generationStrategy?.includes('web') || research_metadata?.generationStrategy?.includes('live')) {
+              validationMark = leg.real_game_validated === false ? '❓' : '✔️';
+         }
+
 
         response += `${index + 1}) ${validationMark} ${game}\n`;
         response += `   <b>Pick:</b> ${pick} (<b>${oddsStr}</b>)\n`;
         response += `   <i>Est. Win%:</i> ${modelProb} | <i>Leg EV:</i> ${legEV}\n`;
-         // Optionally add injury gates if present and critical
-         if (leg.injury_gates && leg.injury_gates.length > 0) {
-             const criticalGates = leg.injury_gates.filter(g => /\((Questionable|Doubtful|Out)\)/i.test(g));
+         // Show critical injury gates
+         if (Array.isArray(leg.injury_gates) && leg.injury_gates.length > 0) {
+             const criticalGates = leg.injury_gates.filter(g => typeof g === 'string' && /\((Questionable|Doubtful|Out)\)/i.test(g));
              if (criticalGates.length > 0) {
-                  response += `   <b style="color:orange;">Injury Note:</b> ${escapeHTML(criticalGates.join(', ').substring(0, 100))}\n`;
+                  // Use <b> for warning color if possible, or just bold
+                  response += `   <b>⚠️ Injury:</b> ${escapeHTML(criticalGates.join(', ').substring(0, 100))}\n`;
              }
          }
-        response += `\n`; // Add space between legs
+        // response += `\n`; // Removed extra newline
     });
 
     // Display Combined Metrics
-    response += `<b>Combined Odds:</b> ${escapeHTML(combined_parlay_metrics?.combined_american_odds || 'N/A')}\n`;
-     response += `<b>Est. Parlay Win%:</b> ${combined_parlay_metrics?.combined_probability_product ? (combined_parlay_metrics.combined_probability_product * 100).toFixed(1) + '%' : 'N/A'}\n`;
-    response += `<b>Overall EV:</b> <b>${combined_parlay_metrics?.parlay_ev_per_100?.toFixed(1) ?? 'N/A'}%</b> ${combined_parlay_metrics?.parlay_ev_per_100 > 0 ? '📈' : '📉'}\n`;
+    response += `\n<b>Combined Odds:</b> ${escapeHTML(combined_parlay_metrics?.combined_american_odds || 'N/A')}\n`;
+    const combinedProb = combined_parlay_metrics?.combined_probability_product;
+    response += `<b>Est. Parlay Win%:</b> ${typeof combinedProb === 'number' ? (combinedProb * 100).toFixed(1) + '%' : 'N/A'}\n`;
+    const overallEV = combined_parlay_metrics?.parlay_ev_per_100;
+    response += `<b>Overall EV:</b> <b>${typeof overallEV === 'number' ? overallEV.toFixed(1) + '%' : 'N/A'}</b> ${typeof overallEV === 'number' ? (overallEV > 0 ? '📈' : '📉') : ''}\n`;
     response += `<b>Risk Level:</b> ${escapeHTML(riskAssessment?.overallRisk || 'UNKNOWN')}\n`;
 
     // Display Staking Recommendation
@@ -576,13 +590,24 @@ async function sendParlayResult(bot, chatId, parlayResult, state, messageId) {
 
     // Display Primary Action / Key Risks
     response += `\n<b>Action: ${escapeHTML(recommendations?.primaryAction || 'Review Carefully')}</b>\n`;
-    if (riskAssessment?.risks && riskAssessment.risks.length > 0) {
-        response += `<i>Key Risks: ${escapeHTML(riskAssessment.risks.slice(0, 2).map(r => r.message).join('; '))}</i>\n`;
+    if (Array.isArray(riskAssessment?.risks) && riskAssessment.risks.length > 0) {
+        // Show only High/Critical risks for brevity, or top 1-2
+        const importantRisks = riskAssessment.risks.filter(r => r.severity === 'HIGH' || r.severity === 'CRITICAL').slice(0, 2);
+         if (importantRisks.length > 0) {
+             response += `<i>Key Risks: ${escapeHTML(importantRisks.map(r => r.message || r.type).join('; '))}</i>\n`;
+         } else if (riskAssessment.risks.length > 0) {
+             // Show top medium risk if no high/critical
+             response += `<i>Risk Note: ${escapeHTML(riskAssessment.risks[0].message || riskAssessment.risks[0].type)}</i>\n`;
+         }
     }
 
-     // Add a note about verification for fallback or web modes with low validation
-     if (research_metadata?.fallback_used || (research_metadata?.validationRate < 0.8 && research_metadata?.mode === 'web')) {
-         response += `\n<i style="color:gray;">⚠️ Please verify game details and current odds before placing bets, as some data may be estimated or unvalidated.</i>`;
+     // Add validation/fallback warning note
+     const validationRate = research_metadata?.validationRate;
+     const isFallback = research_metadata?.fallback_used;
+     if (isFallback) {
+         response += `\n<i>⚠️ Generated in Fallback Mode. Data is estimated. Verify details & odds.</i>`;
+     } else if (typeof validationRate === 'number' && validationRate < 0.8) {
+         response += `\n<i>⚠️ Low schedule validation (${(validationRate * 100).toFixed(0)}%). Verify game details & odds.</i>`;
      }
 
 
@@ -596,7 +621,12 @@ async function sendParlayResult(bot, chatId, parlayResult, state, messageId) {
          console.error("Error editing final parlay result message:", editError);
          sentryService.captureError(editError, { component: 'ai_handler', operation: 'sendParlayResult_FinalEdit' });
          // Fallback: Send as new message if edit fails
-         await bot.sendMessage(chatId, response, { parse_mode: 'HTML', reply_markup: { inline_keyboard: finalKeyboard } });
+         try {
+             await bot.sendMessage(chatId, response, { parse_mode: 'HTML', reply_markup: { inline_keyboard: finalKeyboard } });
+         } catch (sendError) {
+             console.error("Fallback send message also failed:", sendError);
+             // Cannot communicate failure to user easily here
+         }
     }
 
 } // End sendParlayResult
