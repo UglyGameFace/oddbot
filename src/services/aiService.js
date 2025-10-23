@@ -162,7 +162,6 @@ async function validateAILegsAgainstSchedule(sportKey, proposedLegs, hours) {
             const key = `${awayNorm}@${homeNorm}`;
             realGameMap.set(key, game); // Store the full game object
         });
-        // console.log("DEBUG: Real Game Map Keys:", Array.from(realGameMap.keys())); // Uncomment for debugging
 
         // Validate each proposed leg
         const validationResults = proposedLegs.map(leg => {
@@ -191,8 +190,6 @@ async function validateAILegsAgainstSchedule(sportKey, proposedLegs, hours) {
              if (!isValidated) {
                  validationError = `Game not found in schedule (Key: ${legEventKey})`;
                  console.warn(`⚠️ Schedule Validation Failed: AI proposed leg for unverified/out-of-scope game: "${leg.event}" (Normalized key: ${legEventKey})`);
-             } else {
-                 //console.log(`✅ Schedule Validation Success: Matched "${leg.event}" to map key ${legEventKey}`);
              }
 
              // Return leg with validation status and potentially updated data from verified source
@@ -278,7 +275,6 @@ class AIService {
             const responseText = providerConfig.extractContent(response.data);
 
             // *** FIX: ADD RAW LOGGING ***
-            // Use console.info for less alarming logs, but keep visible
             console.info(`---------- RAW AI RESPONSE (${providerConfig.name}) ----------`);
             console.info(responseText); // Log the raw text
             console.info(`---------------------------------------------------------`);
@@ -286,14 +282,12 @@ class AIService {
 
             if (!responseText) {
                 console.error(`❌ ${providerConfig.name} returned empty response content.`);
-                 // Log details if possible
                  console.error("Raw Response Data Snippet:", JSON.stringify(response.data)?.substring(0, 1000));
                 throw new Error(`${providerConfig.name} returned empty or invalid response structure.`);
             }
 
             const parsedJson = extractJSON(responseText);
             if (!parsedJson) {
-                // Error logged by extractJSON
                  throw new Error(`AI response from ${providerConfig.name} did not contain parseable JSON that matches the expected structure. See raw log above.`);
             }
 
@@ -332,10 +326,8 @@ class AIService {
             } else if (status === 429) {
                  errorMessage = `${providerConfig.name} API rate limit exceeded (Status 429). Please wait and try again.`;
             } else if (status === 400) {
-                 // Often indicates a bad request / prompt issue
                  errorMessage = `${providerConfig.name} API Bad Request (Status 400). Check prompt structure or model compatibility. Raw error might be in logs.`;
             } else if (error.code === 'ECONNABORTED' && !(error instanceof TimeoutError)) {
-                 // Network level timeout, potentially different from application timeout
                  errorMessage = `${providerConfig.name} API request connection timed out (${error.code}).`;
             }
              // Log structured error to Sentry using captureError
@@ -348,73 +340,99 @@ class AIService {
         }
     }
 
-  _ensureLegsHaveOdds(legs = []) { // Add default value
+  _ensureLegsHaveOdds(legs = []) {
     if (!Array.isArray(legs)) {
         console.warn("⚠️ _ensureLegsHaveOdds: Input 'legs' is not an array, returning empty array.");
         return [];
     }
+    
     return legs.map((leg, index) => {
       // Check if leg itself is a valid object
       if (!leg || typeof leg !== 'object') {
           console.warn(`⚠️ _ensureLegsHaveOdds: Leg at index ${index} is not a valid object. Skipping.`);
-          // Optionally return a default invalid structure or filter out later
-          return { // Return a minimal invalid structure
+          return {
               selection: 'Invalid Leg Data',
               event: 'Invalid Leg Data',
               odds: { american: null },
-              isValid: false // Flag to filter later if needed
+              isValid: false
           };
       }
 
-      // More robust check for valid odds structure and numeric value
-      const americanOdds = leg?.odds?.american;
+      // *** FIX: Handle both odds structures ***
+      // Check for legacy structure: leg.odds.american
+      // Check for new structure: leg.price (American odds at root level)
+      let americanOdds = leg?.odds?.american;
+      if (typeof americanOdds !== 'number' || !Number.isFinite(americanOdds)) {
+        americanOdds = leg?.price; // Try root level price field
+      }
+
       const isValidNumber = typeof americanOdds === 'number' && Number.isFinite(americanOdds);
 
-      // *** FIX: Check for invalid selection/event strings ***
+      // Check for invalid selection/event strings
       const legSelection = leg?.selection;
       const legEvent = leg?.event;
       const isValidSelection = typeof legSelection === 'string' && legSelection.length > 0 && legSelection.toLowerCase() !== 'unknown selection';
       const isValidEvent = typeof legEvent === 'string' && legEvent.length > 0 && legEvent.toLowerCase() !== 'unknown event';
 
       if (isValidNumber && isValidSelection && isValidEvent) {
-        // Leg seems valid, ensure derived odds fields exist
-        let derivedOdds = { ...leg.odds }; // Copy existing odds
+        // Leg is valid, ensure derived odds fields exist
+        let derivedOdds = { 
+          ...leg.odds, 
+          american: americanOdds // Ensure american is set
+        };
+        
         if (!derivedOdds.decimal || !Number.isFinite(derivedOdds.decimal)) {
-             derivedOdds.decimal = ProbabilityCalculator.americanToDecimal(americanOdds);
+          derivedOdds.decimal = ProbabilityCalculator.americanToDecimal(americanOdds);
         }
-         if (!derivedOdds.implied_probability || !Number.isFinite(derivedOdds.implied_probability)) {
-             derivedOdds.implied_probability = ProbabilityCalculator.impliedProbability(derivedOdds.decimal);
-         }
-        return { ...leg, odds: derivedOdds, isValid: true }; // Mark as valid
+        if (!derivedOdds.implied_probability || !Number.isFinite(derivedOdds.implied_probability)) {
+          derivedOdds.implied_probability = ProbabilityCalculator.impliedProbability(derivedOdds.decimal);
+        }
+        
+        return { 
+          ...leg, 
+          odds: derivedOdds, 
+          isValid: true 
+        };
       }
 
-      // *** FIX: Log which check failed ***
-      console.warn(`⚠️ AI leg invalid (Index ${index}). Selection: "${legSelection}" (Valid: ${isValidSelection}), Event: "${legEvent}" (Valid: ${isValidEvent}), Odds: ${americanOdds} (Valid: ${isValidNumber}). Defaulting...`);
-      sentryService.captureError(new Error("AI provided invalid leg details"), { component: 'aiService', operation: '_ensureLegsHaveOdds', legData: leg, level: 'warning'});
+      // *** FIX: Better logging to show what we found ***
+      console.warn(`⚠️ AI leg invalid (Index ${index}). Selection: "${legSelection}" (Valid: ${isValidSelection}), Event: "${legEvent}" (Valid: ${isValidEvent}), Odds: ${americanOdds} (Valid: ${isValidNumber}). Available fields:`, 
+        Object.keys(leg).filter(k => k !== 'quantum_analysis' && k !== 'market_signals'));
+      
+      sentryService.captureError(new Error("AI provided invalid leg details"), { 
+        component: 'aiService', 
+        operation: '_ensureLegsHaveOdds', 
+        legData: { 
+          selection: legSelection,
+          event: legEvent, 
+          americanOdds: americanOdds,
+          availableFields: Object.keys(leg)
+        }, 
+        level: 'warning'
+      });
 
       // Return a structured leg with default odds and placeholders
       const defaultDecimal = ProbabilityCalculator.americanToDecimal(-110);
       const defaultedOdds = {
-            american: isValidNumber ? americanOdds : -110, // Use provided odds if valid number, else default
-            decimal: isValidNumber ? ProbabilityCalculator.americanToDecimal(americanOdds) : defaultDecimal,
-            implied_probability: isValidNumber ? ProbabilityCalculator.impliedProbability(ProbabilityCalculator.americanToDecimal(americanOdds)) : ProbabilityCalculator.impliedProbability(defaultDecimal)
-         };
+        american: isValidNumber ? americanOdds : -110,
+        decimal: isValidNumber ? ProbabilityCalculator.americanToDecimal(americanOdds) : defaultDecimal,
+        implied_probability: isValidNumber ? ProbabilityCalculator.impliedProbability(ProbabilityCalculator.americanToDecimal(americanOdds)) : ProbabilityCalculator.impliedProbability(defaultDecimal)
+      };
 
       return {
-        ...leg, // Keep other leg data if present
-        selection: isValidSelection ? leg.selection : 'Unknown Selection', // Use 'Unknown' placeholders
-        event: isValidEvent ? leg.event : 'Unknown Event',                 // Use 'Unknown' placeholders
+        ...leg,
+        selection: isValidSelection ? leg.selection : 'Unknown Selection',
+        event: isValidEvent ? leg.event : 'Unknown Event',
         market: leg?.market || 'h2h',
-        odds: defaultedOdds, // Use the potentially defaulted odds
-        // Annotate the rationale
+        odds: defaultedOdds,
         quantum_analysis: {
-            ...(leg?.quantum_analysis || {}), // Keep existing analysis if present
-            analytical_basis: `(Data defaulted due to missing/invalid AI output: Sel=${isValidSelection}, Evt=${isValidEvent}, Odds=${isValidNumber}) ${leg?.quantum_analysis?.analytical_basis || 'No rationale.'}`,
-            confidence_score: leg?.quantum_analysis?.confidence_score ?? 30 // Lower default confidence for defaulted legs
+          ...(leg?.quantum_analysis || {}),
+          analytical_basis: `(Data defaulted due to missing/invalid AI output: Sel=${isValidSelection}, Evt=${isValidEvent}, Odds=${isValidNumber}) ${leg?.quantum_analysis?.analytical_basis || 'No rationale.'}`,
+          confidence_score: leg?.quantum_analysis?.confidence_score ?? 30
         },
-        isValid: false // Mark as invalid due to defaulting
+        isValid: false
       };
-    }).filter(leg => leg.isValid); // Filter out completely invalid leg structures here
+    }).filter(leg => leg.isValid);
   }
 
   async generateParlay(sportKey, numLegs, mode, aiModel /* Ignored */, betType, options = {}) {
@@ -457,7 +475,6 @@ class AIService {
               // Handle DB mode potentially returning empty legs correctly
               if (generationStrategy === 'database_quant_ev' && rawAIParlayData?.legs?.length === 0) {
                    console.log("✅ DB Quant: No +EV legs found meeting criteria.");
-                   // Return the structured empty response from _generateDbQuantParlay
                    return rawAIParlayData;
               }
               console.error("❌ AI/DB response validation failed: 'legs' is not an array or is missing.", rawAIParlayData);
@@ -465,7 +482,6 @@ class AIService {
          }
 
           // Process & Validate Legs
-          // _ensureLegsHaveOdds now filters out completely invalid structures
           let processedLegs = this._ensureLegsHaveOdds(rawAIParlayData.legs);
           let validationRate = 1.0; // Default for DB mode
           let finalLegs = processedLegs; // Initially assume all processed legs are final
@@ -632,7 +648,7 @@ class AIService {
         }
       }
 
-      // Sort by EV descending and remove duplicates (same game + outcome)
+      // Sort by EV descending and remove duplicates (same game + outcome combination)
       const uniquePlays = this._deduplicateValuePlays(valuePlays);
       uniquePlays.sort((a, b) => b.ev - a.ev);
       
@@ -825,7 +841,6 @@ class AIService {
              gameId: game.event_id, // Consistent ID field
              sport_key: sportKey,
              real_game_validated: true // Assume DB games are valid
-             // best_quote: { decimal: decimalOdds } // Optional, depends if needed
         };
     }
 
