@@ -1,12 +1,13 @@
-// src/services/aiService.js - EV-DRIVEN UPDATE
+===FILE:oddbot-main.zip/src/services/aiService.js===
+// src/services/aiService.js - EV-DRIVEN UPDATE (Complete File with Fixes)
 import axios from 'axios';
 import env from '../config/env.js';
 import gamesService from './gamesService.js';
-import quantitativeService from './quantitativeService.js'; // Updated version
-import { ElitePromptService } from './elitePromptService.js'; // Updated version
-import { toDecimalFromAmerican, toAmericanFromDecimal } from '../utils/botUtils.js'; // Use shared utils
-import { TimeoutError, withTimeout } from '../utils/asyncUtils.js'; // Import withTimeout
-import { sentryService } from './sentryService.js';
+import quantitativeService, { ProbabilityCalculator } from './quantitativeService.js'; // Import calculator too
+import { ElitePromptService } from './elitePromptService.js';
+import { toDecimalFromAmerican, toAmericanFromDecimal } from '../utils/botUtils.js';
+import { TimeoutError, withTimeout } from '../utils/asyncUtils.js';
+import { sentryService } from './sentryService.js'; // Ensure correct import
 
 const TZ = env.TIMEZONE || 'America/New_York';
 const WEB_TIMEOUT_MS = 45000; // Increased timeout for potentially complex AI responses
@@ -56,7 +57,8 @@ function calculateParlayDecimal(legs = []) {
     if (validLegs.length === 0) return 1.0; // Return 1.0 (even money) if no valid legs
 
     return validLegs.reduce((acc, leg) => {
-        const decimal = ProbabilityCalculator.americanToDecimal(leg.odds.american); // Use calculator from quant service
+        // Use ProbabilityCalculator directly now that it's imported
+        const decimal = ProbabilityCalculator.americanToDecimal(leg.odds.american);
         // If conversion results in invalid decimal (e.g., from odds=0), treat as 1.0 multiplier
         return acc * (decimal > 1 ? decimal : 1.0);
     }, 1.0); // Start accumulator at 1.0
@@ -98,7 +100,8 @@ function extractJSON(text = '') {
 
     // 4. If all else fails, log the failure and return null
     console.error("❌ Failed to extract valid JSON from AI response. Response start:", text.substring(0, 200));
-    sentryService.captureMessage("Failed JSON Extraction from AI", { level: "warning", extra: { responseSample: text.substring(0, 500) } });
+    // *** FIX: Use captureError instead of captureMessage ***
+    sentryService.captureError(new Error("Failed JSON Extraction from AI"), { level: "warning", extra: { responseSample: text.substring(0, 500) } });
     return null;
 }
 
@@ -119,9 +122,7 @@ async function buildScheduleContextForAI(sportKey, hours) {
             .slice(0, 20) // Limit context size
             .map((game, index) => {
                 const timeStr = new Date(game.commence_time).toLocaleString('en-US', { timeZone: TZ, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
-                // Include event ID if available and potentially useful for AI mapping
-                // const eventId = game.event_id || game.id;
-                return `${index + 1}. ${game.away_team} @ ${game.home_team} - ${timeStr}`; // - ID: ${eventId}
+                return `${index + 1}. ${game.away_team} @ ${game.home_team} - ${timeStr}`;
             })
             .join('\n');
 
@@ -301,7 +302,7 @@ class AIService {
                  // Network level timeout, potentially different from application timeout
                  errorMessage = `${providerConfig.name} API request connection timed out.`;
             }
-             // Log structured error to Sentry
+             // Log structured error to Sentry using captureError
              sentryService.captureError(error, {
                 component: 'aiService', operation: '_callAIProvider', provider: providerConfig.name, model: modelToUse, status: status, level: 'error'
              });
@@ -311,175 +312,178 @@ class AIService {
         }
     }
 
+  _ensureLegsHaveOdds(legs = []) { // Add default value
+    if (!Array.isArray(legs)) {
+        console.warn("⚠️ _ensureLegsHaveOdds: Input is not an array, returning empty array.");
+        return [];
+    }
+    return legs.map(leg => {
+      // More robust check for valid odds structure and numeric value
+      const americanOdds = leg?.odds?.american;
+      const isValidNumber = typeof americanOdds === 'number' && Number.isFinite(americanOdds);
 
-  async generateParlay(sportKey, numLegs, mode, aiModel /* Ignored for now */, betType, options = {}) {
+      if (isValidNumber) {
+        // Ensure decimal odds are also calculated/present
+        if (!leg.odds.decimal || !Number.isFinite(leg.odds.decimal)) {
+             // Use ProbabilityCalculator directly
+             leg.odds.decimal = ProbabilityCalculator.americanToDecimal(americanOdds);
+        }
+         if (!leg.odds.implied_probability || !Number.isFinite(leg.odds.implied_probability)) {
+             // Use ProbabilityCalculator directly
+             leg.odds.implied_probability = ProbabilityCalculator.impliedProbability(leg.odds.decimal);
+         }
+        return leg;
+      }
+
+      console.warn(`⚠️ AI failed to provide valid numeric odds for leg: "${leg?.selection || 'Unknown Selection'}". Defaulting to -110.`);
+      // *** FIX: Use captureError instead of captureMessage ***
+      sentryService.captureError(new Error("AI provided invalid odds"), { component: 'aiService', operation: '_ensureLegsHaveOdds', legData: leg, level: 'warning'});
+
+      // Return a structured leg with default odds
+      const defaultDecimal = ProbabilityCalculator.americanToDecimal(-110);
+      return {
+        ...leg, // Keep other leg data if present
+        selection: leg?.selection || 'Default Pick',
+        event: leg?.event || 'Unknown Event',
+        market: leg?.market || 'h2h',
+        odds: {
+            american: -110,
+            decimal: defaultDecimal,
+            implied_probability: ProbabilityCalculator.impliedProbability(defaultDecimal)
+         },
+        // Annotate the rationale
+        quantum_analysis: {
+            ...(leg?.quantum_analysis || {}), // Keep existing analysis if present
+            analytical_basis: `(Odds defaulted to -110 due to missing/invalid AI output) ${leg?.quantum_analysis?.analytical_basis || 'No rationale provided.'}`,
+            confidence_score: leg?.quantum_analysis?.confidence_score ?? 50 // Default confidence if missing
+        }
+      };
+    });
+  }
+
+
+  async generateParlay(sportKey, numLegs, mode, aiModel /* Ignored */, betType, options = {}) {
       const requestId = `parlay_${sportKey}_${Date.now()}`;
-      console.log(`🎯 Starting EV-Driven Parlay Generation [${requestId}] | Sport: ${sportKey} | Legs: ${numLegs} | Mode: ${mode} | Type: ${betType}`);
+      // *** FIX: Define generationStrategy BEFORE try block ***
+      let generationStrategy = 'unknown';
 
-      // --- Input Validation ---
+      console.log(`🎯 Starting EV-Driven Parlay Generation [${requestId}] | Sport: ${sportKey} | Legs: ${numLegs} | Mode: ${mode} | Type: ${betType}`);
+      // Input Validation
       if (!sportKey || typeof sportKey !== 'string') throw new Error("Invalid sportKey provided.");
       if (!numLegs || typeof numLegs !== 'number' || numLegs < 2 || numLegs > 8) throw new Error("Invalid number of legs (must be 2-8).");
       if (!['web', 'live', 'db'].includes(mode)) {
           console.warn(`⚠️ Invalid mode "${mode}", defaulting to 'web'.`);
           mode = 'web';
       }
-      // TODO: Add validation for betType against allowed types?
 
-
-       // --- Prepare Context ---
-       const horizonHours = options.horizonHours || DEFAULT_HORIZON_HOURS;
-       // Fetch user config - assuming it's passed in options if needed
-       const userConfig = options.userConfig || null; // Example: await getConfig(options.chatId, 'ai');
-        // Fetch schedule context - crucial for web/live modes
-       const scheduleContext = (mode === 'web' || mode === 'live')
-            ? await buildScheduleContextForAI(sportKey, horizonHours)
-            : null; // No schedule context needed for pure DB mode
-        // Fetch injury context (Placeholder - needs real implementation)
-        const injuryContext = null; // await fetchInjuryReport(sportKey);
-
-
-       const promptContext = {
-            scheduleInfo: scheduleContext,
-            injuryReport: injuryContext,
-            userConfig: userConfig
-            // Add other context like market trends if available
-       };
-
+      // Prepare Context
+      const horizonHours = options.horizonHours || DEFAULT_HORIZON_HOURS;
+      const userConfig = options.userConfig || null;
+      const scheduleContext = (mode === 'web' || mode === 'live') ? await buildScheduleContextForAI(sportKey, horizonHours) : null;
+      const injuryContext = null; // Placeholder
+      const promptContext = { scheduleInfo: scheduleContext, injuryReport: injuryContext, userConfig: userConfig };
 
       try {
           let rawAIParlayData;
-          let generationStrategy = '';
-
-          // --- Select Generation Strategy ---
+          // Select Generation Strategy
           if (mode === 'web' || mode === 'live') {
               console.log(`🖥️ Using Web Research strategy (Mode: ${mode})`);
-              generationStrategy = 'quantum_web_ev';
+              generationStrategy = 'quantum_web_ev'; // Assign strategy
               const prompt = ElitePromptService.getWebResearchPrompt(sportKey, numLegs, betType, promptContext);
               rawAIParlayData = await this._callAIProvider(prompt);
-          } else if (mode === 'db') {
+          } else { // mode === 'db'
               console.log(`💾 Using Database (+EV Scan) strategy (Mode: ${mode})`);
-              generationStrategy = 'database_quant_ev';
-              // DB mode uses internal logic, doesn't call external AI for leg selection
-               rawAIParlayData = await this._generateDbQuantParlay(sportKey, numLegs, betType, horizonHours);
-          } else {
-              // Should not happen due to validation, but handle defensively
-               throw new Error(`Unsupported mode: ${mode}`);
+              generationStrategy = 'database_quant_ev'; // Assign strategy
+              rawAIParlayData = await this._generateDbQuantParlay(sportKey, numLegs, betType, horizonHours);
           }
 
-           // --- Basic Structure Validation ---
-           if (!rawAIParlayData || !Array.isArray(rawAIParlayData.legs) /* Removed length check here */ ) {
-                console.error("❌ AI/DB function returned invalid structure (missing legs array):", rawAIParlayData);
-                // Handle cases where DB mode might return 0 legs intentionally
-                if (generationStrategy === 'database_quant_ev' && rawAIParlayData?.legs?.length === 0) {
-                     console.log("✅ DB Quant mode found no +EV legs, returning empty parlay structure.");
-                     // Return the structured "no bets found" response from _generateDbQuantParlay
-                     return rawAIParlayData; // This structure indicates no bets found
-                }
-                throw new Error('AI or DB function failed to return a valid parlay structure with a legs array.');
-           }
+          // Basic Structure Validation
+          if (!rawAIParlayData || !Array.isArray(rawAIParlayData.legs)) {
+              if (generationStrategy === 'database_quant_ev' && rawAIParlayData?.legs?.length === 0) {
+                   console.log("✅ DB Quant: No +EV legs found.");
+                   return rawAIParlayData; // Return empty structure
+              }
+              throw new Error('AI/DB function failed to return valid structure (missing legs array).');
+         }
 
-
-          // --- Process & Validate Legs ---
-          // 1. Ensure Odds Exist (Defaults if necessary)
+          // Process & Validate Legs
           let processedLegs = this._ensureLegsHaveOdds(rawAIParlayData.legs);
+          let validationRate = 1.0;
+          let finalLegs = processedLegs;
+          const originalLegCount = processedLegs.length; // Store original count
 
-           // 2. Schedule Validation (Only for AI modes, DB mode assumes valid games)
-           let validationRate = 1.0; // Assume 100% for DB mode initially
-           let finalLegs = processedLegs;
+          if (generationStrategy === 'quantum_web_ev') {
+              const validationResult = await validateAILegsAgainstSchedule(sportKey, processedLegs, horizonHours);
+              validationRate = validationResult.validationRate;
+              finalLegs = validationResult.validatedLegs.filter(leg => leg.real_game_validated); // Filter out invalid
+              const removedCount = originalLegCount - finalLegs.length;
+              if (removedCount > 0) console.warn(`⚠️ ${removedCount} leg(s) removed by schedule validation.`);
 
-           if (generationStrategy === 'quantum_web_ev') {
-                const { validatedLegs: scheduleValidatedLegs, validationRate: rate } = await validateAILegsAgainstSchedule(sportKey, processedLegs, horizonHours);
-                validationRate = rate;
-                // Filter out legs that failed schedule validation
-                finalLegs = scheduleValidatedLegs.filter(leg => leg.real_game_validated);
+              if (finalLegs.length < 2) { // Check if enough legs remain
+                  console.error(`❌ Insufficient valid legs (${finalLegs.length}) after schedule validation.`);
+                  return this._createValidationFailureResponse(rawAIParlayData, generationStrategy, "Insufficient legs passed schedule validation.");
+              }
+          }
 
-                 if (finalLegs.length < originalLegCount) {
-                    console.warn(`⚠️ ${originalLegCount - finalLegs.length} leg(s) removed due to schedule validation failure.`);
-                }
-                 if (finalLegs.length < 2) { // Need at least 2 legs for a parlay
-                    console.error(`❌ Insufficient valid legs (${finalLegs.length}) remain after schedule validation.`);
-                     // Return a specific structure indicating validation failure led to invalid parlay
-                     return {
-                        ...rawAIParlayData, // Keep metadata if available
-                        legs: [], // No valid legs
-                        combined_parlay_metrics: null,
-                        riskAssessment: { overallRisk: 'REJECTED', risks: [{type: 'VALIDATION', severity: 'CRITICAL', message: 'Insufficient legs passed schedule validation.'}] },
-                        recommendations: { primaryAction: 'DO NOT BET. AI proposed invalid games.' },
-                        summary: { verdict: 'REJECTED', primaryAction: 'AI proposed invalid games.' },
-                        research_metadata: { ...(rawAIParlayData.research_metadata || {}), validation_failed_insufficient_legs: true, generationStrategy }
-                    };
-                }
-           }
-
-
-          // --- Final Quantitative Evaluation ---
+          // Final Quantitative Evaluation
           console.log(`🔬 Performing final quantitative evaluation on ${finalLegs.length} leg(s)...`);
           const evaluationResult = await quantitativeService.evaluateParlay(finalLegs);
 
-           // Check if quantitative service rejected the parlay
-           if (evaluationResult.error || evaluationResult.summary?.verdict === 'REJECTED' || evaluationResult.riskAssessment?.overallRisk === 'REJECTED') {
-                console.warn(`❌ Parlay REJECTED by Quantitative Service. Reason: ${evaluationResult.error || evaluationResult.summary?.primaryAction || evaluationResult.riskAssessment?.risks?.[0]?.message}`);
-                 // Return the evaluation result directly as it contains the rejection details
-                 return {
-                     ...(rawAIParlayData.parlay_metadata ? { parlay_metadata: rawAIParlayData.parlay_metadata } : {}), // Keep metadata
-                     legs: finalLegs, // Show the legs that were evaluated
-                     ...evaluationResult, // Include detailed rejection reason from quant service
-                     research_metadata: { ...(rawAIParlayData.research_metadata || {}), quantitative_rejection: true, generationStrategy, validationRate: validationRate.toFixed(2) }
-                 };
-           }
+          // Handle Rejection from Quant Service
+          if (evaluationResult.error || evaluationResult.summary?.verdict === 'REJECTED' || evaluationResult.riskAssessment?.overallRisk === 'REJECTED') {
+               const reason = evaluationResult.error || evaluationResult.summary?.primaryAction || 'Quantitative rejection';
+               console.warn(`❌ Parlay REJECTED by Quant Service. Reason: ${reason}`);
+               return {
+                   ...(rawAIParlayData.parlay_metadata ? { parlay_metadata: rawAIParlayData.parlay_metadata } : {}),
+                   legs: finalLegs, // Show evaluated legs
+                   ...evaluationResult, // Include rejection details
+                   research_metadata: { ...(rawAIParlayData.research_metadata || {}), quantitative_rejection: true, generationStrategy, validationRate: validationRate.toFixed(2) }
+               };
+          }
 
-          // --- Assemble Final Result ---
+          // Assemble Final Successful Result
           const finalResult = {
-              ...(rawAIParlayData.parlay_metadata ? { parlay_metadata: rawAIParlayData.parlay_metadata } : {}), // Use metadata if AI provided
-              legs: finalLegs, // The final validated and processed legs
-              // Use results directly from quantitativeService
+              ...(rawAIParlayData.parlay_metadata ? { parlay_metadata: rawAIParlayData.parlay_metadata } : {}),
+              legs: finalLegs,
               combined_parlay_metrics: evaluationResult.combined_parlay_metrics,
               riskAssessment: evaluationResult.riskAssessment,
               recommendations: evaluationResult.recommendations,
               summary: evaluationResult.summary,
-              // Add research/generation metadata
               research_metadata: {
-                  ...(rawAIParlayData.research_metadata || {}), // Keep original research notes if any
+                  ...(rawAIParlayData.research_metadata || {}),
                   generationStrategy: generationStrategy,
-                  mode: mode, // Store the requested mode
+                  mode: mode,
                   validationRate: parseFloat(validationRate.toFixed(2)),
-                  finalLegCount: finalLegs.length
+                  finalLegCount: finalLegs.length,
+                  originalLegCount: originalLegCount // Add original count for context
               },
-               portfolio_construction: rawAIParlayData.portfolio_construction || evaluationResult.recommendations // Use AI's construction or quant recommendations
-          };
+              portfolio_construction: rawAIParlayData.portfolio_construction || evaluationResult.recommendations // Fallback construction details
+           };
+           // Ensure metadata leg count matches final legs
+           if (finalResult.parlay_metadata) finalResult.parlay_metadata.legs_count = finalLegs.length;
 
-          // Update metadata leg count if it differs
-           if (finalResult.parlay_metadata) {
-               finalResult.parlay_metadata.legs_count = finalLegs.length;
-           }
-
-
-          console.log(`✅ Successfully generated and evaluated EV-driven parlay [${requestId}]. Verdict: ${finalResult.summary?.verdict}`);
+          console.log(`✅ Successfully generated/evaluated EV Parlay [${requestId}]. Verdict: ${finalResult.summary?.verdict}`);
           return finalResult;
 
       } catch (error) {
-          console.error(`❌ EV-Driven parlay generation failed critically [${requestId}]:`, error.message);
-          // Log specific error details potentially
-          sentryService.captureError(error, {
-              component: 'aiService', operation: 'generateParlay_Overall', sportKey, mode, numLegs, level: 'error'
-          });
+          console.error(`❌ EV Parlay Gen Failed Critically [${requestId}]:`, error.message);
+          // *** RE-VERIFIED FIX: Use captureError, use correct generationStrategy ***
+          sentryService.captureError(error, { component: 'aiService', operation: 'generateParlay_Overall', sportKey, mode, numLegs, generationStrategy: generationStrategy, level: 'error' });
 
-          // Attempt fallback ONLY if the error wasn't during fallback itself
+          // *** RE-VERIFIED FIX: Check strategy correctly before fallback ***
           if (generationStrategy !== 'quantum_fallback_ev') {
-                console.log(`🔄 Attempting FALLBACK generation for [${requestId}] due to critical error...`);
-                try {
-                     // Pass necessary context to fallback
-                    return await this._generateFallbackParlay(sportKey, numLegs, betType, promptContext);
-                } catch (fallbackError) {
-                    console.error(`❌ FALLBACK generation ALSO failed for [${requestId}]:`, fallbackError.message);
-                    sentryService.captureError(fallbackError, { component: 'aiService', operation: 'generateParlay_Fallback', sportKey, level: 'fatal' });
-                    // Throw a user-friendly error if even fallback fails
-                    throw new Error(`AI analysis failed for ${sportKey}. Both primary and fallback attempts failed.`);
-                }
-           } else {
-                 // If the error occurred during fallback, throw directly
-                 throw new Error(`AI fallback analysis failed for ${sportKey}: ${error.message}`);
-           }
+              console.log(`🔄 Attempting FALLBACK for [${requestId}]...`);
+              try {
+                  return await this._generateFallbackParlay(sportKey, numLegs, betType, promptContext); // Pass context
+              } catch (fallbackError) {
+                  console.error(`❌ FALLBACK ALSO FAILED [${requestId}]:`, fallbackError.message);
+                  // *** RE-VERIFIED FIX: Use captureError ***
+                  sentryService.captureError(fallbackError, { component: 'aiService', operation: 'generateParlay_Fallback', sportKey, level: 'fatal' });
+                  throw new Error(`AI analysis failed: Both primary (${generationStrategy || 'unknown'}) and fallback attempts failed.`);
+              }
+          } else {
+               throw new Error(`AI fallback analysis failed: ${error.message}`);
+          }
       }
   }
 
@@ -544,6 +548,7 @@ class AIService {
 
         } catch (error) {
             console.error(`❌ DB Quant mode failed critically for ${sportKey}:`, error.message);
+            // *** FIX: Use captureError ***
             sentryService.captureError(error, { component: 'aiService', operation: '_generateDbQuantParlay', sportKey, level: 'error' });
             // Return empty structure on failure
             return this._createEmptyParlayResponse(sportKey, numLegs, betType, 'db', `Error during database analysis: ${error.message}`);
@@ -603,6 +608,19 @@ class AIService {
             portfolio_construction: { overall_thesis: reason },
             research_metadata: { mode, generationStrategy: mode === 'db' ? 'database_quant_ev' : 'unknown', generation_failed_reason: reason }
          };
+    }
+
+   // Helper for validation failures leading to < 2 legs
+    _createValidationFailureResponse(originalData, generationStrategy, reason) {
+        return {
+            ...(originalData.parlay_metadata ? { parlay_metadata: originalData.parlay_metadata } : {}),
+            legs: [], // No valid legs remain
+            combined_parlay_metrics: null,
+            riskAssessment: { overallRisk: 'REJECTED', risks: [{type: 'VALIDATION', severity: 'CRITICAL', message: reason}] },
+            recommendations: { primaryAction: `DO NOT BET. ${reason}` },
+            summary: { verdict: 'REJECTED', primaryAction: reason },
+            research_metadata: { ...(originalData.research_metadata || {}), validation_failed_insufficient_legs: true, generationStrategy }
+        };
     }
 
 
@@ -677,6 +695,7 @@ class AIService {
 
         } catch (fallbackError) {
              console.error(`❌ FallBACK generation failed critically [${sportKey}]:`, fallbackError.message);
+             // *** FIX: Use captureError ***
              sentryService.captureError(fallbackError, { component: 'aiService', operation: '_generateFallbackParlay', sportKey, level: 'fatal' });
              // If fallback itself fails, return a structured error response
             return this._createEmptyParlayResponse(sportKey, numLegs, betType, 'fallback', `Fallback AI analysis failed: ${fallbackError.message}`);
@@ -692,7 +711,7 @@ class AIService {
      try {
          const prompt = `System: Be helpful and concise. Respond naturally.\n${messages.map(m => `${m.role}: ${m.content}`).join('\n')}`;
          // This call expects JSON by default, might need adjustment for pure chat
-         const responseJson = await this._callAIProvider(prompt, AI_MODELS.perplexity); // Using perplexity as default chat model
+         const responseJson = await this._callAIProvider(prompt, AI_PROVIDERS.PERPLEXITY.model); // Using perplexity as default chat model
          // Extract relevant text content if responseJson isn't just the string
          return responseJson?.text || responseJson?.content || JSON.stringify(responseJson) || 'Could not get chat response.';
      } catch (error) {
@@ -715,6 +734,3 @@ class AIService {
 
 // Export Singleton Instance
 export default new AIService();
-
-// Export ProbabilityCalculator if needed by other modules (though it's internal to quant now)
-// export { ProbabilityCalculator }; // Probably not needed externally anymore
