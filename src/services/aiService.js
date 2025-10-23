@@ -1,4 +1,4 @@
-// src/services/aiService.js - EV-DRIVEN UPDATE (Complete File with Emoji Symbols)
+// src/services/aiService.js - COMPLETE FIXED VERSION
 import axios from 'axios';
 import env from '../config/env.js';
 import gamesService from './gamesService.js';
@@ -7,7 +7,7 @@ import { ElitePromptService } from './elitePromptService.js';
 import { toDecimalFromAmerican, toAmericanFromDecimal } from '../utils/botUtils.js';
 import { TimeoutError, withTimeout } from '../utils/asyncUtils.js';
 import { sentryService } from './sentryService.js';
-import { strictExtractJSONObject } from '../utils/strictJson.js';
+import { extractAndNormalizeAIParlay, strictExtractJSONObject, normalizeAISymbols } from '../utils/strictJson.js';
 
 const TZ = env.TIMEZONE || 'America/New_York';
 const WEB_TIMEOUT_MS = 45000;
@@ -74,103 +74,33 @@ function calculateParlayDecimal(legs = []) {
     }, 1.0);
 }
 
-// ENHANCED: Robust JSON extraction with emoji support
+// ENHANCED: Robust JSON extraction using new strictJson functions
 function extractJSON(text = '') {
     if (!text || typeof text !== 'string') return null;
     
-    let cleanedText = text.trim();
-    
-    // Remove code fences
-    cleanedText = cleanedText.replace(/```json\s*/g, '').replace(/```\s*$/g, '');
-    
     try {
-        // First try the strict extraction
-        return strictExtractJSONObject(cleanedText);
-    } catch (strictError) {
-        console.warn("⚠️ Strict JSON extraction failed, trying fallback methods:", strictError.message);
+        // Use the new combined function that extracts and validates
+        return extractAndNormalizeAIParlay(text);
+    } catch (error) {
+        console.warn("⚠️ Primary JSON extraction failed, trying fallback:", error.message);
         
-        // Fallback 1: Try to extract JSON from code fences
+        // Fallback: Try basic extraction without validation
         try {
-            const jsonBlockRegex = /```(?:json)?\s*([\s\S]+?)\s*```/;
-            const match = cleanedText.match(jsonBlockRegex);
-            if (match && match[1]) {
-                return JSON.parse(match[1].trim());
-            }
-        } catch (fenceError) {
-            console.warn("⚠️ Code fence extraction failed:", fenceError.message);
+            const basicExtract = strictExtractJSONObject(text);
+            // Still normalize symbols even in fallback
+            return normalizeAISymbols(basicExtract);
+        } catch (fallbackError) {
+            console.error("❌ All JSON extraction methods failed");
+            sentryService.captureError(new Error("Failed JSON Extraction from AI"), { 
+                level: "warning", 
+                extra: { 
+                    responseSample: text.substring(0, 500),
+                    error: error.message
+                } 
+            });
+            return null;
         }
-
-        // Fallback 2: Try to find and parse the outermost object
-        try {
-            const firstBrace = cleanedText.indexOf('{');
-            const lastBrace = cleanedText.lastIndexOf('}');
-            if (firstBrace !== -1 && lastBrace > firstBrace) {
-                const candidate = cleanedText.substring(firstBrace, lastBrace + 1);
-                return JSON.parse(candidate);
-            }
-        } catch (braceError) {
-            console.warn("⚠️ Brace extraction failed:", braceError.message);
-        }
-
-        console.error("❌ All JSON extraction methods failed");
-        sentryService.captureError(new Error("Failed JSON Extraction from AI"), { 
-            level: "warning", 
-            extra: { 
-                responseSample: cleanedText.substring(0, 500),
-                strictError: strictError.message
-            } 
-        });
-        return null;
     }
-}
-
-// NEW: Convert emoji symbols back to standard format for processing
-function normalizeEmojiSymbols(parlayData) {
-    if (!parlayData || typeof parlayData !== 'object') return parlayData;
-    
-    // Deep clone to avoid modifying original
-    const normalized = JSON.parse(JSON.stringify(parlayData));
-    
-    // Process legs array
-    if (Array.isArray(normalized.legs)) {
-        normalized.legs = normalized.legs.map(leg => {
-            // Convert emoji line values to numbers
-            if (typeof leg.line === 'string') {
-                if (leg.line.startsWith('➕')) {
-                    leg.line = parseFloat(leg.line.slice(1));
-                } else if (leg.line.startsWith('➖')) {
-                    leg.line = parseFloat(leg.line.slice(1)) * -1;
-                }
-            }
-            
-            // Convert emoji price values to numbers
-            if (typeof leg.price === 'string') {
-                if (leg.price.startsWith('➕')) {
-                    leg.price = parseFloat(leg.price.slice(1));
-                } else if (leg.price.startsWith('➖')) {
-                    leg.price = parseFloat(leg.price.slice(1)) * -1;
-                }
-            }
-            
-            // Convert emoji selection text
-            if (typeof leg.selection === 'string') {
-                leg.selection = leg.selection
-                    .replace(/➕/g, '+')
-                    .replace(/➖/g, '-')
-                    .replace(/📈/g, 'Over')
-                    .replace(/📉/g, 'Under')
-                    .replace(/🏠/g, 'Home')
-                    .replace(/✈️/g, 'Away')
-                    .replace(/⭐/g, 'Favorite')
-                    .replace(/🔺/g, '↑')
-                    .replace(/🔻/g, '↓');
-            }
-            
-            return leg;
-        });
-    }
-    
-    return normalized;
 }
 
 // Fetches verified schedule to provide context to the AI
@@ -343,11 +273,8 @@ class AIService {
                  throw new Error(`AI response from ${providerConfig.name} did not contain parseable JSON that matches the expected structure. See raw log above.`);
             }
 
-            // NEW: Normalize emoji symbols back to standard format
-            const normalizedJson = normalizeEmojiSymbols(parsedJson);
-            console.log(`✅ ${providerConfig.name} call successful. Emoji symbols normalized.`);
-            
-            return normalizedJson;
+            console.log(`✅ ${providerConfig.name} call successful.`);
+            return parsedJson;
 
         } catch (error) {
             const status = error.response?.status;
@@ -601,13 +528,6 @@ class AIService {
       }
   }
 
-  // ... (rest of the methods remain the same - _findBestValuePlays, _generateDbQuantParlay, etc.)
-
-}
-
-// Export Singleton Instance
-export default new AIService();
-
   // --- IMPLEMENTED DB Quant Logic for _findBestValuePlays ---
   async _findBestValuePlays(games, betType = 'h2h') {
     console.log(`🔍 Scanning ${games.length} games for +EV ${betType} plays...`);
@@ -619,12 +539,10 @@ export default new AIService();
           continue;
         }
 
-        // Process each bookmaker's markets
         for (const bookmaker of game.bookmakers) {
           if (!bookmaker.markets || !Array.isArray(bookmaker.markets)) continue;
 
           for (const market of bookmaker.markets) {
-            // Focus on relevant markets based on betType
             const isRelevantMarket = 
               (betType === 'h2h' && market.key === 'h2h') ||
               (betType === 'spreads' && market.key === 'spreads') ||
@@ -635,12 +553,10 @@ export default new AIService();
               continue;
             }
 
-            // Calculate no-vig probabilities for this market
             const marketAnalysis = this._calculateMarketNoVigProbabilities(market.outcomes);
             
             if (!marketAnalysis.noVigProbs) continue;
 
-            // Evaluate each outcome for +EV
             market.outcomes.forEach((outcome, index) => {
               const noVigProb = marketAnalysis.noVigProbs[index];
               const decimalOdds = ProbabilityCalculator.americanToDecimal(outcome.price);
@@ -648,8 +564,7 @@ export default new AIService();
               if (noVigProb > 0 && decimalOdds > 1) {
                 const ev = ProbabilityCalculator.calculateEVPercentage(decimalOdds, noVigProb);
                 
-                // Only consider positive EV plays with meaningful edge
-                if (ev > 0.5) { // 0.5% minimum EV threshold
+                if (ev > 0.5) {
                   const impliedProb = ProbabilityCalculator.impliedProbability(decimalOdds);
                   const edge = (noVigProb / impliedProb - 1) * 100;
                   
@@ -681,7 +596,6 @@ export default new AIService();
         }
       }
 
-      // Sort by EV descending and remove duplicates (same game + outcome combination)
       const uniquePlays = this._deduplicateValuePlays(valuePlays);
       uniquePlays.sort((a, b) => b.ev - a.ev);
       
@@ -700,22 +614,18 @@ export default new AIService();
     }
   }
 
-  // Helper: Calculate no-vig probabilities for a market
   _calculateMarketNoVigProbabilities(outcomes) {
     if (!outcomes || outcomes.length < 2) return { noVigProbs: null, overround: 0 };
 
     try {
-      // Convert all outcomes to decimal odds and calculate implied probabilities
       const impliedProbs = outcomes.map(outcome => {
         const decimalOdds = ProbabilityCalculator.americanToDecimal(outcome.price);
         return ProbabilityCalculator.impliedProbability(decimalOdds);
       });
 
-      // Calculate total market overround (sum of implied probabilities)
       const totalImpliedProb = impliedProbs.reduce((sum, prob) => sum + prob, 0);
-      const overround = (totalImpliedProb - 1) * 100; // As percentage
+      const overround = (totalImpliedProb - 1) * 100;
 
-      // Calculate no-vig probabilities (remove the overround)
       const noVigProbs = impliedProbs.map(prob => prob / totalImpliedProb);
 
       return { noVigProbs, overround };
@@ -725,7 +635,6 @@ export default new AIService();
     }
   }
 
-  // Helper: Remove duplicate value plays (same game + outcome combination)
   _deduplicateValuePlays(plays) {
     const seen = new Map();
     
@@ -737,13 +646,11 @@ export default new AIService();
         return true;
       }
       
-      // If duplicate found, keep the one with better EV
       const existingIndex = plays.findIndex(p => 
         `${p.game.event_id}-${p.market.key}-${p.outcome.name}-${p.outcome.point || ''}` === key
       );
       
       if (existingIndex !== -1 && plays[existingIndex].ev < play.ev) {
-        // Replace with better EV play (this is simplified - in practice you'd need to track indices)
         return true;
       }
       
@@ -755,8 +662,8 @@ export default new AIService();
         try {
             const allGames = await gamesService.getGamesForSport(sportKey, {
                 hoursAhead: horizonHours,
-                includeOdds: true, // Essential for EV
-                useCache: false, // Use fresh data
+                includeOdds: true,
+                useCache: false,
             });
 
             if (!Array.isArray(allGames) || allGames.length === 0) {
@@ -765,9 +672,8 @@ export default new AIService();
             }
 
             console.log(`🔍 DB Quant: Scanning ${allGames.length} ${sportKey} games for +EV plays...`);
-            // Call the (now implemented) method
             const bestPlays = await this._findBestValuePlays(allGames, betType);
-             if (!Array.isArray(bestPlays)) { // Add check for safety
+             if (!Array.isArray(bestPlays)) {
                  console.error("❌ _findBestValuePlays did not return an array.");
                  throw new Error("_findBestValuePlays implementation error.");
              }
@@ -778,9 +684,8 @@ export default new AIService();
             }
 
             console.log(`✅ DB Quant: Found ${bestPlays.length} +EV plays. Selecting top ${Math.min(numLegs, bestPlays.length)}.`);
-            const topPlays = bestPlays.slice(0, numLegs); // Take up to numLegs
+            const topPlays = bestPlays.slice(0, numLegs);
 
-            // Format legs for quantitativeService, filtering out nulls from potential invalid plays
             const parlayLegs = topPlays.map(play => this._formatPlayAsLeg(play, sportKey)).filter(Boolean);
 
             if (parlayLegs.length < 2) {
@@ -788,12 +693,10 @@ export default new AIService();
                 return this._createEmptyParlayResponse(sportKey, numLegs, betType, 'db', `Fewer than 2 valid +EV legs found.`);
             }
 
-            // Return a structure similar to AI output, but without calling external AI
-            // Quantitative service will evaluate this structure later in the main generateParlay flow
-             const parlayData = {
+            const parlayData = {
                 legs: parlayLegs,
                 parlay_metadata: {
-                    sport: gamesService._formatSportKey ? gamesService._formatSportKey(sportKey) : sportKey, // Use helper if available
+                    sport: gamesService._formatSportKey ? gamesService._formatSportKey(sportKey) : sportKey,
                     sport_key: sportKey,
                     legs_count: parlayLegs.length,
                     bet_type: betType,
@@ -806,28 +709,24 @@ export default new AIService();
                      key_risk_factors: ["Based on cached/DB odds, verify live prices", "Model is simple no-vig calc"],
                      clv_plan: "Verify odds match or beat calculated price before betting."
                 },
-                 research_metadata: { // Add metadata specific to this mode
+                 research_metadata: {
                     mode: 'db',
                     generationStrategy: 'database_quant_ev',
                     games_scanned: allGames.length,
                     ev_plays_found: bestPlays.length,
                     legs_used: parlayLegs.length,
                 }
-                // quantitative_analysis will be added by the main function after calling quantitativeService.evaluateParlay
             };
             return parlayData;
 
         } catch (error) {
             console.error(`❌ DB Quant mode failed critically for ${sportKey}:`, error.message);
             sentryService.captureError(error, { component: 'aiService', operation: '_generateDbQuantParlay', sportKey, level: 'error' });
-            // Return empty structure on failure
             return this._createEmptyParlayResponse(sportKey, numLegs, betType, 'db', `Error during database analysis: ${error.message}`);
         }
     }
 
-    // Helper to format DB play into AI leg structure
-     _formatPlayAsLeg(play, sportKey) {
-        // Add safety checks for potentially missing data in 'play'
+    _formatPlayAsLeg(play, sportKey) {
         const price = play?.outcome?.price;
         const noVigProb = play?.noVigProb;
         const game = play?.game;
@@ -836,49 +735,45 @@ export default new AIService();
 
         if (typeof price !== 'number' || !Number.isFinite(price) || typeof noVigProb !== 'number' || !Number.isFinite(noVigProb) || !game || !market || !outcome || !game.event_id || !game.away_team || !game.home_team) {
             console.warn("⚠️ _formatPlayAsLeg: Invalid or incomplete play data provided:", play);
-            return null; // Return null for invalid plays
+            return null;
         }
 
         const decimalOdds = ProbabilityCalculator.americanToDecimal(price);
         const impliedProb = ProbabilityCalculator.impliedProbability(decimalOdds);
-        // Ensure edge calculation doesn't divide by zero or result in NaN
         const edge = (impliedProb > 0) ? (noVigProb / impliedProb - 1) * 100 : 0;
-        const ev = play.ev ?? ProbabilityCalculator.calculateEVPercentage(decimalOdds, noVigProb); // Use provided EV or calculate
+        const ev = play.ev ?? ProbabilityCalculator.calculateEVPercentage(decimalOdds, noVigProb);
 
         return {
-            event: `${game.away_team} @ ${game.home_team}`, // Standard format
-            selection: `${outcome.name} ${outcome.point ?? ''}`.trim(), // Actual pick
-            sportsbook: game.source || 'Database Odds', // Source from game data
+            event: `${game.away_team} @ ${game.home_team}`,
+            selection: `${outcome.name} ${outcome.point ?? ''}`.trim(),
+            sportsbook: game.source || 'Database Odds',
             market_type: market.key,
-            line: outcome.point ?? null, // Use null if point is undefined/0
-            price: price, // Already validated as number
-            region: 'us', // Assuming US region for DB data
-            timestamp: game.last_updated || new Date().toISOString(), // Use game update time if available
+            line: outcome.point ?? null,
+            price: price,
+            region: 'us',
+            timestamp: game.last_updated || new Date().toISOString(),
             implied_probability: parseFloat(impliedProb.toFixed(4)),
-            model_probability: parseFloat(noVigProb.toFixed(4)), // Use no-vig as model prob
+            model_probability: parseFloat(noVigProb.toFixed(4)),
             edge_percent: parseFloat(edge.toFixed(2)),
-            ev_per_100: parseFloat(ev.toFixed(2)), // Use calculated/provided EV
+            ev_per_100: parseFloat(ev.toFixed(2)),
             kelly_fraction_full: parseFloat(ProbabilityCalculator.kellyFraction(decimalOdds, noVigProb).toFixed(4)),
-            clv_target_price: null, // Cannot easily determine CLV target from DB odds alone
-            injury_gates: null, // DB mode doesn't have live injury checks
-            market_signals: null, // DB mode doesn't have live market signals
-            correlation_notes: "Assumed low correlation (cross-game).", // Basic assumption
-            // Keep original odds structure too for potential display/consistency
+            clv_target_price: null,
+            injury_gates: null,
+            market_signals: null,
+            correlation_notes: "Assumed low correlation (cross-game).",
             odds: {
                 american: price,
                 decimal: decimalOdds,
                 implied_probability: parseFloat(impliedProb.toFixed(4))
              },
-            // Add other fields that might be useful downstream or expected by quant service
              commence_time: game.commence_time,
-             gameId: game.event_id, // Consistent ID field
+             gameId: game.event_id,
              sport_key: sportKey,
-             real_game_validated: true // Assume DB games are valid
+             real_game_validated: true
         };
     }
 
-   // Helper to create a consistent empty/failed response
-    _createEmptyParlayResponse(sportKey, numLegs, betType, mode, reason) {
+   _createEmptyParlayResponse(sportKey, numLegs, betType, mode, reason) {
          const formattedSport = gamesService?._formatSportKey ? gamesService._formatSportKey(sportKey) : sportKey;
          return {
             legs: [],
@@ -892,11 +787,10 @@ export default new AIService();
          };
     }
 
-   // Helper for validation failures leading to < 2 legs
-    _createValidationFailureResponse(originalData, validatedLegsWithFlags, generationStrategy, reason) { // Pass original legs
+   _createValidationFailureResponse(originalData, validatedLegsWithFlags, generationStrategy, reason) {
         return {
             ...(originalData.parlay_metadata ? { parlay_metadata: originalData.parlay_metadata } : {}),
-            legs: validatedLegsWithFlags, // Show original legs with validation flags
+            legs: validatedLegsWithFlags,
             combined_parlay_metrics: null,
             riskAssessment: { overallRisk: 'REJECTED', risks: [{type: 'VALIDATION', severity: 'CRITICAL', message: reason}] },
             recommendations: { primaryAction: `DO NOT BET. ${reason}` },
@@ -907,38 +801,29 @@ export default new AIService();
 
   async _generateFallbackParlay(sportKey, numLegs, betType, context = {}) {
       console.warn(`⚠️ Triggering FALLBACK generation (EV-Driven) for ${sportKey} (${numLegs} legs, ${betType})`);
-      const generationStrategy = 'quantum_fallback_ev'; // Specific strategy name
+      const generationStrategy = 'quantum_fallback_ev';
       const prompt = ElitePromptService.getFallbackPrompt(sportKey, numLegs, betType, context);
 
        try {
-           const rawAIParlayData = await this._callAIProvider(prompt); // Use default model
+           const rawAIParlayData = await this._callAIProvider(prompt);
 
-            // --- Basic Structure Validation ---
            if (!rawAIParlayData || !Array.isArray(rawAIParlayData.legs) || rawAIParlayData.legs.length === 0) {
                console.error("❌ Fallback AI response lacked valid 'legs' array or returned empty:", rawAIParlayData);
                throw new Error('Fallback AI failed to provide a valid parlay structure.');
            }
 
-            // --- Process Legs ---
            let processedLegs = this._ensureLegsHaveOdds(rawAIParlayData.legs);
-            // Ensure correct number of legs (slice if AI gave too many)
             processedLegs = processedLegs.slice(0, numLegs);
-            // Mark legs as unvalidated (critical for fallback)
-           processedLegs = processedLegs.map(leg => ({ ...leg, real_game_validated: false, timestamp: new Date().toISOString() })); // Add timestamp
+           processedLegs = processedLegs.map(leg => ({ ...leg, real_game_validated: false, timestamp: new Date().toISOString() }));
 
-            // --- Final Quantitative Evaluation ---
            console.log(`🔬 Evaluating FALLBACK parlay with ${processedLegs.length} leg(s)...`);
-            // Use quantitativeService even for fallback to get EV/Kelly based on AI *estimates*
            const evaluationResult = await quantitativeService.evaluateParlay(processedLegs);
 
-           // Check if quantitative evaluation itself failed
             if (evaluationResult.error) {
                 console.error(`❌ Quantitative evaluation failed during fallback for ${sportKey}:`, evaluationResult.error);
-                // Return an error structure indicating quant failure during fallback
                 return this._createEmptyParlayResponse(sportKey, numLegs, betType, 'fallback', `Quantitative analysis failed during fallback: ${evaluationResult.error}`);
             }
 
-            // --- Assemble Final Result ---
            const finalResult = {
                ...(rawAIParlayData.parlay_metadata ? { parlay_metadata: rawAIParlayData.parlay_metadata } : {}),
                legs: processedLegs,
@@ -951,29 +836,26 @@ export default new AIService();
                    ...(rawAIParlayData.research_metadata || {}),
                    fallback_used: true,
                    generationStrategy: generationStrategy,
-                   validationRate: 0.00, // Explicitly 0% validation
+                   validationRate: 0.00,
                    finalLegCount: processedLegs.length,
                    note: 'Generated using fundamental analysis & ESTIMATED odds/probabilities without real-time data or validation.'
                },
-               error: null // No error from quant service if we got here
+               error: null
            };
 
-            // Adjust metadata/summary for fallback context
             if (finalResult.parlay_metadata) {
                 finalResult.parlay_metadata.analysis_mode = "FALLBACK";
                  finalResult.parlay_metadata.legs_count = processedLegs.length;
             }
              if (finalResult.summary) {
-                finalResult.summary.confidence = 'LOW'; // Override confidence to LOW for fallback
-                 finalResult.summary.verdict = finalResult.summary.verdict === 'POSITIVE_EV' ? 'FALLBACK_POSITIVE_EV' : finalResult.summary.verdict; // Distinguish fallback EV
+                finalResult.summary.confidence = 'LOW';
+                 finalResult.summary.verdict = finalResult.summary.verdict === 'POSITIVE_EV' ? 'FALLBACK_POSITIVE_EV' : finalResult.summary.verdict;
             }
              if (finalResult.recommendations?.primaryAction && !finalResult.recommendations.primaryAction.includes("FALLBACK")) {
                  finalResult.recommendations.primaryAction = `[FALLBACK MODE] ${finalResult.recommendations.primaryAction} Strongly advise caution & verification.`;
              }
-             // Ensure high risk due to fallback nature
             if (finalResult.riskAssessment && finalResult.riskAssessment.overallRisk !== 'REJECTED') {
                  finalResult.riskAssessment.overallRisk = 'HIGH';
-                 // Add or ensure the fallback risk note is present
                  if (!finalResult.riskAssessment.risks.some(r => r.type === 'DATA_SOURCE')) {
                      finalResult.riskAssessment.risks.push({ type: 'DATA_SOURCE', severity: 'HIGH', message: 'Parlay generated in fallback mode with estimated data.', impact: 'EV and probabilities are estimates, actual risk may be higher.' });
                  }
@@ -985,34 +867,25 @@ export default new AIService();
         } catch (fallbackError) {
              console.error(`❌ FallBACK generation failed critically [${sportKey}]:`, fallbackError.message);
              sentryService.captureError(fallbackError, { component: 'aiService', operation: '_generateFallbackParlay', sportKey, level: 'fatal' });
-             // If fallback itself fails, return a structured error response
             return this._createEmptyParlayResponse(sportKey, numLegs, betType, 'fallback', `Fallback AI analysis failed: ${fallbackError.message}`);
         }
     }
 
-  // --- Generic Chat Function (Example) ---
-    async genericChat(modelIdentifier, messages) {
+  async genericChat(modelIdentifier, messages) {
      console.log(`💬 Calling generic chat with model identifier: ${modelIdentifier}`);
-     // Simple pass-through for now, assuming modelIdentifier maps directly or using default
-     // Requires _callAIProvider to handle non-JSON responses gracefully if needed
      try {
-         // Construct a basic prompt for chat
          const systemPrompt = "You are a helpful assistant.";
          const chatHistory = messages.map(m => `${m.role}: ${m.content}`).join('\n');
-         const fullPrompt = `${systemPrompt}\n${chatHistory}\nassistant:`; // Structure for some models
+         const fullPrompt = `${systemPrompt}\n${chatHistory}\nassistant:`;
 
-         // Use a chat-optimized model if available, otherwise default
-         const chatModel = AI_PROVIDERS.PERPLEXITY.model; // Or select based on modelIdentifier
+         const chatModel = AI_PROVIDERS.PERPLEXITY.model;
          const responseJsonOrText = await this._callAIProvider(fullPrompt, chatModel);
 
-         // Handle potential JSON vs Text response based on provider/model
          if (typeof responseJsonOrText === 'string') {
-             return responseJsonOrText; // Assume plain text response for chat
+             return responseJsonOrText;
          } else if (responseJsonOrText && (responseJsonOrText.text || responseJsonOrText.content)) {
-            // Extract text if provider returned structured JSON
             return responseJsonOrText.text || responseJsonOrText.content;
          } else {
-             // Fallback if unexpected structure
              return JSON.stringify(responseJsonOrText) || 'Could not parse chat response.';
          }
      } catch (error) {
@@ -1022,7 +895,6 @@ export default new AIService();
      }
   }
 
- // --- Validate Odds (Enhanced) ---
  async validateOdds(oddsData) {
      if (!Array.isArray(oddsData)) {
          return { 
