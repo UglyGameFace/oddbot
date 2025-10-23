@@ -1,4 +1,4 @@
-// src/bot/state.js - FIXED VERSION (Complete)
+// src/bot/state.js - FINAL FIXED VERSION
 import env from '../config/env.js';
 import { getRedisClient } from '../services/redisService.js';
 import StateManager from './stateManager.js'; // Import the default export
@@ -138,4 +138,4 @@ export const getUserActivityStats = StateManager.getUserActivityStats.bind(State
 export const hasActiveAISession = StateManager.hasActiveAISession.bind(StateManager);
 export const getAllActiveSessions = StateManager.getAllActiveSessions.bind(StateManager);
 
-// ** FIX: Removed the extra closing brace that was causing the syntax error **
+// FIXED: No extra closing brace - this is the complete file
