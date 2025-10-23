@@ -120,7 +120,7 @@ export async function safeEditMessage(chatId, messageId, text, options = {}) {
       console.log('ℹ️ Message to edit not found');
       return; 
     }
-    throw error;
+    // Don't re-throw, just log the error and stop
   }
 }
 
@@ -148,7 +148,9 @@ app.get('/healthz', async (_req, res) => {
   }
   try {
     const healthReport = await healthService.getHealth();
-    res.status(healthReport.overall.healthy ? 200 : 503).json({ status: healthReport.overall.healthy ? 'OK' : 'DEGRADED', ...healthReport, checks: healthCheckCount, timestamp: new Date().toISOString() });
+    // FIX: Access the nested 'ok' property from the simplified health service
+    const isHealthy = healthReport?.ok === true;
+    res.status(isHealthy ? 200 : 503).json({ status: isHealthy ? 'OK' : 'DEGRADED', ...healthReport, checks: healthCheckCount, timestamp: new Date().toISOString() });
   } catch (error) {
     res.status(503).json({ status: 'ERROR', error: error.message, checks: healthCheckCount, timestamp: new Date().toISOString() });
   }
@@ -168,7 +170,8 @@ app.get('/readiness', async (_req, res) => {
   }
   try {
     const healthReport = await healthService.getHealth();
-    const isReady = healthReport.overall.healthy;
+    // FIX: Access the nested 'ok' property from the simplified health service
+    const isReady = healthReport?.ok === true;
     res.status(isReady ? 200 : 503).json({ status: isReady ? 'READY' : 'NOT_READY', ...healthReport, checks: healthCheckCount, timestamp: new Date().toISOString() });
   } catch (error) {
     res.status(503).json({ status: 'NOT_READY', error: error.message, checks: healthCheckCount, timestamp: new Date().toISOString() });
@@ -211,9 +214,23 @@ async function registerAllCommands(bot) {
       { command: 'status', description: 'Check bot operational status' },
       { command: 'tools', description: 'Access admin tools' },
       { command: 'help', description: 'Show the command guide' },
+      // --- ADDED DEBUG COMMANDS TO LIST ---
+      { command: 'debugsettings', description: 'Debug settings storage' },
+      { command: 'fixsettings', description: 'Reset settings to default' },
+      { command: 'testredis', description: 'Test Redis connection' },
     ];
 
-    await bot.setMyCommands(commands);
+    // *** STARTUP CRASH FIX: Wrap setMyCommands in a try...catch block ***
+    try {
+        await bot.setMyCommands(commands);
+        console.log('✅ Bot commands set successfully.');
+    } catch (commandError) {
+        console.warn(`⚠️ Failed to set bot commands during startup: ${commandError.message}`);
+        // Log the error but allow initialization to continue
+        sentryService.captureError(commandError, { component: 'bot_init', operation: 'setMyCommands', level: 'warning' });
+        console.log('Continuing initialization... Commands will be set on next successful connection.');
+    }
+    // *** END FIX ***
     
     bot.on('message', (msg) => {
       if (msg.text && msg.text.startsWith('/')) {
@@ -333,7 +350,8 @@ async function initializeBot() {
         
       } catch (botError) {
         console.error('❌ Bot final setup failed:', botError.message);
-        throw botError;
+        // Do not throw here, as the bot might still be able to set commands later
+        console.warn('Continuing startup despite getMe/getMyCommands failure...');
       }
       
       keepAliveInterval = setInterval(() => {
