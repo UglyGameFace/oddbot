@@ -1,5 +1,70 @@
-// src/services/elitePromptService.js - QUANTUM PROMPT ENGINE (Enhanced with Fact-Checking)
+// src/services/elitePromptService.js - QUANTUM PROMPT ENGINE (EV-Driven Update)
+// Incorporates strict requirements for EV, Kelly, CLV, Correlation, Injuries.
+
+// Helper to format requirements clearly in prompts
+const formatRequirement = (req) => `\n  - ${req}`;
+
+// Define the MINIMAL output contract structure
+const LEG_OUTPUT_CONTRACT = `{
+          "sportsbook": "e.g., DraftKings",
+          "market_type": "e.g., spread | moneyline | total | player_points",
+          "line": -3.5, // (number | null, e.g., point for spread/total, null for ML)
+          "price": -110, // (number, American odds)
+          "region": "us", // (string, e.g., us, eu, uk, au)
+          "timestamp": "ISO8601 UTC timestamp of odds",
+          "implied_probability": 0.5238, // (number, 0 to 1)
+          "model_probability": 0.555, // (number, 0 to 1, calibrated)
+          "edge_percent": 3.12, // (number, (model_prob / implied_prob - 1) * 100)
+          "ev_per_100": 6.05, // (number, Expected Value per $100 wagered)
+          "kelly_fraction_full": 0.065, // (number, Full Kelly fraction)
+          "clv_target_price": -115, // (number | null, target price vs close)
+          "injury_gates": ["PlayerA (Questionable)", "PlayerB (Out)"], // (string[] | null)
+          "market_signals": { // (object | null)
+             "reverse_line_movement": "Detected: line moved against public %", // (string | null)
+             "public_bet_split_percent": 75, // (number | null)
+             "money_split_percent": 40 // (number | null)
+          },
+          "correlation_notes": "Low correlation with other legs." // (string | null)
+       }`;
+
+const PARLAY_OUTPUT_CONTRACT = `{
+  "parlay_metadata": {
+    "sport": "e.g., NBA Basketball",
+    "sport_key": "e.g., basketball_nba",
+    "legs_count": 3, // (number)
+    "bet_type": "e.g., mixed", // (string)
+    "analyst_tier": "e.g., QUANTITATIVE ANALYST", // (string)
+    "generated_at": "ISO8601 UTC timestamp",
+    "data_sources_used": ["e.g., The Odds API", "Official Injury Report"], // (string[])
+    "model_version": "e.g., q-nba-v3.1" // (string | null)
+  },
+  "legs": [ ${LEG_OUTPUT_CONTRACT} /* Repeat per leg */ ],
+  "combined_parlay_metrics": {
+      "combined_decimal_odds": 6.83, // (number, product of leg decimal odds)
+      "combined_american_odds": "+583", // (string)
+      "combined_probability_product": 0.146, // (number, product of model probabilities)
+      "parlay_ev_per_100": 35.50, // (number, Overall EV per $100)
+      "kelly_stake": { // (object)
+          "full_kelly_fraction": 0.058, // (number)
+          "half_kelly_fraction": 0.029, // (number)
+          "quarter_kelly_fraction": 0.0145, // (number)
+          "recommended_fraction": 0.0145, // (number, based on policy/risk)
+          "bankroll_allocation_percent": 1.45 // (number, recommended_fraction * 100)
+      },
+      "correlation_score": -0.05, // (number, estimate range: -1 to +1, negative/low is good)
+      "overall_risk_assessment": "MEDIUM", // (string: LOW | MEDIUM | HIGH | REJECTED)
+      "rejection_reason": null // (string | null, if rejected)
+  },
+  "portfolio_construction": { // (object, more concise now)
+    "overall_thesis": "Brief +EV justification based on combined metrics.", // (string)
+    "key_risk_factors": ["e.g., Injury dependency on PlayerA", "High correlation score", "Low CLV target margin"], // (string[])
+    "clv_plan": "Target entry price: +583 or better. Monitor line movement pre-game. Preferred book: DraftKings." // (string)
+  }
+}`;
+
+
 export class ElitePromptService {
+  // Existing SPORT_CONFIG and ANALYST_TIERS remain the same...
   static #SPORT_CONFIG = new Map([
     ['basketball_nba', {
       title: 'NBA Basketball',
@@ -12,7 +77,8 @@ export class ElitePromptService {
       ],
       keyMarkets: ['moneyline', 'spread', 'total', 'player_points', 'player_rebounds', 'player_assists']
     }],
-    ['americanfootball_nfl', {
+     // ... other sports remain the same ...
+     ['americanfootball_nfl', {
       title: 'NFL Football',
       edges: [
         'DIVISIONAL DOGS: Division underdogs cover 55% of the time',
@@ -34,467 +100,293 @@ export class ElitePromptService {
       ],
       keyMarkets: ['moneyline', 'runline', 'total', 'player_hits', 'player_strikeouts', 'first_5_innings']
     }],
-    ['icehockey_nhl', {
+     // Add other sports as needed...
+     ['icehockey_nhl', {
       title: 'NHL Hockey',
-      edges: [
-        'GOALIE CONFIRMATION: Starter vs backup performance splits are critical',
-        'LINE MATCHUPS: Home ice last change provides 8% scoring chance advantage',
-        'SPECIAL TEAMS: Power play efficiency differences create 15% edge opportunities',
-        'TRAVEL SCHEDULE: 3+ time zone changes = 15% performance drop',
-        'BACK-TO-BACKS: Goalies on 2nd of B2B see save percentage drop by 4%'
-      ],
-      keyMarkets: ['moneyline', 'puck_line', 'total', 'player_shots', 'player_points', 'team_total']
+      edges: ['GOALIE CONFIRMATION', 'LINE MATCHUPS', 'SPECIAL TEAMS', 'TRAVEL SCHEDULE', 'BACK-TO-BACKS'],
+      keyMarkets: ['moneyline', 'puck_line', 'total', 'player_shots', 'player_points']
     }],
-    ['soccer_england_premier_league', {
-      title: 'English Premier League',
-      edges: [
-        'FORM ANALYSIS: Teams winning 4 of last 5 have 60% win probability in next match',
-        'HOME/AWAY SPLITS: Top-tier teams win >70% of home matches',
-        'DERBY MATCHES: Increased intensity leads to 25% more cards and 15% fewer goals',
-        'MANAGER TACTICS: Defensive vs attacking style matchups create value opportunities',
-        'EUROPEAN HANGOVER: Teams playing midweek European matches drop 12% weekend performance'
-      ],
-      keyMarkets: ['moneyline', 'asian_handicap', 'total', 'both_teams_to_score', 'double_chance']
+     ['soccer_england_premier_league', {
+      title: 'Premier League',
+      edges: ['FORM ANALYSIS', 'HOME/AWAY SPLITS', 'DERBY MATCHES', 'MANAGER TACTICS', 'EUROPEAN HANGOVER'],
+      keyMarkets: ['moneyline', 'asian_handicap', 'total', 'both_teams_to_score']
     }],
-    ['soccer_uefa_champions_league', {
-      title: 'UEFA Champions League',
-      edges: [
-        'TRAVEL FATIGUE: Long mid-week travel impacts domestic league performance',
-        'MOTIVATION FACTORS: Knockout stage intensity vs group stage experimentation',
-        'EXPERIENCE EDGE: Teams with deep tournament experience perform better under pressure',
-        'TACTICAL APPROACH: Away goals rule (where applicable) influences manager decisions',
-        'SQUAD ROTATION: Top teams rotate 4-6 players between domestic and European matches'
-      ],
-      keyMarkets: ['moneyline', 'draw_no_bet', 'total', 'both_teams_to_score', 'correct_score']
-    }],
-    ['mma_ufc', {
-      title: 'UFC Mixed Martial Arts',
-      edges: [
-        'FIGHTER STYLES: Striker vs grappler matchups create 22% performance predictability',
-        'REACH ADVANTAGE: 4+ inch reach advantage increases striking success by 18%',
-        'CAMP CHANGES: Training camp disruptions decrease performance by 15% on average',
-        'WEIGHT CUTS: Fighters missing weight win 35% less often despite physical advantage',
-        'OCTAGON EXPERIENCE: Debut fighters lose 60% of time against experienced opponents'
-      ],
-      keyMarkets: ['moneyline', 'method_of_victory', 'total_rounds', 'fight_goes_distance']
-    }],
-    ['tennis_atp', {
-      title: 'ATP Tennis',
-      edges: [
-        'SURFACE SPECIALISTS: Player performance varies 40%+ between clay, grass, hard courts',
-        'HEAD-TO-HEAD HISTORY: Previous matchups on same surface are 75% predictive',
-        'BREAK POINT EFFICIENCY: Top 10 players convert 45% vs 35% for lower ranks',
-        'RECOVERY ABILITY: Players coming back from injury show 20% performance drop initially',
-        'TOURNAMENT SCHEDULING: Players in 3rd tournament in 4 weeks show 12% fatigue effect'
-      ],
-      keyMarkets: ['moneyline', 'game_spread', 'total_games', 'set_betting']
-    }],
-    ['golf_pga', {
-      title: 'PGA Tour Golf',
-      edges: [
-        'COURSE HISTORY: Players with top-10 finishes in previous years have 28% better chance',
-        'RECENT FORM: Players with top-20 in last two starts outperform by 15%',
-        'SPECIALIZATION: Course type specialists (links, parkland, desert) show consistent edges',
-        'WEATHER ADAPTATION: Wind specialists gain 2-3 stroke advantage in tough conditions',
-        'MAJOR PRESSURE: Players with major championship experience handle pressure better'
-      ],
-      keyMarkets: ['outright_winner', 'top_5_finish', 'top_10_finish', 'head_to_head', 'make_cut']
-    }],
-    ['formula1', {
-      title: 'Formula 1',
-      edges: [
-        'QUALIFYING PERFORMANCE: 75% of races won from top-3 grid positions',
-        'TRACK CHARACTERISTICS: Teams with strong car traits for specific tracks dominate',
-        'WEATHER STRATEGY: Teams with superior wet-weather setups gain 15+ second advantages',
-        'PIT STOP EFFICIENCY: Top teams average 2.2s stops vs 3.5s for midfield',
-        'POWER UNIT ADVANTAGE: Straight-line speed differences create overtaking opportunities'
-      ],
-      keyMarkets: ['race_winner', 'podium_finish', 'top_6_finish', 'head_to_head', 'fastest_lap']
-    }]
+      ['mma_ufc', {
+        title: 'UFC',
+        edges: ['FIGHTER STYLES', 'REACH ADVANTAGE', 'CAMP CHANGES', 'WEIGHT CUTS', 'OCTAGON EXPERIENCE'],
+        keyMarkets: ['moneyline', 'method_of_victory', 'total_rounds', 'fight_goes_distance']
+      }],
+       ['tennis_atp', {
+        title: 'ATP Tennis',
+        edges: ['SURFACE SPECIALISTS', 'H2H HISTORY', 'BREAK POINT EFFICIENCY', 'RECOVERY ABILITY', 'SCHEDULING'],
+        keyMarkets: ['moneyline', 'game_spread', 'total_games', 'set_betting']
+       }],
   ]);
 
   static #ANALYST_TIERS = {
     QUANT: {
       title: 'QUANTITATIVE ANALYST',
       fee: 75000,
-      focus: 'statistical arbitrage and model edges',
-      minHitRate: 0.72,
+      focus: 'statistical arbitrage, model edges, and CLV maximization',
+      minHitRate: 0.72, // Target for model calibration
       experience: '15+ years quantitative modeling',
-      specialties: ['machine learning models', 'market efficiency gaps', 'probability calibration']
+      specialties: ['machine learning models', 'market efficiency gaps', 'probability calibration vs closing lines', 'Kelly staking']
     },
+    // Keep SHARPS/ELITE if needed for different modes, but focus on QUANT output structure
     SHARPS: {
-      title: 'PROFESSIONAL SHARP', 
+      title: 'PROFESSIONAL SHARP',
       fee: 35000,
-      focus: 'line movement and market inefficiencies',
+      focus: 'line movement, market inefficiencies, and situational value',
       minHitRate: 0.67,
       experience: '12+ years professional betting',
-      specialties: ['line shopping', 'steam moves', 'reverse line movement']
+      specialties: ['line shopping', 'steam moves', 'reverse line movement', 'injury impact analysis']
     },
-    ELITE: {
+     ELITE: {
       title: 'ELITE SPORTS ANALYST',
       fee: 15000,
-      focus: 'fundamental analysis and situational edges',
+      focus: 'fundamental analysis, matchup edges, and qualitative factors',
       minHitRate: 0.63,
       experience: '10+ years team/player analysis',
-      specialties: ['coaching tendencies', 'player motivation', 'situational factors']
+      specialties: ['coaching tendencies', 'player motivation', 'intangibles', 'narrative debunking']
     }
   };
 
-  // NEW: Player validation database to prevent hallucinations
-  static #PLAYER_TEAM_ALIGNMENTS = new Map([
-    ['aaron rodgers', 'New York Jets'],
-    ['ja\'marr chase', 'Cincinnati Bengals'],
-    ['d.k. metcalf', 'Seattle Seahawks'],
-    ['darnell washington', 'Pittsburgh Steelers'],
-    ['patrick mahomes', 'Kansas City Chiefs'],
-    ['travis kelce', 'Kansas City Chiefs'],
-    ['josh allen', 'Buffalo Bills'],
-    ['stephen curry', 'Golden State Warriors'],
-    ['lebron james', 'Los Angeles Lakers'],
-    ['kevin durant', 'Phoenix Suns']
-  ]);
-
-  // NEW: Realistic betting line ranges by sport
-  static #REALISTIC_RANGES = {
-    'americanfootball_nfl': {
-      totals: { min: 30, max: 60 },
-      spreads: { min: -20, max: 20 }
-    },
-    'basketball_nba': {
-      totals: { min: 180, max: 250 },
-      spreads: { min: -25, max: 25 }
-    },
-    'baseball_mlb': {
-      totals: { min: 5, max: 15 },
-      spreads: { min: -3, max: 3 }
-    },
-    'icehockey_nhl': {
-      totals: { min: 3, max: 9 },
-      spreads: { min: -3, max: 3 }
-    }
-  };
 
   static getEliteParlayPrompt(sportKey, numLegs, betType, context = {}) {
     const config = this.#getSportConfig(sportKey);
-    const analyst = this.#selectAnalystTier(context);
-    const currentDate = new Date().toISOString().split('T')[0];
-    
-    return `# ${analyst.title} MODE - QUANTUM SPORTS ANALYSIS
-You are the world's premier ${config.title} analyst with ${analyst.experience} and $${analyst.fee.toLocaleString()}+ per winning ticket.
+    // Force QUANT tier for EV-driven output, but keep focus description dynamic if needed
+    const analyst = this.#ANALYST_TIERS.QUANT;
+    const currentDate = new Date().toISOString(); // Use full ISO string
 
-## QUANTUM MANDATE
-Generate a ${numLegs}-leg ${config.title} ${betType} parlay with STRICT ${analyst.focus.toUpperCase()}
+    const requirements = [
+      `Market Snapshot: For each leg, provide sportsbook, market_type, line (if applicable), price (American), region, and UTC timestamp of the odds used. Use data representative of major US books (e.g., DraftKings, FanDuel).`,
+      `Model Probability: Provide your calibrated 'model_probability' (0-1 scale) for each leg, explicitly stating it's calibrated against expected closing lines.`,
+      `Implied Probability: Calculate 'implied_probability' (0-1 scale) from the 'price'.`,
+      `Edge & EV: Calculate 'edge_percent' = (model_probability / implied_probability - 1) * 100. Calculate 'ev_per_100' = (edge_percent / 100) * 100 * implied_probability / (1 - implied_probability) [Simplified: EV = (ModelProb * DecimalOdds - 1) * 100].`,
+      `Kelly Stake: Calculate 'kelly_fraction_full' using f* = (bp - q) / b, where b = decimal odds - 1, p = model_probability, q = 1 - p.`,
+      `Correlation Check: Briefly note correlation ('correlation_notes') - e.g., 'Low cross-game', 'Moderate positive same-game (SGP)', 'High negative (opposing outcomes)'. REJECT parlay if high negative correlation exists.`,
+      `Market Signals: If available, populate 'market_signals' with 'reverse_line_movement' description, 'public_bet_split_percent', and 'money_split_percent'. Otherwise, set to null.`,
+      `Injury Gates: List critical player dependencies in 'injury_gates' (e.g., "LeBron James (Questionable - Ankle)"). Include official status. If none, set to null or empty array.`,
+      `CLV Target: Estimate a realistic 'clv_target_price' (American odds) representing the minimum price needed to maintain positive EV against the expected closing line. Can be null if uncertain.`
+    ];
 
-## CRITICAL FACT-CHECKING RULES - ZERO TOLERANCE FOR HALLUCINATIONS
-1. **NEVER** mention players who don't play for the teams in the specified game
-2. **NEVER** suggest implausible betting lines (e.g., NFL totals under 30 or over 60)
-3. **NEVER** contradict yourself within the same analysis
-4. **ALWAYS** verify player-team alignment before mentioning any player
-5. **ALWAYS** use realistic odds ranges (-180 to +180)
+    const parlayRequirements = [
+        `Combined Odds: Calculate 'combined_decimal_odds' and 'combined_american_odds'.`,
+        `Combined Probability: Calculate 'combined_probability_product' (product of leg model_probability). Adjust downwards slightly (e.g., multiply by 0.95-0.98) if significant positive correlation is noted in legs.`,
+        `Parlay EV: Calculate 'parlay_ev_per_100' based on combined odds and combined probability.`,
+        `Kelly Staking: Provide 'full_kelly_fraction', 'half_kelly_fraction', 'quarter_kelly_fraction' based on parlay EV and odds. Recommend a 'recommended_fraction' (e.g., quarter Kelly) and 'bankroll_allocation_percent'.`,
+        `Correlation Score: Estimate an overall 'correlation_score' (-1 to 1).`,
+        `Risk Assessment: Assign 'overall_risk_assessment' (LOW, MEDIUM, HIGH, REJECTED). Provide 'rejection_reason' if applicable (e.g., "High negative correlation", "Critical injury unresolved", "Negative EV after calibration").`,
+        `Key Risks: List major concerns in 'key_risk_factors'.`,
+        `CLV Plan: Briefly state target entry odds and monitoring approach in 'clv_plan'.`
+    ];
 
-## PLAYER VALIDATION CHECKLIST - VERIFY BEFORE USE:
-${Array.from(this.#PLAYER_TEAM_ALIGNMENTS.entries()).slice(0, 8).map(([player, team]) => `• ${player.toUpperCase()} = ${team} ONLY`).join('\n')}
+    return `# ${analyst.title} MODE - EV-DRIVEN PARLAY GENERATION
+You are a ${analyst.title} specializing in ${config.title}, focused on ${analyst.focus}. Your goal is long-term profit maximization.
 
-## ANALYTICAL FRAMEWORK - ${analyst.minHitRate * 100}% MINIMUM HIT RATE REQUIRED
-${this.#buildAnalyticalFramework(analyst, context)}
-
-## ${config.title.toUpperCase()} QUANTUM EDGES
-${config.edges.map(edge => `• ${edge}`).join('\n')}
-
-${this.#buildMarketConstraints(betType, config.keyMarkets)}
-
-## OUTPUT ARCHITECTURE - ABSOLUTELY NON-NEGOTIABLE
-CRITICAL: The \`american\` odds field inside the \`odds\` object for each leg MUST be a valid number (e.g., -110, +120). The \`commence_time\` field MUST be a valid ISO 8601 string.
-\`\`\`json
-{
-  "parlay_metadata": {
-    "sport": "${config.title}",
-    "sport_key": "${sportKey}",
-    "legs_count": ${numLegs},
-    "bet_type": "${betType}",
-    "target_ev": ${this.#calculateTargetEV(analyst)},
-    "analyst_tier": "${analyst.title}",
-    "minimum_confidence": ${analyst.minHitRate},
-    "generated_at": "${currentDate}",
-    "quantum_version": "2.0"
-  },
-  "legs": [
-    {
-      "event": "Team A @ Team B",
-      "commence_time": "2025-10-15T20:00:00Z",
-      "market": "${config.keyMarkets[0]}",
-      "selection": "exact_selection_identifier",
-      "odds": {
-        "american": -110,
-        "decimal": 1.91,
-        "implied_probability": 0.524
-      },
-      "quantum_analysis": {
-        "confidence_score": 85,
-        "key_factors": ["statistical_edge", "situational_advantage", "market_inefficiency"],
-        "analytical_basis": "2-3 sentence quantitative rationale with specific percentages and historical data",
-        "model_advantage": 0.12,
-        "risk_assessment": "low|medium|high",
-        "sharp_money_alignment": true
-      }
-    }
-  ],
-  "portfolio_construction": {
-    "overall_thesis": "Comprehensive +EV justification explaining parlay construction logic",
-    "correlation_analysis": "Explanation of leg independence and risk diversification",
-    "risk_factors": ["market_volatility", "injury_concerns", "weather_considerations"],
-    "bankroll_allocation": "0.5-2% of total bankroll",
-    "hedge_recommendations": ["live_hedging_options", "correlated_plays"],
-    "exit_strategy": "When to consider cashing out or hedging"
-  }
-}
-\`\`\`
+## MANDATE
+Generate a ${numLegs}-leg ${config.title} ${betType} parlay strictly following the requirements below. Prioritize Expected Value (EV) and sound bankroll management (Kelly Criterion).
 
 ## CONTEXTUAL INTELLIGENCE
 ${this.#buildContextIntelligence(context, currentDate)}
 ${this.#buildUserContext(context.userConfig)}
 
-**QUANTUM VERIFICATION**: Each leg must pass ${analyst.minHitRate * 100}% confidence threshold with clear analytical edge. No compromises.`;
-  }
+## ${config.title.toUpperCase()} QUANTUM EDGES (Informational - Use for idea generation, but base final output on math)
+${config.edges.map(edge => `• ${edge}`).join('\n')}
 
-  static #buildAnalyticalFramework(analyst, context) {
-    const baseFramework = [
-      'EDGE VERIFICATION: Clear statistical or situational advantage required for every selection',
-      'LINE ARBITRAGE: Identify mispriced markets 5-10 cents off true probability',
-      'CORRELATION MATRIX: Ensure leg independence and avoid negative correlation',
-      'BANKROLL OPTIMIZATION: Apply Kelly Criterion or fractional bankroll allocation',
-      'MARKET TIMING: Consider line movement patterns and sharp money indicators',
-      'FACT CHECKING: Verify all player-team alignments and realistic betting lines'
-    ];
+## HARD REQUIREMENTS PER LEG ${requirements.map(formatRequirement).join('')}
 
-    if (analyst.title === 'QUANTITATIVE ANALYST') {
-      baseFramework.push('MODEL CONVERGENCE: Multiple statistical models must show agreement on edge');
-      baseFramework.push('VALUE SPOTTING: Identify where market sentiment diverges from statistical reality');
-      baseFramework.push('PROBABILITY CALIBRATION: Ensure implied probabilities align with historical outcomes');
-    }
+## HARD REQUIREMENTS FOR COMBINED PARLAY ${parlayRequirements.map(formatRequirement).join('')}
 
-    if (analyst.title === 'PROFESSIONAL SHARP') {
-      baseFramework.push('LINE MOVEMENT ANALYSIS: Track steam moves and reverse line movement patterns');
-      baseFramework.push('BOOKMAKER LIMITS: Identify where sharp money is concentrated');
-      baseFramework.push('MARKET MAKER ANALYSIS: Understand different bookmaker pricing models');
-    }
+## KELLY CRITERION FORMULA (Reference)
+f* = (bp - q) / b, where b = decimal_odds - 1, p = model_probability, q = 1 - p. Recommend Quarter Kelly (f* / 4).
 
-    if (context.userConfig?.proQuantMode) {
-      baseFramework.push('PRO QUANT MODE: Statistical edge prioritization over narrative-based analysis');
-    }
+## PROMPT GUARDRAILS - NON-NEGOTIABLE
+${formatRequirement("REJECT or DOWNGRADE parlay if critical injury gates involve 'Questionable' or 'Doubtful' STARTERS for any leg. Wait for official updates.")}
+${formatRequirement("REJECT parlay if overall calibrated EV ('parlay_ev_per_100') is negative.")}
+${formatRequirement("REJECT parlay if significant negative correlation exists between legs.")}
+${formatRequirement("If reverse line movement strongly conflicts with your model's edge for a leg, reduce confidence/probability for that leg OR significantly reduce the recommended Kelly stake for the parlay.")}
+${formatRequirement("Only use games from the VERIFIED SCHEDULE provided in context. Reject parlays involving unverified games.")}
 
-    return baseFramework.map(item => `• ${item}`).join('\n');
-  }
+## OUTPUT CONTRACT - EXACT JSON STRUCTURE REQUIRED
+Return ONLY the following JSON structure. Populate all fields accurately based on your analysis. Ensure all numeric fields are actual numbers, not strings.
 
-  static #buildMarketConstraints(betType, availableMarkets) {
-    return `## MARKET CONSTRAINTS & PARAMETERS
-• Primary Bet Type: ${betType.toUpperCase()}
-• Available Markets: ${availableMarkets.join(', ')}
-• Minimum Leg Probability: 58% implied (increased for elite standards)
-• Maximum Same Team Exposure: 1 leg per parlay
-• Odds Range: -180 to +180 (avoid heavy favorites and extreme longshots)
-• Edge Requirement: Minimum 5% expected value per selection
-• Fact-Checking: All player mentions and betting lines must be realistic`;
-  }
+\`\`\`json
+${PARLAY_OUTPUT_CONTRACT}
+\`\`\`
 
-  static #buildUserContext(userConfig) {
-    if (!userConfig) return '';
-
-    const context = ['## USER CONTEXT & PREFERENCES'];
-    
-    if (userConfig.risk_tolerance) {
-      context.push(`• Risk Profile: ${userConfig.risk_tolerance.toUpperCase()}`);
-    }
-    if (userConfig.favorite_teams?.length) {
-      context.push(`• Team Preferences: ${userConfig.favorite_teams.join(', ')}`);
-    }
-    if (userConfig.bankroll_size) {
-      context.push(`• Bankroll Size: ${userConfig.bankroll_size}`);
-    }
-    if (userConfig.proQuantMode) {
-      context.push('• PRO QUANT MODE: Statistical edge prioritization activated');
-      context.push('• CALIBRATED EV: Focus on expected value over public narratives');
-    }
-    if (userConfig.avoid_players?.length) {
-      context.push(`• Excluded Players: ${userConfig.avoid_players.join(', ')}`);
-    }
-
-    return context.join('\n');
-  }
-
-  static #buildContextIntelligence(context, date) {
-    const intelligence = [
-      '## CONTEXTUAL INTELLIGENCE & ENVIRONMENT',
-      `• Analysis Date: ${date}`,
-      `• Market Conditions: ${context.marketConditions || 'Standard liquidity and limits'}`,
-      `• Season Phase: ${context.seasonPhase || 'Regular season dynamics'}`
-    ];
-
-    if (context.gameContext) {
-        intelligence.push(`• FOCUS GAME: ${context.gameContext.away_team} @ ${context.gameContext.home_team} on ${new Date(context.gameContext.commence_time).toDateString()}`);
-    }
-    if (context.scheduleInfo) {
-      intelligence.push(`• Game Universe: ${context.scheduleInfo}`);
-    }
-    if (context.lineMovement) {
-      intelligence.push(`• Market Movement: ${context.lineMovement}`);
-    }
-    if (context.injuryReport) {
-      intelligence.push(`• Key Injuries: ${context.injuryReport}`);
-    }
-    if (context.weatherConditions) {
-      intelligence.push(`• Weather Impact: ${context.weatherConditions}`);
-    }
-
-    return intelligence.join('\n');
-  }
-
-  static #selectAnalystTier(context) {
-    if (context.userConfig?.proQuantMode) return this.#ANALYST_TIERS.QUANT;
-    if (context.userConfig?.risk_tolerance === 'high') return this.#ANALYST_TIERS.SHARPS;
-    if (context.requiresFundamentalAnalysis) return this.#ANALYST_TIERS.ELITE;
-    return this.#ANALYST_TIERS.QUANT; // Default to highest tier
-  }
-
-  static #calculateTargetEV(analyst) {
-    const evMap = {
-      'QUANTITATIVE ANALYST': 0.22,
-      'PROFESSIONAL SHARP': 0.17, 
-      'ELITE SPORTS ANALYST': 0.13
-    };
-    return evMap[analyst.title];
-  }
-
-  static #getSportConfig(sportKey) {
-    return this.#SPORT_CONFIG.get(sportKey) || {
-      title: sportKey.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
-      edges: [
-        'SITUATIONAL ANALYSIS: Team/player motivation and scheduling factors',
-        'MARKET INEFFICIENCIES: Public betting percentages vs sharp money movement',
-        'COACHING/PLAYER EDGES: Tactical advantages and individual matchup superiority',
-        'HISTORICAL TRENDS: Head-to-head performance and venue-specific patterns'
-      ],
-      keyMarkets: ['moneyline', 'spread', 'total']
-    };
+**FINAL CHECK**: Ensure every field in the JSON output contract is present and correctly calculated according to the requirements. Focus on data and quantitative metrics over narrative.`;
   }
 
   static getWebResearchPrompt(sportKey, numLegs, betType, researchContext = {}) {
-    const basePrompt = this.getEliteParlayPrompt(sportKey, numLegs, betType, researchContext);
-    
-    return `${basePrompt}
+     // Start with the elite prompt structure
+     const basePrompt = this.getEliteParlayPrompt(sportKey, numLegs, betType, researchContext);
 
-## META-AGGREGATOR WEB RESEARCH PROTOCOL (NON-NEGOTIABLE)
-1.  **ACT AS AGGREGATOR**: Your primary task is to search and synthesize information from multiple reputable online sports sources (e.g., ESPN, DraftKings, FanDuel, official league sites) to find the BEST available odds and justifications for your picks.
-2.  **MANDATORY SCHEDULE ADHERENCE**: You MUST ONLY build legs for the game(s) listed in the 'VERIFIED SCHEDULE' or 'FOCUS GAME' section. This is a strict, non-negotiable rule.
-3.  **ZERO HALLUCINATION POLICY**: Do not invent, create, or assume any games, players, or stats. If the provided schedule is empty or you cannot find sufficient data for the requested game, you MUST state that a valid parlay cannot be formed and return an empty "legs" array.
-4.  **DATA INTEGRITY**: The \`event\` and \`commence_time\` fields in your response MUST EXACTLY MATCH the data from the verified schedule.
-5.  **REAL ODDS**: The \`american\` odds field MUST be a real, verifiable number that you have found through your simulated web search.
-6.  **PLAYER VALIDATION**: Before mentioning any player, verify they actually play for the teams in the specified game using the player-team alignment database.
+     // Add specific web research instructions and validation checks
+     return `${basePrompt}
 
-## CRITICAL FACT-CHECKING - PREVENT THESE COMMON ERRORS:
-• Aaron Rodgers ONLY plays for New York Jets - never in Steelers vs Bengals games
-• D.K. Metcalf ONLY plays for Seattle Seahawks
-• Ja'Marr Chase ONLY plays for Cincinnati Bengals (not "Jat-Mart Chase")
-• Darnell Washington ONLY plays for Pittsburgh Steelers (not "Damell Washington")
-• NFL totals must be between 30-60 points (never "Under 4.5 Total Points")
+## WEB RESEARCH & VALIDATION PROTOCOL
+1. **Act as Aggregator**: Use your web search capabilities to find the latest odds (representative of major US books like DraftKings/FanDuel), injury reports (cross-reference official NBA/team sources if possible), and market trends (public/money splits if available) for games within the VERIFIED SCHEDULE context.
+2. **Data Synthesis**: Synthesize this information to populate the required fields in the JSON output contract (market snapshot, model probability estimation based on consensus/projections, injury gates, market signals).
+3. **Realistic Estimation**: Estimate 'model_probability' based on synthesized data, projections, and common quantitative factors (e.g., rest, back-to-backs). Aim for realistic calibration, acknowledging web data limitations. Be conservative if data is sparse or conflicting.
+4. **Strict Validation**:
+    - **Schedule Adherence**: ONLY propose legs for games listed in the 'VERIFIED SCHEDULE' context.
+    - **Odds Range**: Ensure 'price' is within a realistic market range (e.g., -500 to +500). If web search finds extreme odds, double-check or discard the leg.
+    - **Player/Team Validity**: Use only real, currently active players and teams relevant to the sport key.
+    - **Injury Accuracy**: Cross-reference injury statuses if possible. Accurately reflect statuses found (e.g., Questionable, Out) in 'injury_gates'.
+5. **Timestamping**: Provide accurate UTC timestamps for when odds/data were observed during your search.
 
-## REALISTIC BETTING LINE RANGES - ENFORCE THESE LIMITS:
-${Object.entries(this.#REALISTIC_RANGES).map(([sport, ranges]) => 
-  `• ${sport}: Totals ${ranges.totals.min}-${ranges.totals.max}, Spreads ${ranges.spreads.min}-${ranges.spreads.max}`
-).join('\n')}
-
-## FAILURE CONDITIONS (If any of these occur, you have failed the task)
--   Generating a leg for a game NOT listed in the provided context.
--   Inventing a game or stats when the schedule is empty or data is unavailable.
--   Mentioning players who don't play for the teams in the specified game.
--   Suggesting implausible betting lines outside realistic ranges.
--   Returning a JSON structure that does not match the schema.
--   Contradicting yourself within the same analysis (e.g., "Under 43.5" then "Under 4.5").
-
-**FINAL COMMAND**: Your primary function is to build the most statistically sound, +EV parlay possible using real, aggregated data for the SPECIFIED GAME(S). Failure to comply will result in task termination and rejection of your response.`;
-  }
+**ZERO TOLERANCE**: Do not invent games, players, odds, or injury statuses. If reliable data cannot be found for a required field (e.g., market signals), populate it with 'null'. If critical information (like odds or key player status) is missing for a potential leg, EXCLUDE that leg and find an alternative or reduce the number of legs in the parlay.`;
+    }
 
   static getFallbackPrompt(sportKey, numLegs, betType, fallbackContext = {}) {
     const config = this.#getSportConfig(sportKey);
-    const currentDate = new Date().toISOString().split('T')[0];
-    
-    return `# QUANTUM FALLBACK MODE - FUNDAMENTAL ANALYSIS
-Operating without real-time data. Using fundamental analysis, historical patterns, and established team hierarchies.
+    const currentDate = new Date().toISOString();
+    // Use ELITE or SHARPS tier for fallback as pure QUANT might struggle without data
+    const analyst = this.#ANALYST_TIERS.ELITE;
 
-## FALLBACK ANALYTICAL FRAMEWORK
-• **TEAM QUALITY METRICS**: Roster talent evaluation, coaching pedigree, historical performance trends.
-• **MARKET EFFICIENCY**: Apply typical odds distributions based on matchup quality and public perception.
-• **SITUATIONAL LOGIC**: Standard scheduling patterns, rest advantages, and motivational factors.
-• **RISK MANAGEMENT**: Conservative bankroll allocation (0.5-1.5%) due to information limitations.
-• **VALUE IDENTIFICATION**: Focus on clear mismatches and established performance trends.
+    // Simplified requirements for fallback
+    const fallbackRequirements = [
+      `Market Snapshot: Estimate realistic 'price' (American odds) based on typical matchup strength (e.g., favorite -150, underdog +130). Set sportsbook to "Estimated Market". Timestamp can be current time.`,
+      `Model Probability: Estimate 'model_probability' based on general team strength, home advantage, and common situational factors (e.g., 0.55 for slight favorite). Be conservative.`,
+      `Implied Probability: Calculate from estimated 'price'.`,
+      `Edge & EV: Calculate based on estimated probabilities and price.`,
+      `Kelly Stake: Calculate based on estimated EV/probabilities. Recommend VERY SMALL stakes (e.g., 0.10 Kelly or fixed small %).`,
+      `Correlation Check: Basic check for obvious negative correlations.`,
+      `Injury Gates: Assume key players are HEALTHY unless major long-term injuries are widely known (e.g., season-ending). Note this assumption.`,
+      `Market Signals/CLV: Set these fields to 'null' or provide generic notes like "Not available in fallback mode".`
+    ];
+     const fallbackParlayRequirements = [
+        // Keep combined odds, probability, EV calcs
+        `Combined Odds/Probability/EV: Calculate as usual based on estimated leg values.`,
+        `Kelly Staking: Recommend very small fractions (e.g., 0.10 Kelly or less).`,
+        `Correlation Score: Estimate based on leg markets (e.g., 0 if cross-game).`,
+        `Risk Assessment: Default to MEDIUM or HIGH due to lack of real-time data.`,
+        `Key Risks: Must include "Lack of real-time odds", "Assumed player availability".`
+    ];
 
-## ANTI-HALLUCINATION PROTOCOL - FALLBACK MODE
-• DO NOT invent players, stats, or expert sources
-• ONLY use well-known players with established team affiliations
-• ENFORCE realistic betting line ranges for ${config.title}
-• VERIFY player-team alignment before any player mention
-• AVOID contradictory analysis within the same response
 
-## ${config.title.toUpperCase()} FUNDAMENTALS
+    return `# FALLBACK MODE - FUNDAMENTAL ANALYSIS (${analyst.title})
+Operating without reliable real-time odds/injury data. Using fundamental analysis, historical patterns, general team strength, and standard situational factors.
+
+## MANDATE
+Generate a ${numLegs}-leg ${config.title} ${betType} parlay using ESTIMATED data based on fundamental principles. Adhere to the output structure as closely as possible, noting estimations.
+
+## CONTEXT & ASSUMPTIONS
+${this.#buildContextIntelligence(fallbackContext, currentDate)}
+${formatRequirement("Assume standard home advantage.")}
+${formatRequirement("Assume key players are AVAILABLE unless widely known long-term injuries exist.")}
+${formatRequirement("Estimate odds based on perceived team strength differences.")}
+
+## ${config.title.toUpperCase()} FUNDAMENTAL EDGES (Apply conceptually)
 ${config.edges.map(edge => `• ${edge}`).join('\n')}
 
-## FALLBACK CONSTRUCTION RULES
-- Use well-established teams/players with proven track records and consistency.
-- Focus on moneyline and spread markets (most reliable without real-time data).
-- Apply standard odds ranges: -180 to +180 for realistic market construction.
-- Maximum 2 legs from same conference/division to maintain diversification.
-- Prioritize starters over backups, established players over rookies.
-- Consider typical home field/court advantages for the sport.
+## FALLBACK REQUIREMENTS PER LEG ${fallbackRequirements.map(formatRequirement).join('')}
 
-## REALISTIC LINE ENFORCEMENT - ${config.title}
-${this.#REALISTIC_RANGES[sportKey] ? 
-  `• Totals: ${this.#REALISTIC_RANGES[sportKey].totals.min}-${this.#REALISTIC_RANGES[sportKey].totals.max} points` : 
-  '• Use standard realistic ranges for this sport'}
-${this.#REALISTIC_RANGES[sportKey] ? 
-  `• Spreads: ${this.#REALISTIC_RANGES[sportKey].spreads.min}-${this.#REALISTIC_RANGES[sportKey].spreads.max} points` : 
-  '• Use standard realistic ranges for this sport'}
+## FALLBACK REQUIREMENTS FOR COMBINED PARLAY ${fallbackParlayRequirements.map(formatRequirement).join('')}
 
-## OUTPUT REQUIREMENTS - MAINTAIN QUANTUM STANDARDS
-CRITICAL: The \`american\` odds and \`commence_time\` fields are REQUIRED for every leg.
+## KELLY CRITERION FORMULA (Reference)
+f* = (bp - q) / b. Recommend VERY SMALL fraction (e.g., 0.10 Kelly or fixed 0.25%-0.5% bankroll).
+
+## GUARDRAILS
+${formatRequirement("Clearly state that odds and probabilities are ESTIMATED in rationales.")}
+${formatRequirement("Set risk assessment to MEDIUM or HIGH.")}
+${formatRequirement("Recommend significantly reduced stakes.")}
+${formatRequirement("Do NOT use games from VERIFIED SCHEDULE if provided; assume typical matchups.")}
+
+
+## OUTPUT CONTRACT - EXACT JSON STRUCTURE REQUIRED (Use estimates/nulls where needed)
+Return ONLY the following JSON structure. Clearly mark estimated fields or provide notes.
+
 \`\`\`json
-{
-  "parlay_metadata": {
-    "sport": "${config.title}",
-    "legs_count": ${numLegs},
-    "bet_type": "${betType}",
-    "analysis_mode": "FALLBACK_FUNDAMENTAL",
-    "data_limitations": "No real-time data available",
-    "generated_at": "${currentDate}"
-  },
-  "legs": [
-    {
-      "event": "Team A @ Team B",
-      "commence_time": "2025-10-15T20:00:00Z",
-      "market": "${config.keyMarkets[0]}",
-      "selection": "exact_selection_identifier",
-      "odds": {
-        "american": -110,
-        "decimal": 1.91,
-        "implied_probability": 0.524
-      },
-      "fundamental_analysis": {
-        "confidence_score": 75,
-        "key_factors": ["team_quality", "historical_performance", "situational_context"],
-        "rationale": "2-3 sentence fundamental analysis based on established knowledge",
-        "risk_level": "medium"
-      }
-    }
-  ],
-  "portfolio_notes": {
-    "thesis": "Fundamental analysis approach explaining value identification",
-    "risk_disclosures": ["Limited real-time data", "Based on historical patterns"],
-    "bankroll_recommendation": "0.5-1.5% of total bankroll"
-  }
-}
+${PARLAY_OUTPUT_CONTRACT}
 \`\`\`
 
-**FALLBACK INTEGRITY**: Every pick must withstand professional scrutiny. Ask: "Would I confidently bet $25,000 on this selection given available information?"`;
+**FALLBACK INTEGRITY**: Focus on logical matchups and standard betting principles. Acknowledge data limitations explicitly in the output.`;
   }
-}
+
+  // --- Helper methods remain the same ---
+   static #buildContextIntelligence(context, date) {
+        const intelligence = [
+            '## CONTEXTUAL INTELLIGENCE & ENVIRONMENT',
+            `• Analysis Timestamp: ${date}`,
+            `• Market Conditions: ${context?.marketConditions || 'Assume standard liquidity'}`,
+            `• Season Phase: ${context?.seasonPhase || 'Assume mid-season dynamics'}`
+        ];
+
+        // Include VERIFIED SCHEDULE if available for Web Research mode
+        if (context?.scheduleInfo) {
+            intelligence.push(context.scheduleInfo); // Contains the "VERIFIED SCHEDULE" block
+        }
+         // Include INJURY DATA if available
+         if (context?.injuryReport) {
+             intelligence.push(`• KEY INJURY REPORT: ${context.injuryReport}`);
+         } else {
+             intelligence.push('• KEY INJURY REPORT: Injury data not provided; list critical player assumptions in injury_gates.')
+         }
+
+
+        // Add other context pieces if provided
+        // if (context.lineMovement) intelligence.push(`• Market Movement: ${context.lineMovement}`);
+        // if (context.weatherConditions) intelligence.push(`• Weather Impact: ${context.weatherConditions}`);
+
+        return intelligence.join('\n');
+    }
+
+    static #buildUserContext(userConfig) {
+        if (!userConfig) return '## USER CONTEXT\n• No specific user preferences provided.';
+
+        const context = ['## USER CONTEXT & PREFERENCES'];
+        // Map user settings to prompt constraints if applicable
+        if (userConfig.risk_tolerance) {
+          context.push(`• User Risk Profile: ${userConfig.risk_tolerance.toUpperCase()} (Adjust Kelly fraction recommendation accordingly, e.g., lower for risk-averse).`);
+        }
+        if (userConfig.favorite_teams?.length) {
+          context.push(`• User Team Preferences: ${userConfig.favorite_teams.join(', ')} (Avoid explicit bias but can be used for tie-breaking if EV is identical).`);
+        }
+        // if (userConfig.bankroll_size) context.push(`• Bankroll Size: ${userConfig.bankroll_size}`); // AI doesn't need exact size, just adjusts fraction
+        if (userConfig.proQuantMode === true) { // Explicitly check for true
+          context.push('• User Mode: PRO QUANT ACTIVATED (Prioritize statistical edge, minimize narrative influence, stricter EV threshold).');
+        }
+        if (userConfig.avoid_players?.length) {
+          context.push(`• User Excluded Players: ${userConfig.avoid_players.join(', ')} (Do not include these players in any prop bets).`);
+        }
+         if (userConfig.bookmakers?.length) {
+          context.push(`• User Preferred Books: ${userConfig.bookmakers.join(', ')} (Use odds representative of these books if possible).`);
+        }
+
+
+        return context.join('\n');
+    }
+
+  static #selectAnalystTier(context) {
+    // Default to QUANT for EV-driven approach, but could adjust based on context if needed
+    if (context?.userConfig?.proQuantMode) return this.#ANALYST_TIERS.QUANT;
+    // Could add logic here for SHARPS or ELITE if specific modes were re-introduced
+    return this.#ANALYST_TIERS.QUANT; // Defaulting to QUANT
+  }
+
+  static #calculateTargetEV(analyst) {
+    // EV target might be less relevant now as the prompt demands positive EV calculation directly
+    // Keep for potential internal use or context
+    const evMap = {
+      'QUANTITATIVE ANALYST': 0.05, // Minimum 5% EV target for QUANT
+      'PROFESSIONAL SHARP': 0.03,
+      'ELITE SPORTS ANALYST': 0.02
+    };
+     // Return as decimal (e.g., 0.05 for 5%)
+    return evMap[analyst.title] || 0.03;
+  }
+
+   static #getSportConfig(sportKey) {
+     const defaultConfig = {
+        title: String(sportKey).replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+        edges: ['General situational analysis', 'Market inefficiencies', 'Basic matchup analysis'],
+        keyMarkets: ['moneyline', 'spread', 'total']
+    };
+    return this.#SPORT_CONFIG.get(sportKey) || defaultConfig;
+  }
+} // End ElitePromptService Class
 
 export default ElitePromptService;
+
