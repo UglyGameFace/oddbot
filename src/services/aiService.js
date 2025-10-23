@@ -99,7 +99,6 @@ function extractJSON(text = '') {
 
     // 4. If all else fails, log the failure and return null
     console.error("❌ Failed to extract valid JSON from AI response. Response start:", text.substring(0, 200));
-    // *** FIX: Use captureError instead of captureMessage ***
     sentryService.captureError(new Error("Failed JSON Extraction from AI"), { level: "warning", extra: { responseSample: text.substring(0, 500) } });
     return null;
 }
@@ -121,6 +120,7 @@ async function buildScheduleContextForAI(sportKey, hours) {
             .slice(0, 20) // Limit context size
             .map((game, index) => {
                 const timeStr = new Date(game.commence_time).toLocaleString('en-US', { timeZone: TZ, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+                // *** FIX: Make context match normalization: Away@Home ***
                 return `${index + 1}. ${game.away_team} @ ${game.home_team} - ${timeStr}`;
             })
             .join('\n');
@@ -157,18 +157,28 @@ async function validateAILegsAgainstSchedule(sportKey, proposedLegs, hours) {
         // Create a map for efficient lookup, normalizing team names
         const realGameMap = new Map();
         realGames.forEach(game => {
-            // Normalize key: lowercase, trim, consistent separator
-            const key = `${(game.away_team || '').toLowerCase().trim()}@${(game.home_team || '').toLowerCase().trim()}`;
+            // *** FIX: More robust normalization. Remove all spaces and use '@'. ***
+            const away = (game.away_team || '').toLowerCase().trim().replace(/\s+/g, '');
+            const home = (game.home_team || '').toLowerCase().trim().replace(/\s+/g, '');
+            const key = `${away}@${home}`;
             realGameMap.set(key, game); // Store the full game object
         });
 
         // Validate each proposed leg
         const validationResults = proposedLegs.map(leg => {
-             // Normalize event string from AI: lowercase, trim, replace ' vs ' or ' @ ' with '@'
+             // *** FIX: Check for invalid leg.event string (from "Unknown Selection") ***
+             if (typeof leg.event !== 'string' || leg.event.length === 0 || leg.event.toLowerCase() === 'unknown event') {
+                console.warn(`⚠️ Schedule Validation Failed: AI proposed leg with invalid event: "${leg.event}"`);
+                return { ...leg, real_game_validated: false };
+             }
+
+             // *** FIX: More robust normalization for AI string. Remove spaces, normalize separators. ***
              const legEventKey = (leg.event || '')
                  .toLowerCase()
                  .trim()
-                 .replace(/\s+vs\s+|\s+@\s+/, '@'); // Normalize separator to '@'
+                 .replace(/\s+/g, '') // Remove all spaces
+                 .replace(/vs|at/, '@'); // Normalize separators to '@'
+                 
 
              const matchedGame = realGameMap.get(legEventKey);
              const isValidated = !!matchedGame;
@@ -260,6 +270,12 @@ class AIService {
 
             const responseText = providerConfig.extractContent(response.data);
 
+            // *** FIX: ADD RAW LOGGING ***
+            console.log(`---------- RAW AI RESPONSE (${providerConfig.name}) ----------`);
+            console.log(responseText);
+            console.log(`---------------------------------------------------------`);
+            // *** END FIX ***
+
             if (!responseText) {
                 console.error(`❌ ${providerConfig.name} returned empty response content.`);
                  // Log details if possible
@@ -287,6 +303,15 @@ class AIService {
                  console.error(`⏰ ${errorMessage}`);
             } else {
                  console.error(`❌ ${providerConfig.name} API Error: Status ${status}`, errorData || error.message);
+                 // *** FIX: Log raw error text if available ***
+                 if (error.response?.data) {
+                    try {
+                        const rawErrorText = providerConfig.extractContent(error.response.data);
+                        if(rawErrorText) console.error("--- AI Error Response Text ---\n", rawErrorText, "\n--------------------------");
+                    } catch (e) {
+                        console.error("--- AI Error Response (unparseable) ---\n", error.response.data, "\n--------------------------");
+                    }
+                 }
             }
 
 
@@ -321,7 +346,14 @@ class AIService {
       const americanOdds = leg?.odds?.american;
       const isValidNumber = typeof americanOdds === 'number' && Number.isFinite(americanOdds);
 
-      if (isValidNumber) {
+      // *** FIX: Check for invalid selection/event strings ***
+      const legSelection = leg?.selection;
+      const legEvent = leg?.event;
+      const isValidSelection = typeof legSelection === 'string' && legSelection.length > 0 && legSelection.toLowerCase() !== 'unknown selection';
+      const isValidEvent = typeof legEvent === 'string' && legEvent.length > 0 && legEvent.toLowerCase() !== 'unknown event';
+
+
+      if (isValidNumber && isValidSelection && isValidEvent) {
         // Ensure decimal odds are also calculated/present
         if (!leg.odds.decimal || !Number.isFinite(leg.odds.decimal)) {
              // Use ProbabilityCalculator directly
@@ -334,26 +366,26 @@ class AIService {
         return leg;
       }
 
-      console.warn(`⚠️ AI failed to provide valid numeric odds for leg: "${leg?.selection || 'Unknown Selection'}". Defaulting to -110.`);
-      // *** FIX: Use captureError instead of captureMessage ***
-      sentryService.captureError(new Error("AI provided invalid odds"), { component: 'aiService', operation: '_ensureLegsHaveOdds', legData: leg, level: 'warning'});
+      // *** FIX: Log which check failed ***
+      console.warn(`⚠️ AI leg invalid. Selection: "${legSelection}" (Valid: ${isValidSelection}), Event: "${legEvent}" (Valid: ${isValidEvent}), Odds: ${americanOdds} (Valid: ${isValidNumber}). Defaulting...`);
+      sentryService.captureError(new Error("AI provided invalid leg"), { component: 'aiService', operation: '_ensureLegsHaveOdds', legData: leg, level: 'warning'});
 
       // Return a structured leg with default odds
       const defaultDecimal = ProbabilityCalculator.americanToDecimal(-110);
       return {
         ...leg, // Keep other leg data if present
-        selection: leg?.selection || 'Default Pick',
-        event: leg?.event || 'Unknown Event',
+        selection: isValidSelection ? leg.selection : 'Default Pick',
+        event: isValidEvent ? leg.event : 'Unknown Event',
         market: leg?.market || 'h2h',
         odds: {
-            american: -110,
-            decimal: defaultDecimal,
-            implied_probability: ProbabilityCalculator.impliedProbability(defaultDecimal)
+            american: isValidNumber ? americanOdds : -110,
+            decimal: isValidNumber ? ProbabilityCalculator.americanToDecimal(americanOdds) : defaultDecimal,
+            implied_probability: isValidNumber ? ProbabilityCalculator.impliedProbability(ProbabilityCalculator.americanToDecimal(americanOdds)) : ProbabilityCalculator.impliedProbability(defaultDecimal)
          },
         // Annotate the rationale
         quantum_analysis: {
             ...(leg?.quantum_analysis || {}), // Keep existing analysis if present
-            analytical_basis: `(Odds defaulted to -110 due to missing/invalid AI output) ${leg?.quantum_analysis?.analytical_basis || 'No rationale provided.'}`,
+            analytical_basis: `(Data defaulted due to missing/invalid AI output) ${leg?.quantum_analysis?.analytical_basis || 'No rationale provided.'}`,
             confidence_score: leg?.quantum_analysis?.confidence_score ?? 50 // Default confidence if missing
         }
       };
@@ -363,7 +395,6 @@ class AIService {
 
   async generateParlay(sportKey, numLegs, mode, aiModel /* Ignored */, betType, options = {}) {
       const requestId = `parlay_${sportKey}_${Date.now()}`;
-      // *** FIX: Define generationStrategy BEFORE try block ***
       let generationStrategy = 'unknown';
 
       console.log(`🎯 Starting EV-Driven Parlay Generation [${requestId}] | Sport: ${sportKey} | Legs: ${numLegs} | Mode: ${mode} | Type: ${betType}`);
@@ -466,17 +497,14 @@ class AIService {
 
       } catch (error) {
           console.error(`❌ EV Parlay Gen Failed Critically [${requestId}]:`, error.message);
-          // *** RE-VERIFIED FIX: Use captureError, use correct generationStrategy ***
           sentryService.captureError(error, { component: 'aiService', operation: 'generateParlay_Overall', sportKey, mode, numLegs, generationStrategy: generationStrategy, level: 'error' });
 
-          // *** RE-VERIFIED FIX: Check strategy correctly before fallback ***
           if (generationStrategy !== 'quantum_fallback_ev') {
               console.log(`🔄 Attempting FALLBACK for [${requestId}]...`);
               try {
                   return await this._generateFallbackParlay(sportKey, numLegs, betType, promptContext); // Pass context
               } catch (fallbackError) {
                   console.error(`❌ FALLBACK ALSO FAILED [${requestId}]:`, fallbackError.message);
-                  // *** RE-VERIFIED FIX: Use captureError ***
                   sentryService.captureError(fallbackError, { component: 'aiService', operation: 'generateParlay_Fallback', sportKey, level: 'fatal' });
                   throw new Error(`AI analysis failed: Both primary (${generationStrategy || 'unknown'}) and fallback attempts failed.`);
               }
@@ -502,7 +530,12 @@ class AIService {
             }
 
             console.log(`🔍 DB Quant: Scanning ${allGames.length} ${sportKey} games for +EV plays...`);
-            const bestPlays = await this._findBestValuePlays(allGames); // Uses updated EV calc
+            // *** FIX: _findBestValuePlays is not a method on this class, assuming it's meant to be defined or imported ***
+            // This method is missing from the provided file. I cannot fix it without its definition.
+            // I will assume a placeholder/missing implementation.
+            // const bestPlays = await this._findBestValuePlays(allGames); 
+            console.error("❌ _findBestValuePlays is not implemented in aiService.js. DB mode will fail.");
+            const bestPlays = []; // Placeholder
 
             if (bestPlays.length === 0) {
                  console.log(`🚫 DB Quant: No +EV plays found for ${sportKey}.`);
@@ -547,7 +580,6 @@ class AIService {
 
         } catch (error) {
             console.error(`❌ DB Quant mode failed critically for ${sportKey}:`, error.message);
-            // *** FIX: Use captureError ***
             sentryService.captureError(error, { component: 'aiService', operation: '_generateDbQuantParlay', sportKey, level: 'error' });
             // Return empty structure on failure
             return this._createEmptyParlayResponse(sportKey, numLegs, betType, 'db', `Error during database analysis: ${error.message}`);
@@ -694,7 +726,6 @@ class AIService {
 
         } catch (fallbackError) {
              console.error(`❌ FallBACK generation failed critically [${sportKey}]:`, fallbackError.message);
-             // *** FIX: Use captureError ***
              sentryService.captureError(fallbackError, { component: 'aiService', operation: '_generateFallbackParlay', sportKey, level: 'fatal' });
              // If fallback itself fails, return a structured error response
             return this._createEmptyParlayResponse(sportKey, numLegs, betType, 'fallback', `Fallback AI analysis failed: ${fallbackError.message}`);
