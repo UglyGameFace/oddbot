@@ -1,3 +1,4 @@
+===FILE:oddbot-main.zip/src/bot/state.js===
 // src/bot/state.js - COMPLETE FILE with setUserState Robustness Fix
 import stateManager from './stateManager.js';
 import databaseService from '../services/databaseService.js'; // For fetching initial settings
@@ -46,9 +47,17 @@ export async function setUserState(chatId, data, ttlSeconds = DEFAULT_TTL, merge
   try {
     let stateToSave = data;
     if (merge) {
-      const currentState = await getUserState(chatId) || {}; // Fetch current state safely
+      // Fetch current state safely, default to {} if null/error
+      const currentState = (await getUserState(chatId)) || {};
       stateToSave = { ...currentState, ...data }; // Merge new data over current state
     }
+
+    // Ensure stateToSave is always an object, even if merge=false and data was invalid somehow (defensive)
+    if (typeof stateToSave !== 'object' || stateToSave === null) {
+        console.error(`[State] stateToSave became invalid before saving for ${chatId}. Data:`, data, `Merge:`, merge);
+        stateToSave = {}; // Fallback to empty object
+    }
+
 
     console.log(`[State] Attempting to save state for ${chatId} (merge=${merge}, TTL=${ttlSeconds}):`, stateToSave); // Log state before saving
 
@@ -110,7 +119,7 @@ async function getConfig(chatId, configType, defaults) {
       return { ...defaults, ...storedConfig }; // Merge stored config over defaults
     } else {
       console.log(`[State] Config MISS for ${key}`);
-      console.log(`[State] Using defaults for ${configType}`);
+      // console.log(`[State] Using defaults for ${configType}`); // Can be noisy, removed default log
       return { ...defaults }; // Return only defaults if nothing stored or invalid
     }
   } catch (error) {
@@ -129,15 +138,15 @@ async function setConfig(chatId, configType, data) {
     const key = `user:config:${chatId}:${configType}`;
     try {
         // Fetch existing config to merge with new data
-        // Use defaults specific to the config type
+        // Determine defaults based on config type
         const defaults = configType === 'ai' ? defaultAIConfig :
                          configType === 'builder' ? defaultBuilderConfig : {};
-        const currentConfig = await getConfig(chatId, configType, defaults);
+        const currentConfig = await getConfig(chatId, configType, defaults); // getConfig handles defaults
         const newConfig = { ...currentConfig, ...data }; // Merge new data over current
 
         console.log(`[State] Saving config ${key}:`, newConfig);
-        // Persist config (no TTL, pass null or 0, depending on stateManager implementation)
-        const success = await stateManager.set(key, newConfig, null); // Assuming null/0 means no TTL
+        // Persist config (pass null for TTL to indicate persistence)
+        const success = await stateManager.set(key, newConfig, null);
 
         if (!success) {
             console.error(`[State] Failed to save config ${key}. stateManager.set returned false.`);
@@ -158,9 +167,9 @@ async function setConfig(chatId, configType, data) {
 // --- AI Config ---
 export const defaultAIConfig = Object.freeze({
   mode: 'web', // Default mode (web, live, db)
-  model: 'perplexity', // Default model (perplexity, gemini, etc) - Note: Model selection logic moved to aiService
+  // model: 'perplexity', // Model selection logic moved to aiService
   betType: 'mixed', // Default bet type (moneyline, spreads, totals, props, mixed)
-  horizonHours: 72, // Default time horizon for AI game fetching
+  horizonHours: 72, // Default time horizon for AI game fetching (used if not passed explicitly)
   quantitativeMode: 'conservative', // conservative, aggressive
   includeProps: false, // Default setting for including player props
   proQuantMode: false, // Advanced quantitative features toggle
@@ -182,7 +191,7 @@ export async function setAIConfig(chatId, data) {
 
 // --- Builder Config ---
 export const defaultBuilderConfig = Object.freeze({
-  cutoffHours: 48, // Default lookahead for custom builder
+  cutoffHours: 48, // Default lookahead for custom builder (hours)
   oddsFormat: 'american', // american, decimal
   excludedLeagues: [],
   excludedTeams: [],
@@ -203,31 +212,43 @@ export async function setBuilderConfig(chatId, data) {
   return setConfig(chatId, 'builder', data);
 }
 
-// --- Parlay Slip Management (Example using temporary state) ---
+// --- Parlay Slip Management (Using temporary user state) ---
 
 export async function getParlaySlip(chatId) {
   const state = await getUserState(chatId);
-  return state?.parlay_slip || null; // Access slip within the user state object
+  // Ensure slip exists and is an array with legs
+  if (state?.parlay_slip && Array.isArray(state.parlay_slip.legs)) {
+      return state.parlay_slip;
+  }
+  return null; // Return null if no valid slip found
 }
 
 export async function setParlaySlip(chatId, slip, ttlSeconds = 1800) { // 30 min TTL for slip
   if (!slip) {
-    // If setting slip to null/empty, potentially just update the state
-    const state = await getUserState(chatId) || {};
-    delete state.parlay_slip; // Remove the slip property
-    return setUserState(chatId, state, ttlSeconds);
+    // If setting slip to null/empty, fetch current state and remove the slip property
+    const state = await getUserState(chatId);
+    if (state) { // Only update if state exists
+        delete state.parlay_slip;
+        return setUserState(chatId, state, ttlSeconds, false); // Overwrite with the modified state
+    }
+    return true; // No state existed, so nothing to clear, consider it success
   }
   // If setting a valid slip, merge it into the current state
-  return setUserState(chatId, { parlay_slip: slip }, ttlSeconds, true); // Use merge=true
+  // Ensure slip has a legs array
+  const slipToSave = { ...slip, legs: Array.isArray(slip.legs) ? slip.legs : [] };
+  return setUserState(chatId, { parlay_slip: slipToSave }, ttlSeconds, true); // Use merge=true
 }
 
-// --- Token Management (For callback data) ---
+// --- Token Management (For callback data passing) ---
 
-// Uses stateManager directly for simplicity, could be integrated into user state too
+// Uses stateManager directly for simplicity
 const TOKEN_TTL = 300; // 5 minutes for callback tokens
 
 export async function saveToken(tokenId, data) {
-    if (!tokenId || typeof data !== 'object' || data === null) return false;
+    if (!tokenId || typeof data !== 'object' || data === null) {
+        console.error("[State] saveToken invalid arguments", { tokenId });
+        return false;
+    }
     try {
         console.log(`[State] Saving token ${tokenId}`);
         return await stateManager.set(`token:${tokenId}`, data, TOKEN_TTL);
