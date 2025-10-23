@@ -1,25 +1,19 @@
-// src/services/aiService.js - ELITE QUANTUM SPORTS ANALYTICS ENGINE (with strict JSON + schema)
+// src/services/aiService.js - COMPLETE FIXED VERSION
 import axios from 'axios';
 import env from '../config/env.js';
 import gamesService from './gamesService.js';
 import quantitativeService from './quantitativeService.js';
 import { ElitePromptService } from './elitePromptService.js';
-import { sleep } from '../utils/asyncUtils.js';
+import { sleep, withTimeout, TimeoutError } from '../utils/asyncUtils.js';
 import { getAIConfig } from '../bot/state.js';
 import { strictExtractJSONObject } from '../utils/strictJson.js';
-import { isValidParlayResponse } from '../schemas/parlaySchema.js'; // Renamed import
-import { getSportTitle } from './sportsService.js'; // Added this import
+import { isValidParlayResponse } from '../schemas/parlaySchema.js';
+import sportsService from './sportsService.js'; // FIXED: Use default import
 import crypto from 'crypto';
 
-const TZ = env.TIMEZONE || 'America/New_York';
-const WEB_TIMEOUT_MS = 75000;
-const MAX_RETRIES = 3;
-const RETRY_DELAY = 2000;
-
-const AI_MODELS = {
-  perplexity: 'sonar-pro',
-  'sonar-pro': 'sonar-pro',
-  'sonar-small-chat': 'sonar-small-chat',
+// FIX: Replace getSportTitle function with sportsService
+const getSportTitle = (sportKey) => {
+  return sportsService.getSportTitle(sportKey);
 };
 
 // Utility math preserved
@@ -151,7 +145,6 @@ class QuantumValidationEngine {
     return validation;
   }
 
-
   validateGameContext(legs, gameContext) {
     if (!gameContext) return { validLegs: legs || [], errors: [], warnings: [] }; // Pass warnings back
     const expectedGame = `${gameContext.away_team} @ ${gameContext.home_team}`;
@@ -224,7 +217,6 @@ class QuantumValidationEngine {
         }
      }
 
-
     const gameValidation = this.validateGameContext(parlayData.legs, gameContext);
     initialValidLegs.push(...gameValidation.validLegs); // Use the legs validated for game context
     errors.push(...gameValidation.errors);
@@ -260,7 +252,6 @@ class QuantumValidationEngine {
             warnings.push(...lineValidation.warnings.map(w => `Leg ${index + 1}: ${w}`)); // Add leg context
         }
 
-
         // 3. Essential Fields Check
         if (!leg.selection || String(leg.selection).trim() === '') {
           errors.push(`Leg ${index + 1}: Missing selection description`);
@@ -274,7 +265,6 @@ class QuantumValidationEngine {
            warnings.push(`Leg ${index + 1}: Missing event description (may cause issues)`);
            // Not necessarily invalid if context assigns it, but worth warning
          }
-
 
         // 4. Odds Check (Warning only unless completely missing)
         if (!leg.odds || typeof leg.odds !== 'object' || !Number.isFinite(Number(leg.odds.american))) {
@@ -320,7 +310,7 @@ class QuantumValidationEngine {
       },
     };
   }
-} // ** <<< THIS WAS THE MISSING BRACE >>> **
+}
 
 class QuantumAIService {
   constructor() {
@@ -381,13 +371,12 @@ class QuantumAIService {
     });
   }
 
-
   async _callAIProvider(prompt, context = {}) {
     const { PERPLEXITY_API_KEY } = env;
     if (!PERPLEXITY_API_KEY) throw new Error('Perplexity API key not configured - check environment variables');
 
-    // Simple cache key based on prompt hash - reduces length issues
-    const cacheKey = `ai_req_${require('crypto').createHash('sha256').update(prompt).digest('hex').substring(0, 16)}`;
+    // FIX: Use imported crypto instead of require()
+    const cacheKey = `ai_req_${crypto.createHash('sha256').update(prompt).digest('hex').substring(0, 16)}`;
     const cached = this.requestCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < this.cacheTTL) {
       console.log(`🎯 AI Response cache HIT for key ${cacheKey}`);
@@ -398,7 +387,6 @@ class QuantumAIService {
     } else {
          console.log(`🔍 AI Response cache MISS for key ${cacheKey}`);
     }
-
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       console.log(`🔄 AI Provider Request (Attempt ${attempt}/${MAX_RETRIES}) for ${context.sportKey || 'generic request'}`);
@@ -427,14 +415,11 @@ class QuantumAIService {
         // Strict JSON extraction
         const parsed = strictExtractJSONObject(responseText);
 
-        // Schema validation (use the specific schema file)
-         // Corrected validation call based on provided parlaySchema.js
-         // Note: parlaySchema.js needs adjustment to match the AI output structure
-         if (!isValidParlay(parsed, context.numLegs || 1)) {
-              console.error("AI JSON failed schema validation:", JSON.stringify(parsed, null, 2));
-              throw new Error('AI JSON failed schema validation - structure mismatch');
-         }
-
+        // FIX: Use correct schema validation function name
+        if (!isValidParlayResponse(parsed, context.numLegs || 1)) {
+          console.error("AI JSON failed schema validation:", JSON.stringify(parsed, null, 2));
+          throw new Error('AI JSON failed schema validation - structure mismatch');
+        }
 
         // Cache and return valid response
         this.requestCache.set(cacheKey, { data: parsed, timestamp: Date.now() });
@@ -481,7 +466,6 @@ class QuantumAIService {
     throw new Error('AI provider call failed unexpectedly after retries.');
   }
 
-
   async generateParlay(sportKey, numLegs, mode, aiModel, betType, options = {}) {
     // Fetch user config with defaults if needed
     const userAIConfig = await getAIConfig(options.chatId || 'default');
@@ -490,7 +474,6 @@ class QuantumAIService {
     const effectiveHorizonHours = options.horizonHours || userAIConfig.horizonHours || 72;
     // Include proQuantMode from user settings or default to false
     const effectiveProQuantMode = options.proQuantMode ?? userAIConfig.proQuantMode ?? false;
-
 
     console.log(
       `🎯 Using settings - Mode: ${effectiveMode}, BetType: ${effectiveBetType}, Horizon: ${effectiveHorizonHours}h, QuantMode: ${effectiveProQuantMode}`
@@ -538,7 +521,6 @@ class QuantumAIService {
        validatedParlay.parlay_price_decimal = this._calculateParlayDecimal(validatedParlay.legs);
        validatedParlay.parlay_price_american = EliteBettingMathematics.decimalToAmerican(validatedParlay.parlay_price_decimal);
 
-
       // Run quantitative analysis if feature enabled and enough valid legs exist
       if (env.FEATURE_QUANTITATIVE_ANALYTICS && validatedParlay.legs.length >= 2) {
           try {
@@ -557,7 +539,6 @@ class QuantumAIService {
             validatedParlay.quantitative_analysis = { note: 'Quantitative analysis skipped (feature disabled or insufficient legs)' };
       }
 
-
       // Add metadata AFTER all processing
       validatedParlay.research_metadata = {
           ...(validatedParlay.research_metadata || {}), // Preserve existing metadata if any
@@ -570,7 +551,6 @@ class QuantumAIService {
           proQuantMode_used: effectiveProQuantMode, // Record if quant mode was used
           generated_at: new Date().toISOString(),
       };
-
 
       const generationTime = Date.now() - startTime;
       console.log('✅ QUANTUM PARLAY GENERATION COMPLETED', {
@@ -629,11 +609,9 @@ class QuantumAIService {
         generation_strategy: 'web_research',
      };
 
-
     // Return raw data for validation in generateParlay
     return parlayData;
   }
-
 
   async _generateContextParlay(sportKey, numLegs, mode, betType, options) {
     console.log(`💾 GENERATING DATABASE-DRIVEN PARLAY (${mode} mode)`);
@@ -723,7 +701,6 @@ class QuantumAIService {
            average_ev_found: (bestPlays.reduce((sum, play) => sum + play.ev, 0) / (bestPlays.length || 1)).toFixed(1),
        };
 
-
       // Calculate parlay price AFTER legs are formed
       // Note: Validation and final quant analysis happens *after* this function returns
 
@@ -736,7 +713,6 @@ class QuantumAIService {
       throw error;
     }
   }
-
 
   async _generateIntelligentFallback(sportKey, numLegs, betType, options, originalError) {
     console.log(`🔄 ACTIVATING INTELLIGENT FALLBACK STRATEGY due to: ${originalError?.message || 'Unknown error'}`);
@@ -770,7 +746,6 @@ class QuantumAIService {
             generation_strategy: 'intelligent_fallback',
             proQuantMode_used: options.proQuantMode, // Record if quant mode was used
        };
-
 
       console.log(`🆘 Fallback parlay delivered ${parlayData.legs.length} raw legs for validation.`);
       // Return raw data for validation in generateParlay
@@ -808,7 +783,6 @@ class QuantumAIService {
       return acc * legDecimal;
     }, 1.0); // Start accumulator at 1.0
   }
-
 
   // --- Helper for Database Parlay Generation ---
   async _findBestValuePlays(games) {
@@ -883,13 +857,10 @@ class QuantumAIService {
                }
            }
        }
-
-
     }
     // Sort plays by highest Expected Value (EV) descending
     return valuePlays.sort((a, b) => b.ev - a.ev);
   }
-
 
   async _buildScheduleContext(sportKey, hours, gameContext = null) {
     try {
@@ -946,7 +917,6 @@ class QuantumAIService {
     }
   }
 
-
   clearCache() {
     this.requestCache.clear();
     console.log('🧹 AI Service request cache cleared');
@@ -995,9 +965,19 @@ class QuantumAIService {
         await sleep(50); // Simulate network latency
         return { valid: true, issues: [] }; // Assume valid for now
     }
+}
 
+// Constants (moved to bottom to avoid hoisting issues)
+const TZ = env.TIMEZONE || 'America/New_York';
+const WEB_TIMEOUT_MS = 75000;
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 2000;
 
-} // End of QuantumAIService class
+const AI_MODELS = {
+  perplexity: 'sonar-pro',
+  'sonar-pro': 'sonar-pro',
+  'sonar-small-chat': 'sonar-small-chat',
+};
 
 // Instantiate and export the service
 const quantumAIService = new QuantumAIService();
