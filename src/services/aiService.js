@@ -48,7 +48,6 @@ const AI_PROVIDERS = {
     // Add other providers here if needed
 };
 
-
 // Helper to calculate parlay odds (Decimal)
 function calculateParlayDecimal(legs = []) {
     // Filter out legs without valid numeric American odds before calculating
@@ -103,7 +102,6 @@ function extractJSON(text = '') {
     }
 }
 
-
 // Fetches verified schedule to provide context to the AI
 async function buildScheduleContextForAI(sportKey, hours) {
     try {
@@ -154,9 +152,15 @@ async function validateAILegsAgainstSchedule(sportKey, proposedLegs, hours) {
              };
         }
 
-        // Create a map for efficient lookup, normalizing team names
+        // ** FIX: Improved team name normalization **
+        const normalizeTeamName = (team) => {
+            if (!team) return '';
+            // Much gentler normalization - only remove extra spaces and convert to lowercase
+            return team.toString().toLowerCase().trim().replace(/\s+/g, ' ').replace(/^\.+|\.+$/g, '');
+        };
+
+        // Create a map for efficient lookup, using the same gentle normalization
         const realGameMap = new Map();
-        const normalizeTeamName = (team) => (team || '').toLowerCase().trim().replace(/[\s.'-]/g, ''); // More aggressive normalization
         realGames.forEach(game => {
             const awayNorm = normalizeTeamName(game.away_team);
             const homeNorm = normalizeTeamName(game.home_team);
@@ -167,7 +171,6 @@ async function validateAILegsAgainstSchedule(sportKey, proposedLegs, hours) {
                 console.warn(`⚠️ Skipping game in realGameMap due to missing team names:`, game);
             }
         });
-        // console.log("DEBUG: Real Game Map Keys:", Array.from(realGameMap.keys())); // Uncomment for debugging
 
         // Validate each proposed leg
         const validationResults = proposedLegs.map(leg => {
@@ -177,34 +180,53 @@ async function validateAILegsAgainstSchedule(sportKey, proposedLegs, hours) {
                 return { ...leg, real_game_validated: false, validation_error: "Invalid or missing 'event' field from AI" };
              }
 
-             // ** FIX: Use Regex to extract teams reliably **
-             const eventMatch = leg.event.match(/^(.*)\s(?:@|vs|at)\s(.*)$/i); // Matches "Team A @ Team B" or "Team A vs Team B" etc.
              let legEventKey = null;
              let parsedAway = null;
              let parsedHome = null;
 
-             if (eventMatch && eventMatch[1] && eventMatch[2]) {
-                 parsedAway = normalizeTeamName(eventMatch[1]); // Normalize extracted away team
-                 parsedHome = normalizeTeamName(eventMatch[2]); // Normalize extracted home team
-                 if (parsedAway && parsedHome) {
-                    legEventKey = `${parsedAway}@${parsedHome}`;
-                 } else {
-                     console.warn(`⚠️ Schedule Validation: Normalization failed for parsed teams: "${eventMatch[1]}" -> "${parsedAway}", "${eventMatch[2]}" -> "${parsedHome}"`);
+             // ** FIX: More flexible parsing that handles the standard "Away @ Home" format **
+             const eventStr = leg.event.trim();
+             
+             // Multiple parsing strategies
+             // Strategy 1: Direct @ split (most common)
+             const atSplit = eventStr.split(' @ ');
+             if (atSplit.length === 2) {
+                 parsedAway = normalizeTeamName(atSplit[0]);
+                 parsedHome = normalizeTeamName(atSplit[1]);
+             } 
+             // Strategy 2: Try vs/at with spaces
+             else if (eventStr.includes(' vs ')) {
+                 const vsSplit = eventStr.split(' vs ');
+                 if (vsSplit.length === 2) {
+                     parsedAway = normalizeTeamName(vsSplit[0]);
+                     parsedHome = normalizeTeamName(vsSplit[1]);
                  }
-             } else {
-                 console.warn(`⚠️ Schedule Validation: Could not parse AI event string "${leg.event}" using regex.`);
-                 // As a fallback, try the simple split (less reliable)
-                 const eventParts = leg.event.split(/@|vs|at/i);
-                 if (eventParts.length === 2) {
-                     const awayNormFallback = normalizeTeamName(eventParts[0]);
-                     const homeNormFallback = normalizeTeamName(eventParts[1]);
-                     if (awayNormFallback && homeNormFallback) {
-                        legEventKey = `${awayNormFallback}@${homeNormFallback}`;
-                        console.warn(`   (Used fallback split method for key: ${legEventKey})`);
-                     }
+             }
+             // Strategy 3: Fallback regex for other formats
+             else {
+                 const eventMatch = eventStr.match(/^(.*?)\s(?:@|vs\.?|at)\s(.*)$/i);
+                 if (eventMatch && eventMatch[1] && eventMatch[2]) {
+                     parsedAway = normalizeTeamName(eventMatch[1]);
+                     parsedHome = normalizeTeamName(eventMatch[2]);
                  }
              }
 
+             // Create the lookup key
+             if (parsedAway && parsedHome) {
+                 legEventKey = `${parsedAway}@${parsedHome}`;
+             } else {
+                 console.warn(`⚠️ Schedule Validation: Could not parse AI event string: "${leg.event}"`);
+                 // Final fallback: try simple @ split without spaces
+                 const fallbackSplit = eventStr.split('@');
+                 if (fallbackSplit.length === 2) {
+                     parsedAway = normalizeTeamName(fallbackSplit[0]);
+                     parsedHome = normalizeTeamName(fallbackSplit[1]);
+                     if (parsedAway && parsedHome) {
+                         legEventKey = `${parsedAway}@${parsedHome}`;
+                         console.warn(`   (Used fallback @ split for key: ${legEventKey})`);
+                     }
+                 }
+             }
 
              const matchedGame = legEventKey ? realGameMap.get(legEventKey) : null;
              const isValidated = !!matchedGame;
@@ -212,9 +234,14 @@ async function validateAILegsAgainstSchedule(sportKey, proposedLegs, hours) {
 
              if (!isValidated) {
                  validationError = `Game not found in schedule (Key attempted: ${legEventKey || 'parse_failed'})`;
-                 console.warn(`⚠️ Schedule Validation Failed: AI proposed leg for unverified/out-of-scope game: "${leg.event}" (${validationError})`);
+                 console.warn(`⚠️ Schedule Validation Failed: "${leg.event}" -> "${legEventKey}"`);
+                 
+                 // ** DEBUG: Log available games for troubleshooting **
+                 if (realGameMap.size > 0) {
+                     console.log(`   Available games (first 5):`, Array.from(realGameMap.keys()).slice(0, 5));
+                 }
              } else {
-                 // console.log(`✅ Schedule Validation Success: Matched "${leg.event}" to map key ${legEventKey}`);
+                 console.log(`✅ Schedule Validation Success: "${leg.event}" -> ${legEventKey}`);
              }
 
              // Return leg with validation status and potentially updated data from verified source
@@ -226,8 +253,6 @@ async function validateAILegsAgainstSchedule(sportKey, proposedLegs, hours) {
                  commence_time: isValidated ? matchedGame.commence_time : leg.commence_time,
                  // Add verified event ID if useful downstream
                  verified_event_id: isValidated ? (matchedGame.event_id || matchedGame.id) : null,
-                 // Add normalized teams used for matching (for debugging)
-                 // normalized_teams: legEventKey
              };
         });
 
@@ -253,7 +278,6 @@ async function validateAILegsAgainstSchedule(sportKey, proposedLegs, hours) {
     }
 }
 
-
 class AIService {
 
   // Selects the AI provider based on configuration or simple logic
@@ -263,7 +287,6 @@ class AIService {
        // Check if key exists AND is not flagged as bad
        const isPerplexityValid = env.PERPLEXITY_API_KEY && !apiKeyStatus.criticalErrors?.some(e => e.includes('PERPLEXITY_API_KEY')) && !apiKeyStatus.warnings?.some(e => e.includes('PERPLEXITY_API_KEY'));
        const isGeminiValid = env.GOOGLE_GEMINI_API_KEY && !apiKeyStatus.criticalErrors?.some(e => e.includes('GOOGLE_GEMINI_API_KEY'));
-
 
        if (isPerplexityValid) {
            console.log("🤖 Using Perplexity AI provider.");
@@ -276,7 +299,6 @@ class AIService {
            return { config: null, apiKey: null }; // Indicate no provider available
        }
   }
-
 
   async _callAIProvider(prompt, requestedModel = null) {
         const { config: providerConfig, apiKey } = this._getAIProviderConfig();
@@ -351,7 +373,6 @@ class AIService {
                  }
             }
 
-
             if (status === 401 || status === 403) {
                 errorMessage = `${providerConfig.name} API key invalid, expired, or lacks permissions (${status}). Check environment variables.`;
             } else if (status === 429) {
@@ -417,7 +438,6 @@ class AIService {
     }
     return validLegs;
 }
-
 
   async generateParlay(sportKey, numLegs, mode, aiModel /* Ignored */, betType, options = {}) {
       const requestId = `parlay_${sportKey}_${Date.now()}`;
@@ -511,7 +531,6 @@ class AIService {
               }
           }
 
-
           // Final Quantitative Evaluation (only on validated/filtered legs)
           console.log(`🔬 Performing final quantitative evaluation on ${finalLegs.length} leg(s)...`);
           const evaluationResult = await quantitativeService.evaluateParlay(finalLegs); // Use the filtered 'finalLegs'
@@ -576,8 +595,7 @@ class AIService {
       }
   }
 
-
-  // --- DB Quant Logic (Placeholder for _findBestValuePlays remains) ---
+  // --- DB Quant Logic ---
   async _findBestValuePlays(games) {
       // ***************************************************************
       // *** THIS METHOD REQUIRES IMPLEMENTATION ***
@@ -588,13 +606,12 @@ class AIService {
       return []; // Return empty array until implemented
   }
 
-
   async _generateDbQuantParlay(sportKey, numLegs, betType, horizonHours) {
         try {
             const allGames = await gamesService.getGamesForSport(sportKey, {
                 hoursAhead: horizonHours,
                 includeOdds: true, // Essential for EV
-                useCache: false, // Use fresh data
+                useCache: false, // Use fresh data,
             });
 
             if (!Array.isArray(allGames) || allGames.length === 0) {
@@ -609,7 +626,6 @@ class AIService {
                  console.error("❌ _findBestValuePlays did not return an array.");
                  throw new Error("_findBestValuePlays implementation error.");
              }
-
 
             if (bestPlays.length === 0) {
                  console.log(`🚫 DB Quant: No +EV plays found for ${sportKey}.`);
@@ -658,7 +674,6 @@ class AIService {
             };
             return parlayData;
 
-
         } catch (error) {
             console.error(`❌ DB Quant mode failed critically for ${sportKey}:`, error.message);
             sentryService.captureError(error, { component: 'aiService', operation: '_generateDbQuantParlay', sportKey, level: 'error' });
@@ -688,7 +703,6 @@ class AIService {
             return null; // Return null for invalid plays
         }
 
-
         const decimalOdds = ProbabilityCalculator.americanToDecimal(price);
         // Ensure impliedProb is valid before calculating edge
         const impliedProb = ProbabilityCalculator.impliedProbability(decimalOdds);
@@ -698,7 +712,6 @@ class AIService {
         }
         const edge = (noVigProb / impliedProb - 1) * 100;
         const ev = play.ev ?? ProbabilityCalculator.calculateEVPercentage(decimalOdds, noVigProb); // Use provided EV or calculate
-
 
         return {
             event: `${game.away_team} @ ${game.home_team}`, // Standard format
@@ -761,7 +774,6 @@ class AIService {
         };
     }
 
-
   async _generateFallbackParlay(sportKey, numLegs, betType, context = {}) {
       console.warn(`⚠️ Triggering FALLBACK generation (EV-Driven) for ${sportKey} (${numLegs} legs, ${betType})`);
       const generationStrategy = 'quantum_fallback_ev'; // Specific strategy name
@@ -783,7 +795,6 @@ class AIService {
             // Mark legs as unvalidated (critical for fallback)
            processedLegs = processedLegs.map(leg => ({ ...leg, real_game_validated: false, timestamp: new Date().toISOString() })); // Add timestamp
 
-
             // --- Final Quantitative Evaluation ---
            console.log(`🔬 Evaluating FALLBACK parlay with ${processedLegs.length} leg(s)...`);
            const evaluationResult = await quantitativeService.evaluateParlay(processedLegs);
@@ -794,7 +805,6 @@ class AIService {
                 // Return an error structure indicating quant failure during fallback
                 return this._createEmptyParlayResponse(sportKey, numLegs, betType, 'fallback', `Quantitative analysis failed during fallback: ${evaluationResult.error}`);
             }
-
 
             // --- Assemble Final Result ---
            const finalResult = {
@@ -837,7 +847,6 @@ class AIService {
                  }
              }
 
-
             console.log(`✅ Fallback generation completed for ${sportKey}. Verdict: ${finalResult.summary?.verdict}`);
             return finalResult;
 
@@ -848,7 +857,6 @@ class AIService {
             return this._createEmptyParlayResponse(sportKey, numLegs, betType, 'fallback', `Fallback AI analysis failed: ${fallbackError.message}`);
         }
     }
-
 
   // --- Generic Chat Function (Example) ---
     async genericChat(modelIdentifier, messages) {
