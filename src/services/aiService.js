@@ -248,10 +248,8 @@ async function validateAILegsAgainstSchedule(sportKey, proposedLegs, hours) {
              return {
                  ...leg,
                  real_game_validated: isValidated,
-                 validation_error: validationError, // Add error reason
-                 // If validated, ensure commence_time matches the verified game
+                 validation_error: validationError,
                  commence_time: isValidated ? matchedGame.commence_time : leg.commence_time,
-                 // Add verified event ID if useful downstream
                  verified_event_id: isValidated ? (matchedGame.event_id || matchedGame.id) : null,
              };
         });
@@ -261,7 +259,7 @@ async function validateAILegsAgainstSchedule(sportKey, proposedLegs, hours) {
         console.log(`✅ Schedule Validation Complete for ${sportKey}: ${validatedCount}/${totalProposed} legs validated (${(validationRate * 100).toFixed(1)}%).`);
 
         return {
-             validatedLegs: validationResults, // Return all legs, marked with status
+             validatedLegs: validationResults,
              validationRate: validationRate,
              totalProposed: totalProposed
         };
@@ -392,7 +390,7 @@ class AIService {
         }
     }
 
-  // ** FIX: Improved leg validation and defaulting **
+  // ** FIX: Improved leg validation and defaulting - Handle AI response with price field **
   _ensureLegsHaveOdds(legs = []) {
     if (!Array.isArray(legs)) {
         console.warn("⚠️ _ensureLegsHaveOdds: Input 'legs' is not an array, returning empty array.");
@@ -400,22 +398,40 @@ class AIService {
     }
     const validLegs = [];
     legs.forEach((leg, index) => {
-        // Check if leg itself is a valid object with minimum required fields
-        if (!leg || typeof leg !== 'object' || !leg.odds) {
+        // Check if leg itself is a valid object
+        if (!leg || typeof leg !== 'object') {
             console.warn(`⚠️ _ensureLegsHaveOdds: Leg at index ${index} is missing or has invalid basic structure. Skipping.`);
             sentryService.captureError(new Error("AI provided invalid leg structure"), { component: 'aiService', operation: '_ensureLegsHaveOdds_Structure', legData: leg, index: index, level: 'warning'});
             return; // Skip this malformed leg entirely
         }
 
-        const americanOdds = leg.odds.american;
-        const isValidOddsNumber = typeof americanOdds === 'number' && Number.isFinite(americanOdds);
+        // ** FIX: Handle both odds.american AND direct price field from AI **
+        let americanOdds = null;
+        let hasValidOddsStructure = false;
+
+        // Check if AI provided odds in the expected structure
+        if (leg.odds && typeof leg.odds.american === 'number' && Number.isFinite(leg.odds.american)) {
+            americanOdds = leg.odds.american;
+            hasValidOddsStructure = true;
+        } 
+        // Check if AI provided price directly (common in AI responses)
+        else if (typeof leg.price === 'number' && Number.isFinite(leg.price)) {
+            americanOdds = leg.price;
+            // Create the odds structure for consistency
+            if (!leg.odds) {
+                leg.odds = {};
+            }
+            leg.odds.american = americanOdds;
+            hasValidOddsStructure = true;
+            console.log(`✅ Converted AI price field to odds structure for leg ${index}: ${americanOdds}`);
+        }
 
         const legSelection = leg.selection;
         const legEvent = leg.event;
         const isValidSelection = typeof legSelection === 'string' && legSelection.length > 0 && legSelection.toLowerCase() !== 'unknown selection';
         const isValidEvent = typeof legEvent === 'string' && legEvent.length > 0 && legEvent.toLowerCase() !== 'unknown event';
 
-        if (isValidOddsNumber && isValidSelection && isValidEvent) {
+        if (hasValidOddsStructure && americanOdds !== null && isValidSelection && isValidEvent) {
             // Leg seems valid, ensure derived odds fields exist
             let derivedOdds = { ...leg.odds };
             if (!derivedOdds.decimal || !Number.isFinite(derivedOdds.decimal)) {
@@ -427,7 +443,8 @@ class AIService {
             validLegs.push({ ...leg, odds: derivedOdds }); // Add the valid leg
         } else {
             // Log the specific failure
-            console.warn(`⚠️ AI leg invalid (Index ${index}). Selection: "${legSelection}" (Valid: ${isValidSelection}), Event: "${legEvent}" (Valid: ${isValidEvent}), Odds: ${americanOdds} (Valid: ${isValidOddsNumber}). Skipping leg.`);
+            const oddsStatus = hasValidOddsStructure ? `Odds: ${americanOdds} (Valid)` : 'Odds: Missing/Invalid';
+            console.warn(`⚠️ AI leg invalid (Index ${index}). Selection: "${legSelection}" (Valid: ${isValidSelection}), Event: "${legEvent}" (Valid: ${isValidEvent}), ${oddsStatus}. Skipping leg.`);
             sentryService.captureError(new Error("AI provided invalid leg details"), { component: 'aiService', operation: '_ensureLegsHaveOdds_Details', legData: leg, index: index, level: 'warning'});
             // Do not add the invalid leg to the results
         }
